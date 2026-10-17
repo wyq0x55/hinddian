@@ -3,142 +3,108 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#0b0d10" />
-  <title>hinddian · 管线仪表盘</title>
-  <link rel="stylesheet" href="/static/styles.css?v=4" />
+  <meta name="theme-color" content="#1a1a1e" />
+  <title>hinddian · 记忆管线</title>
+  <link rel="stylesheet" href="/static/styles.css?v=6" />
 </head>
 <body>
-  <div class="shell">
+  <main class="page">
     <header class="top">
       <div class="brand">
-        <span class="logo">◆</span>
-        <div>
-          <h1>hinddian</h1>
-          <p class="sub">主题记忆管线 · Obsidian SoT · Hindsight Recall</p>
-        </div>
+        <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 21 7v10l-9 5-9-5V7z" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>
+        <div><h1>hinddian</h1><p class="sub">主题记忆管线 · Obsidian 为准 · Hindsight 召回</p></div>
       </div>
-      <div class="top-meta">
-        <span id="health-pill" class="pill muted">…</span>
-        <span id="demo-pill" class="pill muted">…</span>
+      <div class="top-r">
+        <span id="health-pill" class="pill">…</span>
         <button type="button" id="btn-refresh" class="btn">刷新</button>
       </div>
     </header>
 
-    <!-- 1 收件箱 → 2 过滤 -->
-    <section class="pipe-top" aria-label="流水线入口">
-      <div class="pipe-stage" data-stage="inbox">
-        <div class="stage-head">
-          <span class="stage-num">1</span>
-          <div><h2>收件箱</h2><p class="stage-desc">华为 · 等待 worker 捡起</p></div>
-        </div>
-        <div class="stage-count" id="pipe-inbox">—</div>
-        <p class="stage-hint">原始会话 JSON（OTLP / ingest）</p>
+    <!-- routing-style stage: nodes on a grid, SVG wires measured from the DOM -->
+    <section class="rt">
+      <div class="rt-top">
+        <div class="rt-what"><b>流水线</b> · 每条会话从收件箱进来，过滤后分三路</div>
+        <p class="rt-mode" id="rt-mode">—</p>
       </div>
-      <div class="pipe-chevron" aria-hidden="true">›</div>
-      <div class="pipe-stage" data-stage="filter">
-        <div class="stage-head">
-          <span class="stage-num">2</span>
-          <div><h2>过滤</h2><p class="stage-desc">分三路 ↓</p></div>
+      <div class="rt-stage" id="stage">
+        <svg class="rt-wires" id="wires" aria-hidden="true"></svg>
+
+        <div class="rt-node" data-n="inbox" style="grid-area:inbox">
+          <span class="dot amber"></span><b>收件箱</b><strong id="n-inbox">—</strong><small>华为 · 原始会话</small>
         </div>
-        <p class="stage-hint">冒烟 / 过短 / 提炼回流 / 问候 → 隔离；其余进提炼队列，并行 Hindsight retain</p>
-      </div>
-    </section>
+        <div class="rt-node rt-hub" data-n="filter" style="grid-area:filter">
+          <b>过滤</b><small>规则预筛</small><i>分三路</i>
+        </div>
 
-    <div class="branch-fork" aria-hidden="true"><span></span><span></span><span></span></div>
-
-    <section class="branches" aria-label="三路分支">
-      <!-- a 隔离 -->
-      <div class="branch branch-q">
-        <div class="branch-tag">a · 隔离</div>
-        <div class="pipe-stage">
-          <div class="stage-count warn" id="pipe-quarantine">—</div>
-          <p class="stage-hint">quarantine/ · 不提炼</p>
-          <button type="button" class="reasons-toggle" id="btn-reasons" aria-expanded="false">隔离原因 ▾</button>
+        <div class="rt-node lane-q" data-n="quar" style="grid-area:quar">
+          <span class="dot amber"></span><b>隔离</b><strong id="n-quar">—</strong>
+          <button type="button" class="link" id="btn-reasons">原因 ▾</button>
           <div class="reasons" id="filter-reasons" hidden></div>
         </div>
-      </div>
-
-      <!-- b 提炼 → 待入库 → pi 归类 -->
-      <div class="branch branch-main">
-        <div class="branch-tag">b · 提炼 → 待入库 → pi 归类</div>
-        <div class="lane">
-          <div class="pipe-stage mini">
-            <div class="stage-head"><span class="stage-num">3</span><div><h2>提炼</h2><p class="stage-desc">华为 worker → magpie</p></div></div>
-            <div class="result-split">
-              <div class="result-ok"><span class="split-label">已提炼</span><span class="split-val ok" id="pipe-processed">—</span></div>
-              <div class="result-fail"><span class="split-label">失败</span><span class="split-val danger" id="pipe-failed">—</span></div>
-            </div>
-          </div>
-          <div class="pipe-chevron" aria-hidden="true">›</div>
-          <div class="pipe-stage mini">
-            <div class="stage-head"><span class="stage-num">4</span><div><h2>待入库</h2><p class="stage-desc">DMIT vault 草稿</p></div></div>
-            <div class="stage-count info" id="pipe-pending-items">—</div>
-            <p class="stage-hint" id="pending-by-project"></p>
-          </div>
-          <div class="pipe-chevron" aria-hidden="true">›</div>
-          <div class="pipe-stage mini">
-            <div class="stage-head"><span class="stage-num">5</span><div><h2>pi 归类</h2><p class="stage-desc" id="classify-model">DMIT · 每 15 分钟 5 条</p></div></div>
-            <div class="outcomes">
-              <div class="oc oc-ok"><span class="split-label">已写入 agent使用技巧</span><span class="split-val ok" id="pipe-auto">—</span></div>
-              <a class="oc oc-warn" href="#proposals"><span class="split-label">待确认建议</span><span class="split-val warn" id="pipe-proposals">—</span></a>
-              <div class="oc"><span class="split-label">已确认 / 已拒绝</span><span class="split-val" id="pipe-decided">—</span></div>
-              <div class="oc"><span class="split-label">忽略</span><span class="split-val muted" id="pipe-ignored">—</span></div>
-              <div class="oc oc-bad"><span class="split-label">归类失败</span><span class="split-val danger" id="pipe-cfailed">—</span></div>
-            </div>
-            <p class="stage-hint" id="classify-last">—</p>
-          </div>
+        <div class="rt-node lane-b" data-n="distill" style="grid-area:distill">
+          <span class="dot accent"></span><b>提炼</b><strong id="n-distill">—</strong>
+          <small>华为 worker → magpie · 失败 <em id="n-dfail">—</em></small>
         </div>
-      </div>
-
-      <!-- c Hindsight retain -->
-      <div class="branch branch-h">
-        <div class="branch-tag">c · Hindsight retain</div>
-        <div class="pipe-stage">
-          <div class="stage-count" id="pipe-hindsight">—</div>
-          <p class="stage-hint">bank 文档数</p>
-          <p class="stage-hint" id="hindsight-note">—</p>
+        <div class="rt-node lane-h" data-n="retain" style="grid-area:retain">
+          <span class="dot blue"></span><b>Hindsight retain</b><strong id="n-retain">—</strong><small id="retain-note">bank 文档</small>
         </div>
+
+        <div class="rt-node lane-b" data-n="pending" style="grid-area:pending">
+          <span class="dot accent"></span><b>待入库</b><strong id="n-pending">—</strong><small id="pending-by">DMIT vault</small>
+        </div>
+        <div class="rt-node rt-hub" data-n="classify" style="grid-area:classify">
+          <b>pi 归类</b><small id="classify-model">DMIT</small><i id="classify-chip">—</i>
+        </div>
+
+        <ol class="rt-outs" style="grid-area:outs">
+          <li data-n="o-auto"><span class="dot green"></span><span class="t">已写入<span class="long"> agent使用技巧</span><small>自动</small></span><b id="n-auto">—</b></li>
+          <li data-n="o-prop"><a href="#proposals"><span class="dot amber"></span><span class="t">待确认<small>项目主题</small></span><b id="n-prop">—</b></a></li>
+          <li data-n="o-ign"><span class="dot muted"></span><span class="t">忽略<small id="ign-sub">规则 + 模型</small></span><b id="n-ign">—</b></li>
+          <li data-n="o-fail"><span class="dot red"></span><span class="t">失败<small>重试 3 次后归档</small></span><b id="n-fail">—</b></li>
+        </ol>
+      </div>
+      <div class="rt-foot">
+        <p class="rt-cap" id="rt-cap">—</p>
+        <div class="rt-legend"><span><i class="lg solid"></i>已接通</span><span><i class="lg dash"></i>未接通</span><span><i class="lg flow"></i>有积压在流动</span></div>
       </div>
     </section>
 
-    <p class="flow-legend">
-      收件箱 → 过滤 → a 隔离 ｜ b 提炼 → 待入库 → pi 归类 →（agent使用技巧 自动写入 · 项目主题 待你确认 · 忽略）｜ c Hindsight retain
-    </p>
-
-    <section class="card wide" id="proposals">
+    <section class="card" id="proposals">
       <header class="card-h">
-        <h2>待确认建议</h2>
-        <span class="hint">项目主题：确认后才写入 Obsidian</span>
-        <span class="mono" id="proposals-count">—</span>
+        <h2>待确认建议</h2><span class="note">按目标文件分组 · 确认后才写入 Obsidian；同一文件批量确认时按顺序写入并自动续编号</span>
+        <span class="grow"></span><span class="count" id="proposals-count">—</span>
       </header>
-      <div class="card-b tall" id="proposals-list"><p class="empty">加载中…</p></div>
+      <div class="batchbar" id="batchbar" hidden>
+        <span id="sel-count">已选 0 条</span><span class="grow"></span>
+        <button type="button" class="btn ok" data-bulk="approve">确认所选</button>
+        <button type="button" class="btn danger" data-bulk="reject">拒绝所选</button>
+      </div>
+      <div class="card-b" id="proposals-list"><p class="empty">加载中…</p></div>
+      <details class="ignored-box" id="ignored-box">
+        <summary>被规则自动忽略的建议 <span id="ignored-count"></span></summary>
+        <div id="ignored-list"></div>
+      </details>
     </section>
 
-    <section class="card wide">
-      <header class="card-h">
-        <h2>归类记录</h2>
-        <span class="hint">会话 → 主题（非一会话一笔记）</span>
-      </header>
+    <section class="card">
+      <header class="card-h"><h2>归类记录</h2><span class="note">会话 → 主题（非一会话一笔记）</span></header>
       <div class="card-b" id="recent-list"><p class="empty">加载中…</p></div>
     </section>
 
     <section class="grid-2">
       <article class="card">
-        <header class="card-h"><h2>收件箱最近</h2><span class="mono" id="inbox-count">—</span></header>
+        <header class="card-h"><h2>收件箱最近</h2><span class="grow"></span><span class="count" id="inbox-count">—</span></header>
         <div class="card-b" id="inbox-list"><p class="empty">加载中…</p></div>
       </article>
       <article class="card">
-        <header class="card-h"><h2>主题</h2><span class="mono" id="topics-count">—</span></header>
+        <header class="card-h"><h2>主题</h2><span class="grow"></span><span class="count" id="topics-count">—</span></header>
         <div class="card-b" id="topics-list"><p class="empty">加载中…</p></div>
       </article>
     </section>
 
-    <footer class="foot">
-      <span>固定全局主题 <code>topic/agent-usage-tips</code> · <code>00-系统/agent使用技巧.md</code></span>
-      <span id="demo-flag"></span>
-    </footer>
-  </div>
+    <footer class="foot"><span>全局主题 <code>topic/agent-usage-tips</code> → <code>00-系统/agent使用技巧.md</code></span><span id="demo-flag"></span></footer>
+  </main>
   <div id="toast" class="toast" hidden></div>
-  <script src="/static/app.js?v=4"></script>
+  <script src="/static/app.js?v=6"></script>
 </body>
 </html>
