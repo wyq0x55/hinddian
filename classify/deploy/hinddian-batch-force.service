@@ -1,0 +1,14 @@
+[Unit]
+Description=hinddian batch force: approved projects even below tip threshold
+After=network-online.target magpie-web.service
+
+[Service]
+Type=oneshot
+User=root
+Environment=HC_HOME=/opt/hinddian-classify
+ExecStart=/usr/local/bin/hinddian-batch run-force
+Nice=10
+MemoryMax=600M
+TimeoutStartSec=3000
+StandardOutput=append:/var/log/hinddian-classify.log
+StandardError=append:/var/log/hinddian-classify.log

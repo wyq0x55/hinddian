@@ -1,12 +1,20 @@
 {
   "mcpServers": {
-    "hindsight": {
-      "url": "http://124.70.90.224/hindsight/mcp/wanwan/",
-      "headers": { "Authorization": "Bearer ${HINDSIGHT_API_KEY}" },
-      "description": "Wanwan long-term memory (Hindsight). Use recall to check whether a fact already exists.",
+    "hinddian-memory": {
+      "url": "http://124.70.90.224/hinddian/mcp",
+      "headers": { "Authorization": "Bearer ${HINDDIAN_MCP_TOKEN}" },
+      "description": "Wanwan atomic notes (Obsidian SoT). Use routing_*/recall/get_note/list_notes/upsert_note. Never raw Hindsight retain.",
       "timeout": 60,
       "exposure": "hidden",
-      "toolExposure": { "recall": "direct" }
+      "toolExposure": {
+        "routing_global": "direct",
+        "routing_project": "direct",
+        "recall": "direct",
+        "get_note": "direct",
+        "list_notes": "direct",
+        "upsert_note": "direct",
+        "push_draft": "direct"
+      }
     }
   }
 }

@@ -1,0 +1,11 @@
+# Add inside :80 { ... } on Huawei Caddyfile — exposes hinddian-memory MCP + REST for Magpie.
+# Magpie Library URL: http://124.70.90.224/hinddian/mcp
+# Auth: Bearer (same token as HINDSIGHT_API_KEY / HINDDIAN_MCP_TOKEN)
+
+	handle_path /hinddian/* {
+		@ok header Authorization *Bearer*
+		handle @ok {
+			reverse_proxy 127.0.0.1:8787
+		}
+		respond "unauthorized" 401
+	}
