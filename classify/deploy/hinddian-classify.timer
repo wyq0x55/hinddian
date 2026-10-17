@@ -1,0 +1,11 @@
+[Unit]
+Description=hinddian classify every 15 min
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+RandomizedDelaySec=60
+Persistent=true
+
+[Install]
+WantedBy=timers.target
