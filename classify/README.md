@@ -71,3 +71,15 @@ tar … → /opt/hinddian-classify/src && bash /opt/hinddian-classify/src/deploy
 systemctl enable --now hinddian-classify.timer
 cp deploy/logrotate.conf /etc/logrotate.d/hinddian-classify
 ```
+
+## v0.4 · 原子笔记 + 分批分析（2026-10-17 上线）
+
+- 笔记格式：一条一文件，frontmatter `id`（= Hindsight document_id，英文 slug）/`type`/`project`/`status`/`supersedes`/`related`/`sources`；
+  正文 场景/做法/理由；`[[wikilink]]` 连项目枢纽 `项目/<名>/README.md`、`技巧/技巧.md` 与相关笔记。INDEX/README 链接段由脚本生成。
+- 草稿不进 vault：`session-distill-remote write 项目/*/待入库/x.md` 改写到 `/var/lib/hinddian/drafts/<推断项目>/`（`hinddian-infer`）。
+- `hinddian_batch.py`（timer `hinddian-classify.service` → `hinddian-batch run`）：
+  - 未批准项目：积累到阈值（20）→ 仪表盘「开始批量分析」→ 批量归纳（每批 20 份，对照已有笔记 update/merge）。
+  - 已批准项目：之后的新草稿每次自动增量合并；`通用-未定` 只抽通用技巧，自动。
+  - 本地去重（标题+做法 bigram）把模型误判的 create 转为 update；`repair_notes` 修断链并按相似度补 related。
+- `deploy/huawei/obsidian_hindsight_sync.py`（timer 每 10 分钟）：导出 → 新/改的 active 笔记 retain（document_id=id），删除/取代的笔记 DELETE。
+- 工具：`tools/restructure.py`（旧三件套拆分）、`tools/check_links.py`、`tools/go_live.py`。
