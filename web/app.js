@@ -41,12 +41,11 @@
   // t: where along the curve the count label sits (fan-outs label near the target).
   function wirePath(a, b, t = 0.5, fan = false) {
     let p0, p1, p2, p3;
-    // Primarily below (mobile outs under 分析): always drop from bottom → enter top.
-    // Primarily to the right (desktop outs): exit right side, stagger Y on fan-outs.
-    const gapBelow = b.t - a.b;
-    const gapRight = b.l - a.r;
-    const below = gapBelow >= -4 && gapBelow >= gapRight - 8;
-    const right = gapRight >= -2 && !below;
+    // If target top is at/below source bottom, always drop vertically (even if also to the right).
+    // This fixes mobile analysis→技巧 which sits down-right and used to take a sideways bezier.
+    // Otherwise, if clearly to the right, exit the right side (desktop outs column).
+    const below = b.t >= a.b - 4;
+    const right = !below && b.l >= a.r - 2;
     if (below) {
       // Keep exit on the bottom edge, lightly nudged; clamp so it never hugs a corner.
       const raw = fan ? a.cx + (b.cx - a.cx) * 0.18 : a.cx;
