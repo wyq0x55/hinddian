@@ -1,6 +1,6 @@
 [project]
 name = "hinddian"
-version = "0.1.0"
+version = "0.5.0"
 description = "Hindsight + Obsidian topic memory pipeline with Magpie-style dashboard"
 readme = "README.md"
 requires-python = ">=3.11"

@@ -12,6 +12,7 @@ from . import __version__
 from . import classify_remote
 from .config import Settings, get_settings
 from .models import DistillJob, FilterResult, InboxItem, MergeEvent, PipelineStats, TopicDocStatus
+from . import memory_mcp
 from .store import (
     StatusStore,
     build_topic_statuses,
@@ -27,6 +28,7 @@ from .store import (
 WEB_DIR = Path(__file__).resolve().parents[2] / "web"
 
 app = FastAPI(title="hinddian", version=__version__, description="Topic memory pipeline dashboard")
+app.include_router(memory_mcp.router)
 
 
 def _settings() -> Settings:

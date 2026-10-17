@@ -1,84 +1,27 @@
 # hinddian
 
-**Hindsight + Obsidian** 双管线记忆：主题笔记、会话提炼、Magpie 风格管线仪表盘。
+Obsidian 原子笔记为唯一人读来源；**hinddian-memory MCP** 供 Agent 读写路由/召回/写入；Hindsight 仅作最后一层检索索引。
 
-> Session is feedstock. **Topic documents** are memory.  
-> 会话是原料；**主题文档**才是记忆。
-
-## Why hinddian
-
-旧路径「一条会话一条笔记」会把同一主题拆碎，人改不动，agent 也召不准。hinddian 把管线收成三层：
-
-| 层 | 角色 | 存储 |
-|----|------|------|
-| **原料** | OTLP / 导出 / inbox，可丢可隔离 | inbox / quarantine / processed |
-| **主题（人读 SoT）** | 按项目目录 + 固定全局主题合并的 Markdown | Obsidian vault |
-| **检索（agent）** | 可召回片段；主题变更后再 retain / forget | Hindsight Recall MCP |
-
-**权威在 Obsidian。** 人改/删主题笔记 → 再同步到 Hindsight。不要在 Hindsight 里单独养一套「人写笔记」。
-
-## Fixed global topic
-
-每个会话每个项目都可能贡献的通用主题：
-
-| document_id | vault 路径（约定） | 说明 |
-|-------------|-------------------|------|
-| `topic/agent-usage-tips` | `00-系统/agent使用技巧.md`（或根目录 `Agent使用技巧.md`） | agent 使用技巧，跨项目归并 |
-
-项目主题：`topic/project/<slug>` → 对应 vault 项目目录下的 `记忆.md` / `PROJECT.md`。
-
-提炼结果应 **propose merge into topic docs**，默认不再写「一会话一笔记」。
-
-## Repo layout
-
-```
-src/hinddian/     FastAPI + topic resolver + status store + sync stubs
-web/              Magpie-like dark dashboard (static SPA)
-classify/         DMIT 上的 pi 归类阶段（待入库 → 主题笔记 / 待确认建议）
-scripts/          run_dev.sh
-deploy/           systemd + Caddy snippet examples
-ARCHITECTURE.md   三层模型与同步方向
-```
-
-## Quick start (local)
+## Quick start (Huawei)
 
 ```bash
-cd hinddian
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env   # 填本地路径；勿提交真实密钥
-./scripts/run_dev.sh
-# API  http://127.0.0.1:8787/api/health
-# UI   http://127.0.0.1:8787/
+cp .env.example .env   # fill HINDSIGHT_API_KEY; optional TYPESAFE_API_KEY for Jev
+pip install -e .
+uvicorn hinddian.api:app --host 127.0.0.1 --port 8787
 ```
 
-生产默认 `USE_DEMO_DATA=false`，直接读真实 inbox。本地无路径时可设 `USE_DEMO_DATA=true` 看演示数据。
+MCP: `POST http://127.0.0.1:8787/mcp` (Bearer). Public: `http://<huawei>/hinddian/mcp` via Caddy.
 
-## Environment (see `.env.example`)
+## Magpie
 
-- `VAULT_ROOT` — Obsidian vault 根（例：`/srv/obsidian/vault`）
-- `INBOX_DIR` — session-distill inbox（例：`/opt/session-distill/inbox`）
-- `HINDSIGHT_BASE_URL` / `HINDSIGHT_MCP_URL` — 勿把 token 写进仓库
-- `AUTH_TOKEN` — 仪表盘 / API Bearer（部署时用）
-- `STATUS_DB` — SQLite 路径（默认 `./data/hinddian.db`）
+1. Install hooks: copy `deploy/magpie/*.py` → `/usr/local/lib/hinddian-magpie/`
+2. On DMIT Magpie host: `python3 deploy/magpie/apply_library.py` then `python3 deploy/magpie/disable_otel.py`
+3. Other PCs: Magpie sync **pull first**, then apply / let settings sync (`otel.enabled=false`)
 
-## Deploy (Huawei + Magpie mTLS)
+## Jev
 
-详见 [`deploy/huawei/DEPLOY.md`](deploy/huawei/DEPLOY.md)。
+Set `TYPESAFE_API_KEY` in `/opt/hinddian/.env` or `/etc/hinddian-memory.env`. Without it, gates fall back to Magpie `group/auto-flash`.
 
-- 同机读 `/opt/session-distill/`
-- systemd：`deploy/huawei/hinddian.service` → `127.0.0.1:8787`
-- 公网：`https://124.70.90.224:8443/` ，Caddy mTLS 复用 Magpie CA（手机现有 `wanwan-iphone` 证书）
-- Vault 仍在 DMIT；华为可不设 `VAULT_ROOT`
+## Docs
 
-后续：distill → 主题 upsert（`distill_hooks`）；Obsidian 改/删 → `sync_hindsight` retain / forget。
-
-## Related ops notes (not in this repo)
-
-- session-distill：华为 `/opt/session-distill/`
-- Hindsight MCP（公网示例）：`http://<host>/hindsight/mcp/wanwan/`（需 Bearer）
-- Vault：DMIT `/srv/obsidian/vault`
-
-## License
-
-Private — wyq0x55.
+See `ARCHITECTURE.md` and vault `项目/笔记系统/MAGPIE-MCP.md`.

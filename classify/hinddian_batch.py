@@ -370,12 +370,14 @@ def run_project(project, max_batches=None):
         k += 1
     rebuild_hubs()
 
-def cmd_run():
+def cmd_run(force_below: bool = False):
     with Lock():
         for p in gate_status()["projects"]:
             if p["state"] in ("incremental", "auto-tips") and p["drafts"]:
-                # tips: wait for a handful so the model sees >1 session
-                if p["state"] == "auto-tips" and p["drafts"] < 5: continue
+                # tips: wait for a handful so the model sees >1 session (unless force timer)
+                if p["state"] == "auto-tips" and p["drafts"] < 5 and not force_below: continue
+                run_project(p["project"], RUN_MAX_BATCHES)
+            elif force_below and p["state"] == "incremental" and p["drafts"]:
                 run_project(p["project"], RUN_MAX_BATCHES)
 
 def cmd_approve(project, now_=False):
@@ -406,6 +408,14 @@ if __name__ == "__main__":
     a = ap.parse_args()
     if a.batch: BATCH = a.batch
     if a.cmd == "run": cmd_run()
+    elif a.cmd == "run-force": cmd_run(force_below=True)
+    elif a.cmd == "export-routing":
+        from pathlib import Path as P; import sys as S
+        for root in (P(__file__).resolve().parents[1] / "src", P("/opt/hinddian/src"), P("/opt/hinddian-classify/src")):
+            if root.is_dir():
+                S.path.insert(0, str(root))
+        from hinddian.notes import export_routing as er
+        print(json.dumps(er(), ensure_ascii=False))
     elif a.cmd == "approve": print(json.dumps(cmd_approve(a.arg, a.now), ensure_ascii=False))
     elif a.cmd == "gate": print(json.dumps(gate_status(), ensure_ascii=False))
     elif a.cmd == "export-notes": print(json.dumps(cmd_export(), ensure_ascii=False))

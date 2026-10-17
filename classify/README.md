@@ -31,7 +31,7 @@
 - 运行时：`/opt/node22`（私有 Node 22，系统 node 仍是 v20）；`/usr/local/bin/pi` 包装器 → `/opt/pi`。
 - `PI_CODING_AGENT_DIR=/opt/hinddian-classify/pi-agent`（独立 agent 目录，不碰 `~/.pi`，Magpie 不会同步它）
   - `models.json`：provider `magpie` → `http://127.0.0.1:3425/v1`，模型 `group/auto-flash`
-  - `mcp.json`：`hindsight` → `http://124.70.90.224/hindsight/mcp/wanwan/`，`Authorization: Bearer ${HINDSIGHT_API_KEY}`；只暴露 `recall`（其余工具 hidden）
+  - `mcp.json`：`hinddian-memory` → `http://124.70.90.224/hinddian/mcp`（Bearer `${HINDDIAN_MCP_TOKEN}`）；已移除原生 Hindsight MCP。旧描述：`hindsight` → `http://124.70.90.224/hindsight/mcp/wanwan/`，`Authorization: Bearer ${HINDSIGHT_API_KEY}`；只暴露 `recall`（其余工具 hidden）
   - `AGENTS.md`：归类铁律
 - skill：`/opt/hinddian-classify/skills/topic-merge/SKILL.md`，prompt 首行 `/skill:topic-merge …` 展开
 - pi 只给 `--tools mcp__hindsight__recall`：没有 bash / read / write，写入全部由 runner 做。目标笔记全文由 runner 内联进 prompt。
@@ -83,3 +83,11 @@ cp deploy/logrotate.conf /etc/logrotate.d/hinddian-classify
   - 本地去重（标题+做法 bigram）把模型误判的 create 转为 update；`repair_notes` 修断链并按相似度补 related。
 - `deploy/huawei/obsidian_hindsight_sync.py`（timer 每 10 分钟）：导出 → 新/改的 active 笔记 retain（document_id=id），删除/取代的笔记 DELETE。
 - 工具：`tools/restructure.py`（旧三件套拆分）、`tools/check_links.py`、`tools/go_live.py`。
+
+
+## v0.5 · hinddian-memory + Jev hooks（2026-10-17）
+
+- Agent 只挂 `hinddian-memory` MCP；SessionStart 注入路由表 + Jev should-recall；turn-end 只推本轮草稿。
+- pi AGENTS/skill 改为原子笔记四态（禁止写 DECISIONS.md 大文件）。
+- `hinddian-batch run-force` + 每日 timer：已批准项目草稿不足 tip 阈值也分析。
+- OTLP：Magpie settings `otel.enabled=false`。
