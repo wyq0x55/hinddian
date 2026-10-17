@@ -23,49 +23,43 @@
     <!-- routing-style stage: nodes on a grid, SVG wires measured from the DOM -->
     <section class="rt">
       <div class="rt-top">
-        <div class="rt-what"><b>流水线</b> · 每条会话从收件箱进来，过滤后分三路</div>
+        <div class="rt-what"><b>流水线</b> · 会话 → 过滤 → 按项目草稿 → 分析 → Obsidian（真相源）→ 同步 → Hindsight（最后一层，只做笔记索引）</div>
         <p class="rt-mode" id="rt-mode">—</p>
       </div>
       <div class="rt-stage" id="stage">
         <svg class="rt-wires" id="wires" aria-hidden="true"></svg>
-
         <div class="rt-node" data-n="inbox" style="grid-area:inbox">
           <span class="dot amber"></span><b>收件箱</b><strong id="n-inbox">—</strong><small>华为 · 原始会话</small>
         </div>
         <div class="rt-node rt-hub" data-n="filter" style="grid-area:filter">
-          <b>过滤</b><small>规则预筛</small><i>分三路</i>
+          <b>过滤</b><small>规则预筛</small><i>分两路</i>
         </div>
-
         <div class="rt-node lane-q" data-n="quar" style="grid-area:quar">
           <span class="dot amber"></span><b>隔离</b><strong id="n-quar">—</strong>
           <button type="button" class="link" id="btn-reasons">原因 ▾</button>
           <div class="reasons" id="filter-reasons" hidden></div>
         </div>
-        <div class="rt-node lane-b" data-n="distill" style="grid-area:distill">
-          <span class="dot accent"></span><b>提炼</b><strong id="n-distill">—</strong>
-          <small>华为 worker → magpie · 失败 <em id="n-dfail">—</em></small>
+        <div class="rt-node lane-b" data-n="drafts" style="grid-area:drafts">
+          <span class="dot accent"></span><b>草稿·按项目</b><strong id="n-drafts">—</strong><small id="drafts-by">提炼 <em id="n-dfail"></em></small>
         </div>
-        <div class="rt-node lane-h" data-n="retain" style="grid-area:retain">
-          <span class="dot blue"></span><b>Hindsight retain</b><strong id="n-retain">—</strong><small id="retain-note">bank 文档</small>
+        <div class="rt-node rt-hub" data-n="analysis" style="grid-area:analysis">
+          <b>分析</b><small>DMIT · auto-flash</small><i id="analysis-chip">—</i>
         </div>
-
-        <div class="rt-node lane-b" data-n="pending" style="grid-area:pending">
-          <span class="dot accent"></span><b>待入库</b><strong id="n-pending">—</strong><small id="pending-by">DMIT vault</small>
-        </div>
-        <div class="rt-node rt-hub" data-n="classify" style="grid-area:classify">
-          <b>pi 归类</b><small id="classify-model">DMIT</small><i id="classify-chip">—</i>
-        </div>
-
         <ol class="rt-outs" style="grid-area:outs">
-          <li data-n="o-auto"><span class="dot green"></span><span class="t">已写入<span class="long"> agent使用技巧</span><small>自动</small></span><b id="n-auto">—</b></li>
-          <li data-n="o-prop"><a href="#proposals"><span class="dot amber"></span><span class="t">待确认<small>项目主题</small></span><b id="n-prop">—</b></a></li>
-          <li data-n="o-ign"><span class="dot muted"></span><span class="t">忽略<small id="ign-sub">规则 + 模型</small></span><b id="n-ign">—</b></li>
-          <li data-n="o-fail"><span class="dot red"></span><span class="t">失败<small>重试 3 次后归档</small></span><b id="n-fail">—</b></li>
+          <li data-n="o-batch"><a href="#gate"><span class="dot amber"></span><span class="t">批量<small>需批准</small></span><b id="n-batch">—</b></a></li>
+          <li data-n="o-incr"><span class="dot green"></span><span class="t">增量<small>自动</small></span><b id="n-incr">—</b></li>
+          <li data-n="o-tips"><span class="dot blue"></span><span class="t">技巧<small>自动</small></span><b id="n-tips">—</b></li>
         </ol>
+        <div class="rt-node" data-n="obsidian" style="grid-area:obsidian">
+          <span class="dot green"></span><b>Obsidian</b><strong id="n-notes">—</strong><small>原子笔记 · 真相源</small>
+        </div>
+        <div class="rt-node lane-h" data-n="hindsight" style="grid-area:hindsight">
+          <span class="dot blue"></span><b>Hindsight</b><strong id="n-hs">—</strong><small id="hs-note">已同步 / 笔记总数</small>
+        </div>
       </div>
       <div class="rt-foot">
         <p class="rt-cap" id="rt-cap">—</p>
-        <div class="rt-legend"><span><i class="lg solid"></i>已接通</span><span><i class="lg dash"></i>未接通</span><span><i class="lg flow"></i>有积压在流动</span></div>
+        <div class="rt-legend"><span><i class="lg solid"></i>已接通</span><span><i class="lg dash"></i>空闲</span><span><i class="lg flow"></i>有积压在流动</span></div>
       </div>
     </section>
 
@@ -74,7 +68,7 @@
       <div class="card-b" id="gate-list"><p class="empty">加载中…</p></div>
     </section>
 
-    <section class="card" id="proposals">
+    <section class="card" id="proposals" hidden>
       <header class="card-h">
         <h2>待确认建议</h2><span class="note">按目标文件分组 · 确认后才写入 Obsidian；同一文件批量确认时按顺序写入并自动续编号</span>
         <span class="grow"></span><span class="count" id="proposals-count">—</span>
@@ -91,7 +85,7 @@
       </details>
     </section>
 
-    <section class="card">
+    <section class="card" hidden>
       <header class="card-h"><h2>归类记录</h2><span class="note">会话 → 主题（非一会话一笔记）</span></header>
       <div class="card-b" id="recent-list"><p class="empty">加载中…</p></div>
     </section>

@@ -42,13 +42,12 @@ h1 { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: -.01em; }
 .rt-mode { margin: 0; font-size: 12.5px; color: var(--fg-2); }
 .rt-stage {
   position: relative; display: grid; align-items: center; padding: 26px 2px 18px;
-  grid-template-columns: 112px 112px minmax(130px, 1fr) minmax(112px, .8fr) 124px minmax(190px, 1.2fr);
-  grid-template-rows: auto auto auto;
+  grid-template-columns: 100px 96px minmax(110px, 1fr) 100px minmax(120px, 1fr) minmax(104px, .9fr) minmax(110px, .9fr);
+  grid-template-rows: auto auto;
   grid-template-areas:
-    ".     .      quar    .       .        outs"
-    "inbox filter distill pending classify outs"
-    ".     .      retain  .       .        outs";
-  column-gap: 44px; row-gap: 18px;
+    ".     .      quar   .        outs obsidian hindsight"
+    "inbox filter drafts analysis outs obsidian hindsight";
+  column-gap: 34px; row-gap: 18px;
 }
 .rt-wires { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; z-index: 0; }
 .rt-wires path { fill: none; stroke: var(--line); stroke-width: 1.5; stroke-linecap: round; }
@@ -160,14 +159,15 @@ pre.diff { margin: 6px 0 0; padding: 10px; background: #141417; border: 1px soli
     grid-template-areas:
       ".     inbox    ."
       ".     filter   ."
-      "quar  distill  retain"
-      ".     pending  ."
-      ".     classify ."
-      "outs  outs     outs";
+      "quar  drafts   ."
+      ".     analysis ."
+      "outs  outs     outs"
+      ".     obsidian ."
+      ".     hindsight .";
     column-gap: 10px; row-gap: 30px; padding: 14px 0 6px;
   }
   .rt-node strong { font-size: 19px; }
-  .rt-outs { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-top: 4px; }
+  .rt-outs { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-top: 4px; }
   .rt-outs li { padding: 8px 4px 7px; }
   .rt-outs li, .rt-outs li > a { grid-template-columns: 1fr; justify-items: center; text-align: center; row-gap: 3px; }
   .rt-outs .t { align-items: center; font-size: 12px; }
@@ -179,3 +179,4 @@ pre.diff { margin: 6px 0 0; padding: 10px; background: #141417; border: 1px soli
 .gate-row{display:flex;gap:12px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line,#2a2a2a);flex-wrap:wrap}
 .gate-row b{min-width:110px}.gate-row .t{min-width:110px;opacity:.85}
 .gate-row.ready .t{color:#e0a800;font-weight:600}.gate-row.incremental .t{color:#3fb950}
+.rt-outs li[data-n="o-batch"] b { color: var(--amber); } .rt-outs li[data-n="o-incr"] b { color: var(--green); } .rt-outs li[data-n="o-tips"] b { color: var(--blue); }

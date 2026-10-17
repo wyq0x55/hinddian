@@ -52,20 +52,22 @@
   }
   const width = (n) => (n > 0 ? Math.min(5, 1.4 + Math.log10(n + 1) * 1.3) : 1.2);
 
+  function gsum(st, key = "drafts") { return ((state.g || {}).projects || []).filter((p) => !st || st.includes(p.state)).reduce((x, p) => x + (p[key] || 0), 0); }
   function edges() {
-    const s = state.stats, c = state.c || {}, h = c.hindsight || {};
-    const reach = c.reachable !== false;
+    const s = state.stats || {}, c = state.c || {}, os = c.obsidian_sync || {};
+    const drafts = gsum(), ready = gsum(["ready", "accumulating"]), incr = gsum(["incremental"]), tips = gsum(["auto-tips"]);
     return [
       { f: "inbox", t: "filter", n: s.inbox_count, col: "c-muted", live: s.inbox_count > 0 },
       { f: "filter", t: "quar", n: s.quarantine_count, col: "c-amber" },
-      { f: "filter", t: "distill", n: (s.processed_count || 0) + (s.failed_count || 0), col: "c-accent" },
-      { f: "filter", t: "retain", n: h.documents, col: "c-blue", todo: !c.hindsight_retain_enabled, label: c.hindsight_retain_enabled ? null : "未接" },
-      { f: "distill", t: "pending", n: s.processed_count, col: "c-accent" },
-      { f: "pending", t: "classify", n: reach ? c.pending_items : null, col: "c-accent", live: reach && c.pending_items > 0 && c.timer_active },
-      { f: "classify", t: "o-auto", n: c.auto_applied, col: "c-green" },
-      { f: "classify", t: "o-prop", n: c.proposals_pending, col: "c-amber" },
-      { f: "classify", t: "o-ign", n: (c.ignored || 0) + (c.proposals_ignored_by_rule || 0), col: "c-muted" },
-      { f: "classify", t: "o-fail", n: c.failed, col: "c-red" },
+      { f: "filter", t: "drafts", n: s.processed_count, col: "c-accent" },
+      { f: "drafts", t: "analysis", n: drafts, col: "c-accent", live: incr + tips > 0 },
+      { f: "analysis", t: "o-batch", n: ready, col: "c-amber" },
+      { f: "analysis", t: "o-incr", n: incr, col: "c-green" },
+      { f: "analysis", t: "o-tips", n: tips, col: "c-blue" },
+      { f: "o-batch", t: "obsidian", n: gsum(["ready", "accumulating"], "processed"), col: "c-amber" },
+      { f: "o-incr", t: "obsidian", n: gsum(["incremental"], "processed"), col: "c-green" },
+      { f: "o-tips", t: "obsidian", n: gsum(["auto-tips"], "processed"), col: "c-blue" },
+      { f: "obsidian", t: "hindsight", n: os.synced, col: "c-blue", live: (os.pending || 0) > 0, label: os.notes ? `同步 ${os.synced}/${os.notes}` : "同步" },
     ];
   }
 
@@ -76,7 +78,7 @@
     for (const e of edges()) {
       const a = node(e.f), b = node(e.t);
       if (!a || !b) continue;
-      const fan = e.f === "filter" || e.f === "classify";
+      const fan = e.f === "filter" || e.f === "analysis";
       const w = wirePath(box(a, stage), box(b, stage), fan ? 0.7 : 0.5);
       const p = document.createElementNS(NS, "path");
       const n = Number(e.n) || 0;
@@ -103,41 +105,27 @@
 
   // ---------------- stage numbers ----------------
   function renderStage(filters) {
-    const s = state.stats, c = state.c || {};
+    const s = state.stats || {}, c = state.c || {}, g = state.g || {}, os = c.obsidian_sync, h = c.hindsight;
     setN("n-inbox", s.inbox_count || 0);
     setN("n-quar", s.quarantine_count || 0);
-    setN("n-distill", s.processed_count || 0);
-    setN("n-dfail", s.failed_count || 0);
+    $("n-dfail").textContent = s.failed_count ? `失败 ${s.failed_count}` : "";
     const box = $("filter-reasons");
     box.innerHTML = !filters || !filters.length
       ? `<div class="reason-row"><span class="note">暂无隔离原因</span></div>`
       : filters.map((r) => `<div class="reason-row"><code>${esc(r.reason)}</code><b>${esc(r.count)}</b></div>`).join("");
-
-    const h = c.hindsight;
-    if (!h) { setN("n-retain", null); $("retain-note").textContent = "未配置 key"; }
-    else if (h.error) { setN("n-retain", "?"); $("retain-note").textContent = "不可达"; }
-    else { const os = c.obsidian_sync; setN("n-retain", h.documents); $("retain-note").textContent = os ? `原文 retain + Obsidian 笔记同步 ${os.synced} 篇 · ${fmtTime(os.at)}${os.errors && os.errors.length ? " · 错误 " + os.errors.length : ""}` : (c.hindsight_retain_enabled ? "worker 自动 retain" : "bank 文档 · 自动 retain 未接"); }
-
-    if (c.reachable === false) {
-      ["n-pending", "n-auto", "n-prop", "n-ign", "n-fail"].forEach((id) => setN(id, null));
-      $("classify-chip").textContent = "DMIT 不可达";
-      $("rt-cap").textContent = "DMIT 不可达：" + (c.error || "?");
-    } else {
-      setN("n-pending", c.pending_items);
-      const byp = c.pending_by_project || {};
-      $("pending-by").textContent = Object.keys(byp).map((k) => `${k} ${byp[k]}`).join(" · ") || "空";
-      setN("n-auto", c.auto_applied);
-      setN("n-prop", c.proposals_pending);
-      setN("n-ign", (c.ignored || 0) + (c.proposals_ignored_by_rule || 0));
-      $("ign-sub").textContent = `预过滤 ${c.prefiltered || 0} · 建议被规则忽略 ${c.proposals_ignored_by_rule || 0}`;
-      setN("n-fail", c.failed);
-      $("classify-model").textContent = (c.model || "pi").replace("magpie/", "");
-      $("classify-chip").textContent = c.timer_active ? "每 15 分钟 · 5 条" : "定时已暂停";
-      const lr = c.last_run;
-      $("rt-cap").textContent = (lr ? `上次归类 ${fmtTime(lr.at)} · ${lr.count} 条` : "尚未运行") +
-        ` · 已确认 ${c.proposals_applied || 0} · 已拒绝 ${c.proposals_rejected || 0}`;
-    }
-    $("rt-mode").textContent = `a 隔离 ${s.quarantine_count || 0} ｜ b 提炼 → 待入库 → pi 归类 ｜ c Hindsight retain${c.hindsight_retain_enabled ? "" : "（虚线：未接通）"}`;
+    const ps = g.projects || [];
+    setN("n-drafts", g.projects ? gsum() : null);
+    $("drafts-by").innerHTML = ps.filter((p) => p.drafts).map((p) => `${esc(p.project)} ${p.drafts}`).join(" · ") || "无积压";
+    setN("n-batch", ps.filter((p) => p.state === "ready").length);
+    setN("n-incr", gsum(["incremental"]));
+    setN("n-tips", gsum(["auto-tips"]));
+    $("analysis-chip").textContent = c.timer_active === false ? "定时已暂停" : "每 15 分钟";
+    setN("n-notes", os ? os.notes : null);
+    if (os) { setN("n-hs", `${os.synced}/${os.notes}`); $("hs-note").textContent = `${os.pending ? "同步中 · 剩 " + os.pending : "已全部同步"} · ${fmtTime(os.at)}`; }
+    else { setN("n-hs", h && !h.error ? h.documents : null); $("hs-note").textContent = "等待首次同步"; }
+    const hold = Object.entries(g.holdout || {}).map(([k, v]) => `${k} ${v}`).join(" · ");
+    $("rt-mode").textContent = `Hindsight 只索引 Obsidian 笔记（document_id = 笔记 id）；原始会话不再直接 retain${hold ? " ｜ 保留集 " + hold : ""}`;
+    $("rt-cap").textContent = ps.map((p) => `${p.project}：${({ ready: "待批准", accumulating: "积累中", incremental: "增量", "auto-tips": "技巧" })[p.state] || p.state} · 已处理 ${p.processed}`).join(" ｜ ") || "—";
     redraw();
   }
 
@@ -313,7 +301,7 @@
       catch (e) { toast(e.message, true); b.disabled = false; }
     }));
   }
-  async function refreshGate() { renderGate(await get("/api/gate").catch(() => null)); }
+  async function refreshGate() { state.g = await get("/api/gate").catch(() => null); renderGate(state.g); renderStage(state._filters); }
   async function refresh() {
     try {
       const health = await get("/api/health");
