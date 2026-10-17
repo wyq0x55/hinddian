@@ -153,6 +153,9 @@ def repair_notes():
 
 def rebuild_hubs():
     repair_notes()
+    try:
+        import graph_colors; graph_colors.main()
+    except Exception as e: log({"event": "graph_colors_error", "error": str(e)[:200]})
     notes = load_notes()
     projects = sorted(p.name for p in (VAULT / "项目").iterdir() if p.is_dir() and not p.name.startswith(("_", ".")))
     for proj in projects:

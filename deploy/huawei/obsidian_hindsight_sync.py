@@ -58,11 +58,16 @@ def main():
     todo = [n for i, n in want.items() if state.get(i) != n["sha"]][:MAX_RETAIN]
     gone = [i for i in state if i not in want]
     stats = {"retained": 0, "forgotten": 0, "errors": [], "notes": len(want)}
+    def status(running=True):
+        synced = sum(1 for i, n in want.items() if state.get(i) == n["sha"])
+        STATUS.write_text(json.dumps({"at": dt.datetime.now().astimezone().isoformat(timespec="seconds"), "running": running,
+                                      "synced": synced, "pending": len(want) - synced, **stats}, ensure_ascii=False))
+    if not dry: status()
     for n in todo:
         if dry: print("retain", n["id"]); continue
         try: retain(n); state[n["id"]] = n["sha"]; stats["retained"] += 1
         except Exception as e: stats["errors"].append(f"{n['id']}: {str(e)[:120]}")
-        STATE.write_text(json.dumps(state, ensure_ascii=False, indent=1))
+        STATE.write_text(json.dumps(state, ensure_ascii=False, indent=1)); status()
     for i in gone:
         if dry: print("forget", i); continue
         try: forget(i); state.pop(i, None); stats["forgotten"] += 1
@@ -70,8 +75,7 @@ def main():
     if not dry:
         STATE.parent.mkdir(parents=True, exist_ok=True)
         STATE.write_text(json.dumps(state, ensure_ascii=False, indent=1))
-        STATUS.write_text(json.dumps({"at": dt.datetime.now().astimezone().isoformat(timespec="seconds"), "synced": len(state),
-                                      "pending": len([1 for i, n in want.items() if state.get(i) != n["sha"]]), **stats}, ensure_ascii=False))
+        status(False)
     print(json.dumps(stats, ensure_ascii=False))
 
 if __name__ == "__main__":
