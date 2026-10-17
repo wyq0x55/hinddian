@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>hinddian · 管线仪表盘</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <header class="top">
+      <div class="brand">
+        <span class="logo">◆</span>
+        <div>
+          <h1>hinddian</h1>
+          <p class="sub">主题记忆管线 · Obsidian SoT · Hindsight Recall</p>
+        </div>
+      </div>
+      <div class="top-meta">
+        <span id="health-pill" class="pill muted">…</span>
+        <button type="button" id="btn-refresh" class="btn">刷新</button>
+      </div>
+    </header>
+
+    <section class="stats" id="stats-grid" aria-label="总览"></section>
+
+    <section class="grid-2">
+      <article class="card">
+        <header class="card-h">
+          <h2>收件箱</h2>
+          <span class="mono" id="inbox-count">—</span>
+        </header>
+        <div class="card-b" id="inbox-list"><p class="empty">加载中…</p></div>
+      </article>
+
+      <article class="card">
+        <header class="card-h">
+          <h2>过滤结果</h2>
+          <span class="mono" id="filter-count">—</span>
+        </header>
+        <div class="card-b" id="filter-list"><p class="empty">加载中…</p></div>
+      </article>
+    </section>
+
+    <section class="grid-2">
+      <article class="card">
+        <header class="card-h">
+          <h2>提炼任务</h2>
+          <span class="mono" id="jobs-count">—</span>
+        </header>
+        <div class="card-b" id="jobs-list"><p class="empty">加载中…</p></div>
+      </article>
+
+      <article class="card">
+        <header class="card-h">
+          <h2>主题 / 待入库</h2>
+          <span class="mono" id="topics-count">—</span>
+        </header>
+        <div class="card-b" id="topics-list"><p class="empty">加载中…</p></div>
+      </article>
+    </section>
+
+    <section class="card">
+      <header class="card-h">
+        <h2>主题合并历史</h2>
+        <span class="hint">会话 → 主题文档（非一会话一笔记）</span>
+      </header>
+      <div class="card-b" id="merges-list"><p class="empty">加载中…</p></div>
+    </section>
+
+    <footer class="foot">
+      <span>固定全局主题 <code>topic/agent-usage-tips</code> · agent使用技巧</span>
+      <span id="demo-flag"></span>
+    </footer>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
