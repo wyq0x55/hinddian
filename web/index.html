@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>hinddian · 管线仪表盘</title>
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
@@ -18,16 +18,103 @@
       </div>
       <div class="top-meta">
         <span id="health-pill" class="pill muted">…</span>
+        <span id="demo-pill" class="pill muted">…</span>
         <button type="button" id="btn-refresh" class="btn">刷新</button>
       </div>
     </header>
 
-    <section class="stats" id="stats-grid" aria-label="总览"></section>
+    <!-- Pipeline: inbox → filter → distill → result -->
+    <section class="pipeline" id="pipeline" aria-label="流水线">
+      <div class="pipe-stage" data-stage="inbox">
+        <div class="stage-head">
+          <span class="stage-num">1</span>
+          <div>
+            <h2>收件箱</h2>
+            <p class="stage-desc">等待捡起</p>
+          </div>
+        </div>
+        <div class="stage-count" id="pipe-inbox">—</div>
+        <p class="stage-hint">原始会话 JSON</p>
+      </div>
+
+      <div class="pipe-chevron" aria-hidden="true">›</div>
+
+      <div class="pipe-stage" data-stage="filter">
+        <div class="stage-head">
+          <span class="stage-num">2</span>
+          <div>
+            <h2>过滤</h2>
+            <p class="stage-desc">通过 → 提炼 · 拒绝 → 隔离</p>
+          </div>
+        </div>
+        <div class="stage-count warn" id="pipe-quarantine">—</div>
+        <p class="stage-hint">拒绝 → 隔离（下方展开原因）</p>
+        <p class="pass-flow"><span class="pass-arrow">通 →</span> 进入提炼队列</p>
+        <button type="button" class="reasons-toggle" id="btn-reasons" aria-expanded="false">
+          隔离原因 ▾
+        </button>
+        <div class="reasons" id="filter-reasons" hidden></div>
+        <p class="stage-side">
+          <span class="badge side">Hindsight retain</span>
+          <span class="muted-inline">过滤通过后并行入库，不替代提炼</span>
+        </p>
+      </div>
+
+      <div class="pipe-chevron" aria-hidden="true">›</div>
+
+      <div class="pipe-stage" data-stage="distill">
+        <div class="stage-head">
+          <span class="stage-num">3</span>
+          <div>
+            <h2>提炼</h2>
+            <p class="stage-desc">合并进主题笔记</p>
+          </div>
+        </div>
+        <div class="filter-split">
+          <div class="split-ok">
+            <span class="split-label">排队</span>
+            <span class="split-val warn" id="pipe-pending">—</span>
+          </div>
+          <div class="split-ok">
+            <span class="split-label">进行中</span>
+            <span class="split-val info" id="pipe-running">—</span>
+          </div>
+        </div>
+        <p class="stage-hint" id="distill-note">任务跟踪可能仍为 stub</p>
+      </div>
+
+      <div class="pipe-chevron" aria-hidden="true">›</div>
+
+      <div class="pipe-stage pipe-end" data-stage="result">
+        <div class="stage-head">
+          <span class="stage-num">4</span>
+          <div>
+            <h2>结果</h2>
+            <p class="stage-desc">提炼终点</p>
+          </div>
+        </div>
+        <div class="result-split">
+          <div class="result-ok">
+            <span class="split-label">已处理</span>
+            <span class="split-val ok" id="pipe-processed">—</span>
+          </div>
+          <div class="result-fail">
+            <span class="split-label">失败</span>
+            <span class="split-val danger" id="pipe-failed">—</span>
+          </div>
+        </div>
+        <p class="stage-hint">文件落在 processed / failed</p>
+      </div>
+    </section>
+
+    <p class="flow-legend" id="flow-legend">
+      流水线：收件箱 → 过滤（拒→隔离 / 通→提炼）→ 提炼 → 已处理 · 失败
+    </p>
 
     <section class="grid-2">
       <article class="card">
         <header class="card-h">
-          <h2>收件箱</h2>
+          <h2>收件箱最近</h2>
           <span class="mono" id="inbox-count">—</span>
         </header>
         <div class="card-b" id="inbox-list"><p class="empty">加载中…</p></div>
@@ -35,22 +122,14 @@
 
       <article class="card">
         <header class="card-h">
-          <h2>过滤结果</h2>
-          <span class="mono" id="filter-count">—</span>
-        </header>
-        <div class="card-b" id="filter-list"><p class="empty">加载中…</p></div>
-      </article>
-    </section>
-
-    <section class="grid-2">
-      <article class="card">
-        <header class="card-h">
           <h2>提炼任务</h2>
           <span class="mono" id="jobs-count">—</span>
         </header>
         <div class="card-b" id="jobs-list"><p class="empty">加载中…</p></div>
       </article>
+    </section>
 
+    <section class="grid-2">
       <article class="card">
         <header class="card-h">
           <h2>主题 / 待入库</h2>
@@ -58,14 +137,14 @@
         </header>
         <div class="card-b" id="topics-list"><p class="empty">加载中…</p></div>
       </article>
-    </section>
 
-    <section class="card">
-      <header class="card-h">
-        <h2>主题合并历史</h2>
-        <span class="hint">会话 → 主题文档（非一会话一笔记）</span>
-      </header>
-      <div class="card-b" id="merges-list"><p class="empty">加载中…</p></div>
+      <article class="card">
+        <header class="card-h">
+          <h2>主题合并历史</h2>
+          <span class="hint">会话 → 主题（非一会话一笔记）</span>
+        </header>
+        <div class="card-b" id="merges-list"><p class="empty">加载中…</p></div>
+      </article>
     </section>
 
     <footer class="foot">
