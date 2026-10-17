@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Body, Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
+from . import classify_remote
 from .config import Settings, get_settings
 from .models import DistillJob, FilterResult, InboxItem, MergeEvent, PipelineStats, TopicDocStatus
 from .store import (
@@ -133,6 +134,66 @@ def merges(settings: Settings = Depends(_settings)) -> list[MergeEvent]:
     if settings.use_demo_data and _paths_missing(settings):
         seed_demo_if_empty(settings)
     return StatusStore(settings.status_db).list_merges()
+
+
+def _classify_guard(settings: Settings) -> None:
+    if not settings.classify_enabled:
+        raise HTTPException(503, "classify stage disabled")
+
+
+def require_csrf(x_hinddian: str | None = Header(default=None)) -> None:
+    """Mutations need a custom header → cross-site forms/fetch can't send it without CORS."""
+    if x_hinddian != "1":
+        raise HTTPException(403, "missing X-Hinddian header")
+
+
+@app.get("/api/classify/stats", dependencies=[Depends(require_auth)])
+def classify_stats(settings: Settings = Depends(_settings)) -> dict:
+    _classify_guard(settings)
+    try:
+        data = classify_remote.stats()
+        data["reachable"] = True
+    except classify_remote.RemoteError as e:
+        data = {"reachable": False, "error": str(e)}
+    data["hindsight"] = classify_remote.hindsight_stats()
+    data["hindsight_retain_enabled"] = settings.hindsight_retain_enabled
+    return data
+
+
+@app.get("/api/classify/proposals", dependencies=[Depends(require_auth)])
+def classify_proposals(status: str = "pending", settings: Settings = Depends(_settings)) -> list[dict]:
+    _classify_guard(settings)
+    try:
+        return classify_remote.proposals(status)
+    except classify_remote.RemoteError as e:
+        raise HTTPException(502, str(e)) from e
+
+
+@app.get("/api/classify/recent", dependencies=[Depends(require_auth)])
+def classify_recent(limit: int = 30, settings: Settings = Depends(_settings)) -> list[dict]:
+    _classify_guard(settings)
+    try:
+        return classify_remote.recent(limit)
+    except classify_remote.RemoteError as e:
+        raise HTTPException(502, str(e)) from e
+
+
+@app.post("/api/classify/proposals/{pid}/approve", dependencies=[Depends(require_auth), Depends(require_csrf)])
+def classify_approve(pid: str, settings: Settings = Depends(_settings)) -> dict:
+    _classify_guard(settings)
+    try:
+        return classify_remote.decide(pid, True)
+    except classify_remote.RemoteError as e:
+        raise HTTPException(502, str(e)) from e
+
+
+@app.post("/api/classify/proposals/{pid}/reject", dependencies=[Depends(require_auth), Depends(require_csrf)])
+def classify_reject(pid: str, payload: dict = Body(default={}), settings: Settings = Depends(_settings)) -> dict:
+    _classify_guard(settings)
+    try:
+        return classify_remote.decide(pid, False, str(payload.get("reason") or ""))
+    except classify_remote.RemoteError as e:
+        raise HTTPException(502, str(e)) from e
 
 
 @app.get("/")

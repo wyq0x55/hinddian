@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     hindsight_base_url: str = "http://127.0.0.1:8888"
     hindsight_mcp_url: str = "http://127.0.0.1:8888/mcp/wanwan/"
     hindsight_api_key: str | None = None
+    hindsight_bank: str = "wanwan"
+    # Does the distill worker retain filtered sessions into Hindsight? (branch c)
+    hindsight_retain_enabled: bool = False
+
+    # DMIT classify stage (pi). Reached via root SSH alias, same as session-distill.
+    classify_ssh_host: str = "dmit-vps"
+    classify_enabled: bool = True
 
     hinddian_host: str = "127.0.0.1"
     hinddian_port: int = 8787
