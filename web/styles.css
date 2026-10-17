@@ -175,3 +175,7 @@ pre.diff { margin: 6px 0 0; padding: 10px; background: #141417; border: 1px soli
   .grid-2 { grid-template-columns: 1fr; }
   .reasons { left: 0; width: 220px; }
 }
+
+.gate-row{display:flex;gap:12px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line,#2a2a2a);flex-wrap:wrap}
+.gate-row b{min-width:110px}.gate-row .t{min-width:110px;opacity:.85}
+.gate-row.ready .t{color:#e0a800;font-weight:600}.gate-row.incremental .t{color:#3fb950}

@@ -116,7 +116,7 @@
     const h = c.hindsight;
     if (!h) { setN("n-retain", null); $("retain-note").textContent = "未配置 key"; }
     else if (h.error) { setN("n-retain", "?"); $("retain-note").textContent = "不可达"; }
-    else { setN("n-retain", h.documents); $("retain-note").textContent = c.hindsight_retain_enabled ? "worker 自动 retain" : "bank 文档 · 自动 retain 未接"; }
+    else { const os = c.obsidian_sync; setN("n-retain", h.documents); $("retain-note").textContent = os ? `原文 retain + Obsidian 笔记同步 ${os.synced} 篇 · ${fmtTime(os.at)}${os.errors && os.errors.length ? " · 错误 " + os.errors.length : ""}` : (c.hindsight_retain_enabled ? "worker 自动 retain" : "bank 文档 · 自动 retain 未接"); }
 
     if (c.reachable === false) {
       ["n-pending", "n-auto", "n-prop", "n-ign", "n-fail"].forEach((id) => setN(id, null));
@@ -294,13 +294,33 @@
     renderIgnored(ign);
     renderRecent(recent);
   }
+  // ---------------- batch gate ----------------
+  const GATE_ZH = { ready: "可批量分析", accumulating: "积累中", incremental: "增量自动", "auto-tips": "只抽技巧 · 自动" };
+  function renderGate(g) {
+    const el = $("gate-list"); if (!el) return;
+    if (!g || !g.projects) { el.innerHTML = `<p class="empty">DMIT 不可达</p>`; return; }
+    const rows = g.projects.map((p) => `<div class="gate-row ${p.state}"><b>${esc(p.project)}</b>
+      <span class="t">${esc(GATE_ZH[p.state] || p.state)}${p.running ? " · 运行中" : ""}</span>
+      <span>草稿 ${p.drafts}${p.state === "accumulating" || p.state === "ready" ? " / " + p.threshold : ""} · 已处理 ${p.processed}</span>
+      ${p.state === "ready" && !p.running ? `<button type="button" class="btn primary gate-go" data-p="${esc(p.project)}">开始批量分析</button>` : ""}</div>`);
+    const hold = Object.entries(g.holdout || {}).map(([k, v]) => `${k} ${v}`).join(" · ");
+    el.innerHTML = rows.join("") + (hold ? `<p class="note">增量测试保留集（不处理）：${esc(hold)}</p>` : "");
+    $("gate-count").textContent = g.projects.filter((p) => p.state === "ready").length + " 个待批准";
+    el.querySelectorAll(".gate-go").forEach((b) => b.addEventListener("click", async () => {
+      if (!confirm(`对「${b.dataset.p}」的全部草稿做一次批量分析？之后该项目的新草稿会自动增量合并。`)) return;
+      b.disabled = true;
+      try { await post(`/api/gate/${encodeURIComponent(b.dataset.p)}/approve`, {}); toast("已开始批量分析"); refreshGate(); }
+      catch (e) { toast(e.message, true); b.disabled = false; }
+    }));
+  }
+  async function refreshGate() { renderGate(await get("/api/gate").catch(() => null)); }
   async function refresh() {
     try {
       const health = await get("/api/health");
       $("health-pill").textContent = "在线 · v" + health.version; $("health-pill").className = "pill ok";
       $("demo-flag").textContent = health.demo ? "演示数据" : "";
     } catch { $("health-pill").textContent = "离线"; $("health-pill").className = "pill warn"; }
-    const cp = refreshClassify();
+    const cp = refreshClassify(); refreshGate();
     const [stats, inbox, filters, topics] = await Promise.all([get("/api/stats"), get("/api/inbox"), get("/api/filters"), get("/api/topics")]);
     state.stats = stats; state._filters = filters;
     renderStage(filters); renderInbox(inbox); renderTopics(topics);
@@ -313,5 +333,5 @@
   });
   $("btn-refresh").addEventListener("click", () => refresh().catch((e) => toast(e.message, true)));
   refresh().catch((e) => { console.error(e); toast("加载失败：" + e.message, true); });
-  setInterval(() => refreshClassify().catch(() => {}), 60000);
+  setInterval(() => { refreshClassify().catch(() => {}); refreshGate(); }, 60000);
 })();
