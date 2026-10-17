@@ -1,0 +1,18 @@
+[Unit]
+Description=hinddian API + Magpie-style pipeline dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/hinddian
+EnvironmentFile=-/opt/hinddian/.env
+Environment=PYTHONPATH=/opt/hinddian/src
+# Single worker — Huawei RAM ~1.7Gi
+ExecStart=/opt/hinddian/.venv/bin/uvicorn hinddian.api:app --host 127.0.0.1 --port 8787 --workers 1
+Restart=on-failure
+RestartSec=5
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

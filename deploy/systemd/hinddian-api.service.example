@@ -1,20 +1,18 @@
 [Unit]
-Description=hinddian API + dashboard
+Description=hinddian API + Magpie-style pipeline dashboard
 After=network.target
 
 [Service]
 Type=simple
 User=root
 WorkingDirectory=/opt/hinddian
-EnvironmentFile=-/opt/hinddian/secrets.env
+EnvironmentFile=-/opt/hinddian/.env
 Environment=PYTHONPATH=/opt/hinddian/src
-Environment=HINDDIAN_HOST=127.0.0.1
-Environment=HINDDIAN_PORT=8787
-ExecStart=/opt/hinddian/.venv/bin/uvicorn hinddian.api:app --host ${HINDDIAN_HOST} --port ${HINDDIAN_PORT}
+# Single worker — Huawei RAM ~1.7Gi
+ExecStart=/opt/hinddian/.venv/bin/uvicorn hinddian.api:app --host 127.0.0.1 --port 8787 --workers 1
 Restart=on-failure
 RestartSec=5
-
-# secrets.env should contain AUTH_TOKEN / HINDSIGHT_API_KEY — never commit them.
+Nice=10
 
 [Install]
 WantedBy=multi-user.target

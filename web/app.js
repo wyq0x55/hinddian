@@ -43,7 +43,9 @@
       statCard("待入库", s.pending_ingests, s.pending_ingests ? "warn" : "ok"),
       statCard("主题数", s.topics_tracked),
     ].join("");
-    $("demo-flag").textContent = s.demo ? "演示数据 · USE_DEMO_DATA" : "";
+    $("demo-flag").textContent = s.demo
+      ? "演示数据 · USE_DEMO_DATA"
+      : "真实数据 · USE_DEMO_DATA=false";
   }
 
   function renderInbox(items) {
