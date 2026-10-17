@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Patch Magpie library.json: hinddian-memory MCP + self-contained embedded hooks.
+"""Patch Magpie library.json on DMIT: MCP + hooks + hinddian-hooks skill (WebDAV-carried).
 
-Hook *definitions* (including full script payloads) sync via Magpie WebDAV LWW.
-No /usr/local/lib and no HTTP bootstrap on other machines — `magpie webdav now`
-alone is enough after DMIT pushes.
+Hooks themselves are NOT in Magpie WebDAV Bundle — the skill is, so other PCs
+pull the skill then run install.py once to populate Hooks UI.
 """
 from __future__ import annotations
 
@@ -16,19 +15,30 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from embed_hooks import shell_command  # noqa: E402
+from embed_hooks import hook_defs, hooks_version  # noqa: E402
 
-LIB = Path(
-    os.environ.get("MAGPIE_LIBRARY")
-    or (Path.home() / ".config/magpie/library.json")
-)
+LIB = Path(os.environ.get("MAGPIE_LIBRARY") or (Path.home() / ".config/magpie/library.json"))
 MCP_URL = os.environ.get("HINDDIAN_MCP_URL", "http://124.70.90.224/hinddian/mcp")
-MEMORY_URL = os.environ.get("HINDDIAN_MEMORY_URL", "http://124.70.90.224/hinddian")
+SKILL_SRC = HERE / "skill-hinddian-hooks"
+SKILL_NAME = "hinddian-hooks"
+
+
+def install_skill(magpie_cfg: Path) -> dict:
+    skills_root = magpie_cfg / "library" / "skills" / SKILL_NAME
+    skills_root.parent.mkdir(parents=True, exist_ok=True)
+    if skills_root.exists():
+        shutil.rmtree(skills_root)
+    shutil.copytree(SKILL_SRC, skills_root)
+    return {"skill_dir": str(skills_root), "files": sorted(p.name for p in skills_root.iterdir())}
 
 
 def main():
     if not LIB.exists():
         raise SystemExit(f"missing {LIB}")
+    if not SKILL_SRC.is_dir():
+        raise SystemExit(f"missing skill pack {SKILL_SRC}")
+    magpie_cfg = LIB.parent
+    skill_info = install_skill(magpie_cfg)
     bak = LIB.with_suffix(LIB.suffix + f".bak.{int(time.time())}")
     shutil.copy2(LIB, bak)
     data = json.loads(LIB.read_text())
@@ -38,80 +48,66 @@ def main():
         if h.lower().startswith("bearer "):
             bearer = h.split(" ", 1)[1].strip()
             break
-    new_mcp = []
-    for m in data.get("mcp") or []:
-        if m.get("name") in ("hindsight", "hinddian-memory"):
-            continue
-        new_mcp.append(m)
+    new_mcp = [m for m in (data.get("mcp") or []) if m.get("name") not in ("hindsight", "hinddian-memory")]
     entry = {
         "name": "hinddian-memory",
         "transport": "http",
         "url": MCP_URL,
-        "agents": ["claude", "codex", "grok", "pi"],
+        "agents": ["claude", "codex", "grok", "pi", "cursor", "gemini"],
     }
     if bearer:
         entry["headers"] = {"Authorization": f"Bearer {bearer}"}
     new_mcp.insert(0, entry)
     data["mcp"] = new_mcp
 
-    ss = shell_command("session_start", memory_url=MEMORY_URL)
-    te = shell_command("turn_end", memory_url=MEMORY_URL)
-    hooks = [
-        h
-        for h in (data.get("hooks") or [])
-        if h.get("name")
-        not in (
-            "hindsight-recall-remind",
-            "hinddian-session-start",
-            "hinddian-turn-end",
-        )
-    ]
-    hooks.append(
-        {
-            "name": "hinddian-session-start",
-            "description": (
-                "SessionStart: routing + Magpie-local Jev should-recall; "
-                "scripts embedded in command (WebDAV syncs them)"
-            ),
-            "event": "session-start",
-            "command": ss,
-            "agents": ["claude", "codex", "grok", "pi"],
-            "timeout": 45,
-        }
+    hooks = hook_defs()
+    names = {h["name"] for h in hooks}
+    data["hooks"] = [h for h in (data.get("hooks") or []) if h.get("name") not in names] + hooks
+
+    skills = [s for s in (data.get("skills") or []) if s.get("name") != SKILL_NAME]
+    # No absolute Source.Dir — skill lives in library/skills/hinddian-hooks and
+    # WebDAV carries its files; Windows Put writes them without linking to DMIT paths.
+    skills.append({
+        "name": SKILL_NAME,
+        "agents": ["claude", "codex", "grok", "cursor", "gemini"],
+    })
+    data["skills"] = skills
+
+    # Patch instructions with one-time Windows note (keep existing text, append marker block)
+    # Instructions live in library/instructions.md — update that file if present
+    instr = magpie_cfg / "library" / "instructions.md"
+    marker = "<!-- hinddian-hooks-install -->"
+    note = (
+        f"\n{marker}\n"
+        "## hinddian hooks (other computers)\n\n"
+        "Magpie WebDAV **does not sync Hooks**. After `magpie webdav now` on a new PC, run once:\n\n"
+        "- Windows: `py -3 $env:USERPROFILE\\.config\\magpie\\library\\skills\\hinddian-hooks\\install.py` then `magpie library sync`\n"
+        "- Linux/macOS: `python3 ~/.config/magpie/library/skills/hinddian-hooks/install.py` then `magpie library sync`\n\n"
+        "Then Library → Hooks should list `hinddian-session-start` and `hinddian-turn-end`.\n"
+        f"{marker}\n"
     )
-    hooks.append(
-        {
-            "name": "hinddian-turn-end",
-            "description": (
-                "TurnEnd: Magpie-local Jev classify → push_draft; "
-                "scripts embedded in command (WebDAV syncs them)"
-            ),
-            "event": "turn-end",
-            "command": te,
-            "agents": ["claude", "codex", "grok", "pi"],
-            "timeout": 90,
-        }
-    )
-    data["hooks"] = hooks
+    if instr.is_file():
+        text = instr.read_text(encoding="utf-8")
+        if marker in text:
+            pre, _, rest = text.partition(marker)
+            _, _, rest2 = rest.partition(marker)
+            # drop old block between markers
+            text = pre.rstrip() + note + rest2.lstrip("\n")
+        else:
+            text = text.rstrip() + note
+        instr.write_text(text, encoding="utf-8")
+
     LIB.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
-    print(
-        json.dumps(
-            {
-                "ok": True,
-                "backup": str(bak),
-                "library": str(LIB),
-                "mcp": [m.get("name") for m in data["mcp"]],
-                "hooks": [h.get("name") for h in data["hooks"]],
-                "cmd_lens": {
-                    "session_start": len(ss),
-                    "turn_end": len(te),
-                },
-                "embedded": True,
-                "extract_dir": "~/.config/magpie/hinddian-hooks",
-            },
-            ensure_ascii=False,
-        )
-    )
+    print(json.dumps({
+        "ok": True,
+        "backup": str(bak),
+        "hooks": [h["name"] for h in data["hooks"]],
+        "cmd_lens": {h["name"]: len(h["command"]) for h in data["hooks"]},
+        "skill": skill_info,
+        "ver": hooks_version(),
+        "webdav_carries_hooks": False,
+        "webdav_carries_skill": True,
+    }, ensure_ascii=False))
 
 
 if __name__ == "__main__":

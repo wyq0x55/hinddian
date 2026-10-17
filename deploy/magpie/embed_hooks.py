@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
-"""Embed Magpie hook scripts into library hook *commands* (WebDAV LWW sufficient).
+"""Embed Magpie hook scripts into library hook *commands*.
 
-No /usr/local/lib, no HTTP bootstrap. The command string carries a base64 payload
-of jev.py + session_start.py + turn_end.py; on first run it extracts under
-~/.config/magpie/hinddian-hooks/ (override HINDDIAN_MAGPIE_HOOK_DIR) then execs.
+Important: Magpie WebDAV/backup Bundle does NOT carry hooks yet (upstream).
+These commands are for local library.json after apply_library / skill install.
+Skills + this packager sync via WebDAV; install.py writes hooks on each PC.
 """
 from __future__ import annotations
 
 import base64
 import io
 import os
+import shutil
+import sys
 import tarfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 SCRIPT_NAMES = ("jev.py", "session_start.py", "turn_end.py")
-DEFAULT_VER = "20261017.7"
+DEFAULT_VER = "20261017.8"
 MEMORY_URL = os.environ.get("HINDDIAN_MEMORY_URL", "http://124.70.90.224/hinddian")
 
 
@@ -44,13 +46,14 @@ def pack_scripts_b64(src_dir: Path | None = None) -> str:
 
 
 def extractor_source(ver: str, scripts_b64: str) -> str:
-    """Python source that extracts payload then execs session_start|turn_end."""
-    # Keep only double-quoted strings so the outer shell can wrap in single quotes.
     return f'''
 import base64, io, os, sys, tarfile, pathlib
 V = "{ver}"
 B = "{scripts_b64}"
-D = pathlib.Path(os.environ.get("HINDDIAN_MAGPIE_HOOK_DIR") or (pathlib.Path.home() / ".config/magpie/hinddian-hooks"))
+MEM = "{MEMORY_URL}"
+home = pathlib.Path.home()
+cfg = pathlib.Path(os.environ.get("XDG_CONFIG_HOME") or (home / ".config"))
+D = pathlib.Path(os.environ.get("HINDDIAN_MAGPIE_HOOK_DIR") or (cfg / "magpie" / "hinddian-hooks"))
 which = (sys.argv[1] if len(sys.argv) > 1 else "").replace("-", "_")
 if which not in ("session_start", "turn_end"):
     sys.stderr.write("usage: session_start|turn_end\\n")
@@ -73,39 +76,83 @@ if need:
                 continue
             (D / name).write_bytes(tf.extractfile(m).read())
     (D / ".version").write_text(V + "\\n")
-os.environ.setdefault("HINDDIAN_MEMORY_URL", "{MEMORY_URL}")
+os.environ.setdefault("HINDDIAN_MEMORY_URL", MEM)
 sys.path.insert(0, str(D))
 os.execv(sys.executable, [sys.executable, str(D / (which + ".py"))] + sys.argv[2:])
 '''.strip()
 
 
-def shell_command(which: str, src_dir: Path | None = None, memory_url: str | None = None) -> str:
-    """Full Magpie hook command string (shell + embedded python)."""
+def python_bin() -> str:
+    """Interpreter name for Magpie hook command on *this* OS."""
+    force = (os.environ.get("HINDDIAN_PYTHON") or "").strip()
+    if force:
+        return force
+    if sys.platform.startswith("win"):
+        # Windows: prefer py -3 launcher, then python
+        if shutil.which("py"):
+            return "py -3"
+        if shutil.which("python"):
+            return "python"
+        if shutil.which("python3"):
+            return "python3"
+        return "py -3"
+    # Unix Magpie hosts
+    if shutil.which("python3"):
+        return "python3"
+    if shutil.which("python"):
+        return "python"
+    return "python3"
+
+
+def shell_command(which: str, src_dir: Path | None = None, memory_url: str | None = None, py: str | None = None) -> str:
     if which.replace("-", "_") not in ("session_start", "turn_end"):
         raise ValueError(which)
     which = which.replace("-", "_")
     ver = hooks_version()
     scripts_b64 = pack_scripts_b64(src_dir)
-    src = extractor_source(ver, scripts_b64)
-    # Double-encode so -c stays one physical line (shell won't mangle newlines).
+    # memory URL baked into extractor (no shell env / bash ${} — breaks Windows cmd)
+    global MEMORY_URL
+    old = MEMORY_URL
+    if memory_url:
+        MEMORY_URL = memory_url
+    try:
+        src = extractor_source(ver, scripts_b64)
+    finally:
+        MEMORY_URL = old
     src_b64 = base64.b64encode(src.encode()).decode("ascii")
     if "'" in src_b64:
         raise RuntimeError("unexpected quote in source base64")
     wrapper = f"import base64; exec(base64.b64decode(\"{src_b64}\").decode())"
-    mem = memory_url or MEMORY_URL
-    return (
-        f"HINDDIAN_MEMORY_URL={mem} "
-        f"HINDDIAN_MCP_TOKEN=${{HINDDIAN_MCP_TOKEN:-${{HINDSIGHT_API_KEY:-}}}} "
-        f"python3 -c '{wrapper}' {which}"
-    )
+    exe = py or python_bin()
+    # No bash-only env assignment; token read inside session_start/turn_end via os.environ
+    return f"{exe} -c '{wrapper}' {which}"
+
+
+def hook_defs(src_dir: Path | None = None, py: str | None = None) -> list[dict]:
+    ss = shell_command("session_start", src_dir=src_dir, py=py)
+    te = shell_command("turn_end", src_dir=src_dir, py=py)
+    agents = ["claude", "codex", "grok", "pi", "cursor", "gemini"]
+    return [
+        {
+            "name": "hinddian-session-start",
+            "description": "SessionStart: routing + Magpie-local Jev; payload embedded (install via hinddian-hooks skill — WebDAV does not sync hooks)",
+            "event": "session-start",
+            "command": ss,
+            "agents": agents,
+            "timeout": 45,
+        },
+        {
+            "name": "hinddian-turn-end",
+            "description": "TurnEnd: Magpie-local Jev classify → push_draft; payload embedded",
+            "event": "turn-end",
+            "command": te,
+            "agents": agents,
+            "timeout": 90,
+        },
+    ]
 
 
 if __name__ == "__main__":
     import json
-    import sys
-
     w = (sys.argv[1] if len(sys.argv) > 1 else "session_start").replace("-", "_")
-    cmd = shell_command(w)
-    print(json.dumps({"which": w, "cmd_len": len(cmd), "ver": hooks_version()}))
-    if "--print" in sys.argv:
-        print(cmd)
+    print(json.dumps({"which": w, "cmd_len": len(shell_command(w)), "ver": hooks_version(), "py": python_bin()}))
