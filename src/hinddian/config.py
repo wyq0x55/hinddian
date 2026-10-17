@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,7 +14,8 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    vault_root: Path = Path("/srv/obsidian/vault")
+    # Optional on Huawei (vault lives on DMIT). Empty / missing = skip vault scan.
+    vault_root: Path | None = None
     inbox_dir: Path = Path("/opt/session-distill/inbox")
     processed_dir: Path = Path("/opt/session-distill/processed")
     quarantine_dir: Path = Path("/opt/session-distill/quarantine")
@@ -28,10 +30,18 @@ class Settings(BaseSettings):
     auth_token: str | None = None
 
     status_db: Path = Path("./data/hinddian.db")
-    use_demo_data: bool = True
+    # Production default: real inbox only. Demo when paths missing AND this is true.
+    use_demo_data: bool = False
 
     agent_tips_relpath: str = "00-系统/agent使用技巧.md"
     projects_dirname: str = "项目"
+
+    @field_validator("vault_root", mode="before")
+    @classmethod
+    def _empty_vault_to_none(cls, v):  # noqa: ANN001
+        if v is None or v == "" or v == "None":
+            return None
+        return v
 
 
 @lru_cache

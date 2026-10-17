@@ -14,6 +14,7 @@ from .models import DistillJob, FilterResult, InboxItem, MergeEvent, PipelineSta
 from .store import (
     StatusStore,
     build_topic_statuses,
+    collect_filters,
     compute_stats,
     demo_inbox,
     demo_stats,
@@ -45,11 +46,17 @@ def require_auth(
         raise HTTPException(status_code=403, detail="Invalid token")
 
 
+def _paths_missing(settings: Settings) -> bool:
+    return not settings.inbox_dir.is_dir()
+
+
 @app.on_event("startup")
 def _startup() -> None:
     settings = get_settings()
     settings.status_db.parent.mkdir(parents=True, exist_ok=True)
-    seed_demo_if_empty(settings)
+    # Never seed demo when USE_DEMO_DATA=false (production).
+    if settings.use_demo_data and _paths_missing(settings):
+        seed_demo_if_empty(settings)
 
 
 @app.get("/api/health")
@@ -58,20 +65,21 @@ def health(settings: Settings = Depends(_settings)) -> dict:
         "ok": True,
         "service": "hinddian",
         "version": __version__,
-        "demo": settings.use_demo_data,
-        "vault_root": str(settings.vault_root),
+        "demo": settings.use_demo_data and _paths_missing(settings),
+        "use_demo_data": settings.use_demo_data,
+        "vault_root": str(settings.vault_root) if settings.vault_root else None,
+        "vault_mounted": bool(settings.vault_root and settings.vault_root.is_dir()),
         "inbox_dir": str(settings.inbox_dir),
+        "inbox_exists": settings.inbox_dir.is_dir(),
     }
 
 
 @app.get("/api/stats", response_model=PipelineStats, dependencies=[Depends(require_auth)])
 def stats(settings: Settings = Depends(_settings)) -> PipelineStats:
-    seed_demo_if_empty(settings)
-    real = compute_stats(settings)
-    # If inbox path missing and demo on, show demo stats overlay for empty dirs
-    if settings.use_demo_data and real.inbox_count == 0 and not settings.inbox_dir.is_dir():
+    if settings.use_demo_data and _paths_missing(settings):
+        seed_demo_if_empty(settings)
+        real = compute_stats(settings)
         d = demo_stats()
-        # Prefer real job counts from seeded DB
         d.jobs_pending = real.jobs_pending or d.jobs_pending
         d.jobs_running = real.jobs_running or d.jobs_running
         d.jobs_done = real.jobs_done or d.jobs_done
@@ -79,44 +87,51 @@ def stats(settings: Settings = Depends(_settings)) -> PipelineStats:
         d.pending_ingests = real.pending_ingests or d.pending_ingests
         d.topics_tracked = max(real.topics_tracked, d.topics_tracked)
         return d
-    return real
+    return compute_stats(settings)
 
 
 @app.get("/api/inbox", response_model=list[InboxItem], dependencies=[Depends(require_auth)])
 def inbox(settings: Settings = Depends(_settings)) -> list[InboxItem]:
     items = scan_inbox(settings)
-    if not items and settings.use_demo_data:
+    if not items and settings.use_demo_data and _paths_missing(settings):
         return demo_inbox()
     return items
 
 
 @app.get("/api/jobs", response_model=list[DistillJob], dependencies=[Depends(require_auth)])
 def jobs(settings: Settings = Depends(_settings)) -> list[DistillJob]:
-    seed_demo_if_empty(settings)
+    if settings.use_demo_data and _paths_missing(settings):
+        seed_demo_if_empty(settings)
     return StatusStore(settings.status_db).list_jobs()
 
 
 @app.get("/api/filters", response_model=list[FilterResult], dependencies=[Depends(require_auth)])
 def filters(settings: Settings = Depends(_settings)) -> list[FilterResult]:
-    seed_demo_if_empty(settings)
-    return StatusStore(settings.status_db).filter_results()
+    live = collect_filters(settings)
+    if live:
+        return live
+    if settings.use_demo_data and _paths_missing(settings):
+        seed_demo_if_empty(settings)
+        return StatusStore(settings.status_db).filter_results()
+    return []
 
 
 @app.get("/api/topics", response_model=list[TopicDocStatus], dependencies=[Depends(require_auth)])
 def topics(settings: Settings = Depends(_settings)) -> list[TopicDocStatus]:
-    seed_demo_if_empty(settings)
-    real = build_topic_statuses(settings)
-    if len(real) <= 1 and settings.use_demo_data and not settings.vault_root.is_dir():
-        return demo_topics()
-    # Always ensure agent tips appears
-    if not any(t.document_id == "topic/agent-usage-tips" for t in real):
-        real = demo_topics()[:1] + real
-    return real
+    if settings.use_demo_data and _paths_missing(settings):
+        seed_demo_if_empty(settings)
+        real = build_topic_statuses(settings)
+        if len(real) <= 1 and not (settings.vault_root and settings.vault_root.is_dir()):
+            return demo_topics()
+        return real
+    # Production: real topics only (agent tips always present; vault optional).
+    return build_topic_statuses(settings)
 
 
 @app.get("/api/merges", response_model=list[MergeEvent], dependencies=[Depends(require_auth)])
 def merges(settings: Settings = Depends(_settings)) -> list[MergeEvent]:
-    seed_demo_if_empty(settings)
+    if settings.use_demo_data and _paths_missing(settings):
+        seed_demo_if_empty(settings)
     return StatusStore(settings.status_db).list_merges()
 
 

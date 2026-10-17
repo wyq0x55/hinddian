@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import sqlite3
+from collections import Counter, defaultdict
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +23,10 @@ from .models import (
     TopicDocStatus,
 )
 from .topics import TopicResolver
+
+_REASON_RE = re.compile(
+    rb'"(?:quarantine_reason|filter_reason|skip_reason)"\s*:\s*"([^"\\]+)"'
+)
 
 
 def _utcnow() -> datetime:
@@ -247,7 +254,15 @@ class StatusStore:
 def _count_files(directory: Path) -> int:
     if not directory.is_dir():
         return 0
-    return sum(1 for p in directory.iterdir() if p.is_file())
+    n = 0
+    try:
+        with os.scandir(directory) as it:
+            for entry in it:
+                if entry.is_file(follow_symlinks=False):
+                    n += 1
+    except OSError:
+        return 0
+    return n
 
 
 def scan_inbox(settings: Settings | None = None, limit: int = 30) -> list[InboxItem]:
@@ -256,10 +271,15 @@ def scan_inbox(settings: Settings | None = None, limit: int = 30) -> list[InboxI
     if not inbox.is_dir():
         return []
     items: list[InboxItem] = []
-    files = sorted(inbox.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+    try:
+        files = sorted(
+            (Path(e.path) for e in os.scandir(inbox) if e.is_file(follow_symlinks=False)),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        return []
     for p in files:
-        if not p.is_file():
-            continue
         project = title = source = agent = session_id = None
         try:
             if p.suffix == ".json":
@@ -269,7 +289,9 @@ def scan_inbox(settings: Settings | None = None, limit: int = 30) -> list[InboxI
                     title = data.get("title")
                     source = data.get("source")
                     agent = data.get("agent")
-                    session_id = data.get("session_id") or data.get("document_id")
+                    session_id = data.get("session_id") or data.get("document_id") or data.get(
+                        "otlp_session_key"
+                    )
         except Exception:
             pass
         st = p.stat()
@@ -291,11 +313,59 @@ def scan_inbox(settings: Settings | None = None, limit: int = 30) -> list[InboxI
     return items
 
 
+def scan_quarantine_filters(
+    settings: Settings | None = None,
+    *,
+    max_examples: int = 3,
+) -> list[FilterResult]:
+    """Derive filter reasons from quarantine JSON metadata (regex, no full parse)."""
+    settings = settings or get_settings()
+    qdir = settings.quarantine_dir
+    if not qdir.is_dir():
+        return []
+    counts: Counter[str] = Counter()
+    examples: dict[str, list[str]] = defaultdict(list)
+    try:
+        entries = list(os.scandir(qdir))
+    except OSError:
+        return []
+    for entry in entries:
+        if not entry.is_file(follow_symlinks=False):
+            continue
+        name = entry.name
+        reason = "(unspecified)"
+        try:
+            with open(entry.path, "rb") as f:
+                data = f.read()
+            m = _REASON_RE.search(data)
+            if m:
+                reason = m.group(1).decode("utf-8", errors="replace")
+        except OSError:
+            reason = "(read_error)"
+        counts[reason] += 1
+        if len(examples[reason]) < max_examples:
+            examples[reason].append(name)
+    return [
+        FilterResult(reason=r, count=c, examples=examples.get(r, []))
+        for r, c in counts.most_common()
+    ]
+
+
+def collect_filters(settings: Settings | None = None) -> list[FilterResult]:
+    """Prefer live quarantine scan; fall back to sqlite filter_counts."""
+    settings = settings or get_settings()
+    live = scan_quarantine_filters(settings)
+    if live:
+        return live
+    return StatusStore(settings.status_db).filter_results()
+
+
 def build_topic_statuses(settings: Settings | None = None) -> list[TopicDocStatus]:
     settings = settings or get_settings()
     store = StatusStore(settings.status_db)
+    vault = settings.vault_root if settings.vault_root else Path("/nonexistent-vault")
     resolver = TopicResolver(
-        settings.vault_root,
+        vault,
         projects_dirname=settings.projects_dirname,
         agent_tips_relpath=settings.agent_tips_relpath,
     )
@@ -338,11 +408,15 @@ def compute_stats(settings: Settings | None = None) -> PipelineStats:
         topics_tracked=len(topics),
         pending_ingests=pending_ingests,
         demo=False,
+        extras={
+            "inbox_dir": str(settings.inbox_dir),
+            "vault_mounted": bool(settings.vault_root and settings.vault_root.is_dir()),
+        },
     )
 
 
 def seed_demo_if_empty(settings: Settings | None = None) -> bool:
-    """Populate demo rows when USE_DEMO_DATA and store has no jobs."""
+    """Populate demo rows only when USE_DEMO_DATA is true and store has no jobs."""
     settings = settings or get_settings()
     if not settings.use_demo_data:
         return False
