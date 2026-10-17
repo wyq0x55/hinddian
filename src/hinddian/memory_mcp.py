@@ -405,6 +405,12 @@ async def api_upsert(request: Request, authorization: str | None = Header(defaul
     return call_tool("upsert_note", args)
 
 
+@router.get("/api/memory/gates/backend")
+async def api_jev_backend(authorization: str | None = Header(default=None)):
+    _check_auth(authorization)
+    return jev.backend_info()
+
+
 @router.post("/api/memory/gates/should_recall")
 async def api_should_recall(request: Request, authorization: str | None = Header(default=None)):
     _check_auth(authorization)

@@ -1,10 +1,22 @@
-"""TypeSafe Jev (System One) gates with small-LLM fallback.
+"""Jev (System One) gates via Magpie local gateway (preferred) or TypeSafe cloud.
 
-API: POST https://api.typesafe.ai/v1/systemone
-Auth: Authorization: Bearer <TYPESAFE_API_KEY>
-Env: TYPESAFE_API_KEY (required for Jev); TYPESAFE_DEFAULT_MODEL (default jev-latest)
-Confidence: JEV_MIN_CONFIDENCE (default 0.65). Below → fallback or skip.
-Never log or return the API key.
+Primary (no cloud key needed when Magpie has ``typesafe`` / jev provider):
+  POST http://127.0.0.1:3425/v1/systemone
+  Auth: Authorization: Bearer magpie   (or MAGPIE_GATEWAY_KEY / JEV_API_KEY)
+  Model: typesafe/jev-latest (Magpie) — also accepts jev-latest
+
+  Magpie hosts call localhost:3425. Huawei uses magpie-tunnel.service
+  (LocalForward DMIT Magpie :3425 → 127.0.0.1:3425). Override with JEV_BASE_URL
+  or MAGPIE_JEV_URL (full …/v1/systemone URL).
+
+Secondary (optional):
+  POST https://api.typesafe.ai/v1/systemone
+  Auth: Bearer TYPESAFE_API_KEY
+  Model: jev-latest
+
+Tertiary: Magpie chat completions LLM fallback (group/auto-flash).
+
+Never log or return API keys.
 """
 from __future__ import annotations
 
@@ -15,12 +27,16 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
-DEFAULT_URL = os.environ.get("TYPESAFE_BASE_URL", "https://api.typesafe.ai").rstrip("/") + "/v1/systemone"
-DEFAULT_MODEL = os.environ.get("TYPESAFE_DEFAULT_MODEL", "jev-latest")
 MIN_CONF = float(os.environ.get("JEV_MIN_CONFIDENCE", "0.65"))
 NOUL_YES = float(os.environ.get("JEV_NOUL_YES", "0.55"))
 GATEWAY = os.environ.get("HB_GATEWAY", "http://127.0.0.1:3425/v1/chat/completions")
 FALLBACK_MODEL = os.environ.get("JEV_FALLBACK_MODEL", "group/auto-flash")
+CLOUD_URL = (
+    os.environ.get("TYPESAFE_BASE_URL", "https://api.typesafe.ai").rstrip("/")
+    + "/v1/systemone"
+)
+CLOUD_MODEL = os.environ.get("TYPESAFE_DEFAULT_MODEL", "jev-latest")
+MAGPIE_MODEL = os.environ.get("JEV_MODEL", "typesafe/jev-latest")
 
 
 @dataclass
@@ -28,48 +44,152 @@ class GateResult:
     ok: bool
     value: Any
     confidence: float
-    source: str  # "jev" | "llm" | "skip" | "error"
+    source: str  # "jev" | "llm" | "skip" | "error" | "path"
     raw: dict | None = None
     error: str | None = None
 
 
-def _api_key() -> str | None:
+def _gateway_base() -> str:
+    """Derive Magpie base (scheme://host:port) from HB_GATEWAY or default."""
+    raw = (os.environ.get("MAGPIE_GATEWAY") or "").strip()
+    if raw:
+        return raw.rstrip("/")
+    chat = GATEWAY.rstrip("/")
+    if chat.endswith("/v1/chat/completions"):
+        chat = chat[: -len("/v1/chat/completions")]
+    elif chat.endswith("/chat/completions"):
+        chat = chat[: -len("/chat/completions")]
+    if not chat:
+        chat = "http://127.0.0.1:3425"
+    return chat
+
+
+def _magpie_systemone_url() -> str:
+    explicit = (
+        os.environ.get("JEV_BASE_URL")
+        or os.environ.get("MAGPIE_JEV_URL")
+        or ""
+    ).strip()
+    if explicit:
+        u = explicit.rstrip("/")
+        if not u.endswith("/systemone"):
+            u = u + "/systemone" if u.endswith("/v1") else u + "/v1/systemone"
+        return u
+    return _gateway_base().rstrip("/") + "/v1/systemone"
+
+
+def _magpie_key() -> str:
+    return (
+        os.environ.get("JEV_API_KEY")
+        or os.environ.get("MAGPIE_GATEWAY_KEY")
+        or "magpie"
+    ).strip()
+
+
+def _typesafe_key() -> str | None:
     k = (os.environ.get("TYPESAFE_API_KEY") or "").strip()
     return k or None
 
 
+def _force_cloud() -> bool:
+    return (os.environ.get("JEV_FORCE_CLOUD") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
+def _endpoints() -> list[tuple[str, str, str, str]]:
+    """Ordered (url, bearer, model, label)."""
+    out: list[tuple[str, str, str, str]] = []
+    if not _force_cloud():
+        out.append((_magpie_systemone_url(), _magpie_key(), MAGPIE_MODEL, "magpie"))
+    ts = _typesafe_key()
+    if ts:
+        out.append((CLOUD_URL, ts, CLOUD_MODEL, "typesafe-cloud"))
+    return out
+
+
 def available() -> bool:
-    return bool(_api_key())
+    """True if Magpie-local gateway path is configured or cloud key is set.
+
+    Does not probe the network; connection failures fall through to LLM.
+    """
+    return bool(_endpoints())
 
 
-def _post_jev(state: Any, questions: dict) -> dict:
-    key = _api_key()
-    if not key:
-        raise RuntimeError("TYPESAFE_API_KEY not set")
-    body = json.dumps({"model": DEFAULT_MODEL, "state": state, "questions": questions}, ensure_ascii=False).encode()
+def backend_info() -> dict[str, Any]:
+    """Safe diagnostics (no secrets)."""
+    eps = [
+        {
+            "label": label,
+            "url": url,
+            "model": model,
+            "auth": "bearer-set",
+        }
+        for url, _key, model, label in _endpoints()
+    ]
+    return {
+        "prefer": eps[0]["label"] if eps else None,
+        "endpoints": eps,
+        "llm_fallback": GATEWAY,
+        "llm_model": FALLBACK_MODEL,
+        "force_cloud": _force_cloud(),
+    }
+
+
+def _post_json(url: str, body: dict, headers: dict, timeout: float = 30) -> dict:
+    data = json.dumps(body, ensure_ascii=False).encode()
     req = urllib.request.Request(
-        DEFAULT_URL,
-        data=body,
-        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        url,
+        data=data,
+        headers={**headers, "Content-Type": "application/json", "Accept": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=30) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read())
 
 
+def _post_jev(state: Any, questions: dict) -> tuple[dict, str]:
+    """Try Magpie gateway then optional TypeSafe cloud. Returns (raw, label)."""
+    errors: list[str] = []
+    for url, key, model, label in _endpoints():
+        try:
+            raw = _post_json(
+                url,
+                {"model": model, "state": state, "questions": questions},
+                {"Authorization": f"Bearer {key}"},
+                timeout=30,
+            )
+            return raw, label
+        except urllib.error.HTTPError as e:
+            detail = ""
+            try:
+                detail = e.read()[:180].decode(errors="replace")
+            except Exception:
+                pass
+            errors.append(f"{label}:HTTP {e.code} {detail}")
+        except Exception as e:
+            errors.append(f"{label}:{type(e).__name__}:{str(e)[:120]}")
+    if not _endpoints():
+        raise RuntimeError("no_jev_endpoint")
+    raise RuntimeError("; ".join(errors)[:300] or "jev_failed")
+
+
 def _llm_json(prompt: str) -> dict:
-    body = json.dumps(
-        {"model": FALLBACK_MODEL, "messages": [{"role": "user", "content": prompt}], "temperature": 0.1},
-        ensure_ascii=False,
-    ).encode()
-    req = urllib.request.Request(
+    body = {
+        "model": FALLBACK_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.1,
+    }
+    key = _magpie_key()
+    raw = _post_json(
         GATEWAY,
-        data=body,
-        headers={"Content-Type": "application/json", "Authorization": "Bearer magpie"},
-        method="POST",
+        body,
+        {"Authorization": f"Bearer {key}"},
+        timeout=120,
     )
-    with urllib.request.urlopen(req, timeout=120) as r:
-        text = json.loads(r.read())["choices"][0]["message"]["content"]
+    text = raw["choices"][0]["message"]["content"]
     text = text.strip()
     if "```" in text:
         text = text.split("```")[1]
@@ -83,34 +203,38 @@ def noul(state: Any, instructions: str, *, true_c: str = "", false_c: str = "") 
     q: dict = {"type": "noul", "instructions": instructions}
     if true_c or false_c:
         q["criteria"] = {"true": true_c or "yes", "false": false_c or "no"}
-    if available():
-        try:
-            raw = _post_jev(state, {"g": q})
-            ans = raw.get("answers", {}).get("g", {})
-            p = float(ans.get("noul", 0))
-            conf = abs(p - 0.5) * 2  # calibrated distance from coin-flip
-            if conf < MIN_CONF:
-                return GateResult(False, None, conf, "jev", raw, "low_confidence")
-            return GateResult(True, p >= NOUL_YES, conf, "jev", raw)
-        except Exception as e:
-            return GateResult(False, None, 0.0, "error", None, str(e)[:200])
-    return GateResult(False, None, 0.0, "skip", None, "no_typesafe_key")
+    if not available():
+        return GateResult(False, None, 0.0, "skip", None, "no_jev_endpoint")
+    try:
+        raw, label = _post_jev(state, {"g": q})
+        ans = raw.get("answers", {}).get("g", {})
+        p = float(ans.get("noul", 0))
+        conf = abs(p - 0.5) * 2
+        if conf < MIN_CONF:
+            return GateResult(False, None, conf, "jev", raw, "low_confidence")
+        return GateResult(True, p >= NOUL_YES, conf, f"jev:{label}", raw)
+    except Exception as e:
+        return GateResult(False, None, 0.0, "error", None, str(e)[:200])
 
 
 def choice(state: Any, instructions: str, criteria: dict[str, str | None]) -> GateResult:
     q = {"type": "choice", "instructions": instructions, "criteria": criteria}
-    if available():
-        try:
-            raw = _post_jev(state, {"g": q})
-            ans = raw.get("answers", {}).get("g", {})
-            conf = float(ans.get("confidence") or 0)
-            val = ans.get("choice")
-            if conf < MIN_CONF:
-                return GateResult(False, val, conf, "jev", raw, "low_confidence")
-            return GateResult(True, val, conf, "jev", raw)
-        except Exception as e:
-            return GateResult(False, None, 0.0, "error", None, str(e)[:200])
-    return GateResult(False, None, 0.0, "skip", None, "no_typesafe_key")
+    if not available():
+        return GateResult(False, None, 0.0, "skip", None, "no_jev_endpoint")
+    try:
+        raw, label = _post_jev(state, {"g": q})
+        ans = raw.get("answers", {}).get("g", {})
+        conf = float(ans.get("confidence") or 0)
+        val = ans.get("choice")
+        if conf < MIN_CONF:
+            return GateResult(False, val, conf, "jev", raw, "low_confidence")
+        return GateResult(True, val, conf, f"jev:{label}", raw)
+    except Exception as e:
+        return GateResult(False, None, 0.0, "error", None, str(e)[:200])
+
+
+def _jev_ok(r: GateResult) -> bool:
+    return r.ok and (r.source == "jev" or str(r.source).startswith("jev:"))
 
 
 def should_recall(cwd: str, first_message: str, projects: list[str]) -> GateResult:
@@ -121,10 +245,9 @@ def should_recall(cwd: str, first_message: str, projects: list[str]) -> GateResu
         true_c="Task needs prior project memory",
         false_c="Greeting, unrelated, or fully self-contained",
     )
-    if r.source in ("jev",) and r.ok:
+    if _jev_ok(r):
         return r
     if r.source == "jev" and r.error == "low_confidence":
-        # fall through to LLM
         pass
     elif r.source == "error":
         pass
@@ -145,13 +268,12 @@ def should_recall(cwd: str, first_message: str, projects: list[str]) -> GateResu
             data,
         )
     except Exception as e:
-        return GateResult(True, True, 0.4, "llm", None, f"fallback_default_yes:{e}"[:120])  # fail open to recall
+        return GateResult(True, True, 0.4, "llm", None, f"fallback_default_yes:{e}"[:120])
 
 
 def match_project(cwd: str, message: str, projects: list[str]) -> GateResult:
     if not projects:
         return GateResult(True, None, 1.0, "skip", None)
-    # cheap path match first
     low = (cwd + " " + message).lower()
     for p in projects:
         if p.lower() in low:
@@ -163,7 +285,7 @@ def match_project(cwd: str, message: str, projects: list[str]) -> GateResult:
     )
     if r.ok and r.value and r.value != "none":
         return r
-    if r.source == "jev" and (not r.ok or r.value == "none"):
+    if (r.source == "jev" or str(r.source).startswith("jev:")) and (not r.ok or r.value == "none"):
         if r.error == "low_confidence" or r.value == "none":
             try:
                 data = _llm_json(
@@ -188,7 +310,7 @@ def turn_worth_keeping(turn_text: str) -> GateResult:
     )
     if r.ok:
         return r
-    if r.source in ("skip", "error") or r.error == "low_confidence":
+    if r.source in ("skip", "error") or r.error == "low_confidence" or str(r.source).startswith("jev"):
         try:
             data = _llm_json(
                 "只分析这一轮对话。JSON: {\"keep\": true|false, \"confidence\": 0-1, \"type\": \"decision|lesson|tip|none\", "
@@ -230,7 +352,6 @@ def classify_turn(turn_text: str, projects: list[str]) -> GateResult:
         }
         if payload["type"] == "none":
             payload["keep"] = False
-        # title via LLM always (Jev cannot generate strings)
         try:
             data = _llm_json(
                 "根据原文写 JSON: {\"title\": \"中文短标题\", \"summary\": \"一句话\", "
@@ -242,7 +363,6 @@ def classify_turn(turn_text: str, projects: list[str]) -> GateResult:
             payload["title"] = payload["type"] or "草稿"
             payload["summary"] = (turn_text or "")[:120]
         return GateResult(True, payload, payload["confidence"], "jev+llm", {"keep": keep.raw, "type": typ.raw})
-    # fallback already attempted inside turn_worth_keeping
     if isinstance(keep.value, dict):
         return keep
     return GateResult(True, {"keep": False}, keep.confidence, keep.source, keep.raw, keep.error)
