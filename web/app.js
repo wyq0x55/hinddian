@@ -41,16 +41,23 @@
   // t: where along the curve the count label sits (fan-outs label near the target).
   function wirePath(a, b, t = 0.5, fan = false) {
     let p0, p1, p2, p3;
-    const below = b.t >= a.b - 4;
-    const right = b.l >= a.r - 2;
+    // Primarily below (mobile outs under 分析): always drop from bottom → enter top.
+    // Primarily to the right (desktop outs): exit right side, stagger Y on fan-outs.
+    const gapBelow = b.t - a.b;
+    const gapRight = b.l - a.r;
+    const below = gapBelow >= -4 && gapBelow >= gapRight - 8;
+    const right = gapRight >= -2 && !below;
     if (below) {
-      // Exit bottom of source (nudged toward target on fan-outs), enter top of target.
-      const exitX = fan ? a.cx + (b.cx - a.cx) * 0.35 : a.cx;
-      const my = a.b + Math.max(12, (b.t - a.b) * 0.45);
+      // Keep exit on the bottom edge, lightly nudged; clamp so it never hugs a corner.
+      const raw = fan ? a.cx + (b.cx - a.cx) * 0.18 : a.cx;
+      const exitX = Math.max(a.l + 10, Math.min(a.r - 10, raw));
+      const my = a.b + Math.max(18, (b.t - a.b) * 0.55);
       [p0, p1, p2, p3] = [[exitX, a.b], [exitX, my], [b.cx, my], [b.cx, b.t]];
     } else if (right) {
-      const mx = (a.r + b.l) / 2;
-      [p0, p1, p2, p3] = [[a.r, a.cy], [mx, a.cy], [mx, b.cy], [b.l, b.cy]];
+      const rawY = fan ? a.cy + (b.cy - a.cy) * 0.25 : a.cy;
+      const exitY = Math.max(a.t + 8, Math.min(a.b - 8, rawY));
+      const mx = a.r + Math.max(16, (b.l - a.r) * 0.45);
+      [p0, p1, p2, p3] = [[a.r, exitY], [mx, exitY], [mx, b.cy], [b.l, b.cy]];
     } else {
       const my = (a.b + b.t) / 2;
       [p0, p1, p2, p3] = [[a.cx, a.b], [a.cx, my], [b.cx, my], [b.cx, b.t]];
