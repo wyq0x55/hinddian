@@ -51,7 +51,7 @@ cp .env.example .env   # 填本地路径；勿提交真实密钥
 # UI   http://127.0.0.1:8787/
 ```
 
-空库时 API 会返回 **demo 占位数据**，仪表盘看起来是活的。
+生产默认 `USE_DEMO_DATA=false`，直接读真实 inbox。本地无路径时可设 `USE_DEMO_DATA=true` 看演示数据。
 
 ## Environment (see `.env.example`)
 
@@ -61,15 +61,16 @@ cp .env.example .env   # 填本地路径；勿提交真实密钥
 - `AUTH_TOKEN` — 仪表盘 / API Bearer（部署时用）
 - `STATUS_DB` — SQLite 路径（默认 `./data/hinddian.db`）
 
-## Deploy outline (later)
+## Deploy (Huawei + Magpie mTLS)
 
-1. Clone 到华为（或与 session-distill 同机）
-2. systemd 跑 `hinddian-api`（见 `deploy/systemd/`）
-3. Caddy 反代 + Bearer / basic auth（见 `deploy/caddy.snippet.example`）
-4. 接现有 inbox / worker：把 distill 输出改成主题 upsert（`distill_hooks`）
-5. Obsidian 改/删 → `sync_hindsight` retain / forget
+详见 [`deploy/huawei/DEPLOY.md`](deploy/huawei/DEPLOY.md)。
 
-**本仓库第一期 = 可用骨架 + 架构文档 + 可观测 UI，不是完整生产部署。**
+- 同机读 `/opt/session-distill/`
+- systemd：`deploy/huawei/hinddian.service` → `127.0.0.1:8787`
+- 公网：`https://124.70.90.224:8443/` ，Caddy mTLS 复用 Magpie CA（手机现有 `wanwan-iphone` 证书）
+- Vault 仍在 DMIT；华为可不设 `VAULT_ROOT`
+
+后续：distill → 主题 upsert（`distill_hooks`）；Obsidian 改/删 → `sync_hindsight` retain / forget。
 
 ## Related ops notes (not in this repo)
 

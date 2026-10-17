@@ -1,0 +1,31 @@
+# Append to Huawei /etc/caddy/Caddyfile (keep existing :80 OTLP/hindsight).
+# Magpie-compatible mTLS: reuse DMIT Magpie CA public cert at /etc/caddy/mtls/ca.pem
+# so the existing iPhone client cert (wanwan-iphone) works.
+#
+# Global options (once, at top of Caddyfile) — same as DMIT Magpie:
+# {
+# 	auto_https off
+# 	admin off
+# 	# IP-only TLS + client_auth: browsers omit SNI for raw IPs (RFC 6066).
+# 	servers {
+# 		strict_sni_host insecure_off
+# 	}
+# }
+
+:8443 {
+	tls /etc/caddy/certs/fullchain.pem /etc/caddy/certs/privkey.pem {
+		client_auth {
+			mode require_and_verify
+			trusted_ca_cert_file /etc/caddy/mtls/ca.pem
+		}
+	}
+	encode gzip
+	reverse_proxy 127.0.0.1:8787 {
+		header_up -Authorization
+		header_up -X-Forwarded-For
+		header_up -X-Forwarded-Proto
+		header_up -X-Forwarded-Host
+		header_up -X-Real-Ip
+		header_up -Forwarded
+	}
+}
