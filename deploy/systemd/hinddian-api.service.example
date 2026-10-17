@@ -1,0 +1,20 @@
+[Unit]
+Description=hinddian API + dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/hinddian
+EnvironmentFile=-/opt/hinddian/secrets.env
+Environment=PYTHONPATH=/opt/hinddian/src
+Environment=HINDDIAN_HOST=127.0.0.1
+Environment=HINDDIAN_PORT=8787
+ExecStart=/opt/hinddian/.venv/bin/uvicorn hinddian.api:app --host ${HINDDIAN_HOST} --port ${HINDDIAN_PORT}
+Restart=on-failure
+RestartSec=5
+
+# secrets.env should contain AUTH_TOKEN / HINDSIGHT_API_KEY — never commit them.
+
+[Install]
+WantedBy=multi-user.target

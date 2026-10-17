@@ -1,0 +1,18 @@
+# Example Caddy snippet — adapt host/path; do not commit real tokens.
+#
+# Option A: Bearer via forward auth / header check (preferred if you already
+# use the same pattern for Hindsight MCP).
+#
+# Option B: basic auth in front of the dashboard.
+
+# handle_path /hinddian/* {
+#     basicauth {
+#         # caddy hash-password — put hash here, not plaintext
+#         wanwan JDJh...replace_me
+#     }
+#     reverse_proxy 127.0.0.1:8787
+# }
+
+# If using API AUTH_TOKEN instead of basic auth, clients send:
+#   Authorization: Bearer <token>
+# and Caddy can just reverse_proxy without exposing the port publicly.
