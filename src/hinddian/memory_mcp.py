@@ -122,15 +122,20 @@ def _vault_local() -> bool:
 
 
 def _ssh_cli(args: list[str], payload: dict | None = None) -> Any:
-    """Call /usr/local/bin/hinddian-memory-cli on DMIT; return JSON."""
-    cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", SSH_HOST, "/usr/local/bin/hinddian-memory-cli", *args]
-    if payload is not None:
-        cmd.extend(["--json", json.dumps(payload, ensure_ascii=False)])
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    """Call /usr/local/bin/hinddian-memory-cli on DMIT; return JSON. Payload via stdin."""
+    remote = "/usr/local/bin/hinddian-memory-cli " + " ".join(shlex_quote(a) for a in args)
+    cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", SSH_HOST, remote]
+    stdin = json.dumps(payload, ensure_ascii=False) if payload is not None else None
+    p = subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=120)
     if p.returncode != 0:
         raise RuntimeError((p.stderr or p.stdout or "ssh failed")[:400])
     line = (p.stdout or "").strip().splitlines()[-1]
     return json.loads(line)
+
+
+def shlex_quote(s: str) -> str:
+    import shlex
+    return shlex.quote(s)
 
 
 def _notes_mod():

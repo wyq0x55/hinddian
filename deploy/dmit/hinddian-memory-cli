@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse, json, os, sys
 from pathlib import Path
 
-# Prefer installed package copies
 for p in ("/opt/hinddian/src", "/opt/hinddian-classify/src", str(Path(__file__).resolve().parents[2] / "src")):
     if p not in sys.path and Path(p).is_dir():
         sys.path.insert(0, p)
@@ -14,6 +13,15 @@ os.environ.setdefault("HC_VAULT", "/srv/obsidian/vault")
 os.environ.setdefault("HB_DRAFTS", "/var/lib/hinddian/drafts")
 
 from hinddian import notes  # noqa: E402
+
+def _payload(arg: str | None) -> dict:
+    if arg:
+        return json.loads(arg)
+    if not sys.stdin.isatty():
+        raw = sys.stdin.read()
+        if raw.strip():
+            return json.loads(raw)
+    return {}
 
 def main():
     ap = argparse.ArgumentParser()
@@ -26,7 +34,7 @@ def main():
     ap.add_argument("--type")
     ap.add_argument("--status", default="active")
     ap.add_argument("--limit", type=int, default=50)
-    ap.add_argument("--json", dest="payload", help="JSON payload for upsert/push")
+    ap.add_argument("--json", dest="payload", default=None, help="JSON payload (or pass via stdin)")
     a = ap.parse_args()
     if a.cmd == "routing_global":
         out = notes.routing_global()
@@ -37,9 +45,15 @@ def main():
     elif a.cmd == "list_notes":
         out = notes.list_notes(project=a.project, type_=a.type, status=a.status, limit=a.limit)
     elif a.cmd == "upsert_note":
-        out = notes.upsert_note(json.loads(a.payload or "{}"))
+        out = notes.upsert_note(_payload(a.payload))
     elif a.cmd == "push_draft":
-        out = notes.push_draft(**json.loads(a.payload or "{}"))
+        pl = _payload(a.payload)
+        out = notes.push_draft(
+            project=pl.get("project") or "通用-未定",
+            title=pl.get("title") or "turn",
+            body=pl.get("body") or "",
+            meta=pl.get("meta") if isinstance(pl.get("meta"), dict) else {k: pl[k] for k in ("type", "confidence", "origin") if k in pl},
+        )
     else:
         out = notes.export_routing()
     print(json.dumps(out, ensure_ascii=False))
