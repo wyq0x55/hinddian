@@ -31,6 +31,19 @@
 └─────────────────────────────────────────────────────────┘
 ```
 
+## 实际流水线（v0.2）
+
+```
+收件箱(华为 inbox) → 过滤 ─┬─ a 隔离 quarantine/
+                           ├─ b 提炼(华为 worker→magpie) → 待入库(DMIT vault 项目/*/待入库/)
+                           │        → pi 归类(DMIT, classify/) ─┬─ agent使用技巧：自动写入
+                           │                                    ├─ 项目主题：待确认建议 → 仪表盘确认 → 写入
+                           │                                    └─ 忽略：归档
+                           └─ c Hindsight retain（分支已画出；worker 尚未自动 retain）
+```
+
+项目主题落到 vault 现有的三件套：`项目/<名>/DECISIONS.md`（`topic/project/<名>/decisions`）、`LESSONS.md`（`…/lessons`）、`PROJECT_STATE.md`（`…/state`）。详见 `classify/README.md`。
+
 ## 权威与同步方向
 
 | 方向 | 允许？ | 说明 |
@@ -82,12 +95,14 @@ Magpie 风格深色单页，观测：
 | `web/` | 深色仪表盘 | ✅ |
 | `distill_hooks.py` | 如何 upsert 主题 | stub |
 | `sync_hindsight.py` | retain/forget | stub |
+| `classify_remote.py` | 经 SSH 调 DMIT `hinddian-classify`（统计 / 建议 / 确认） | ✅ |
+| `classify/` | DMIT 上 pi 归类 runner + AGENTS.md + skill + systemd | ✅ |
 | 真实 worker / OTLP | 仍在 session-distill | 外挂，后续迁入 |
 
 ## 落地顺序（建议）
 
 1. ✅ 本仓库骨架 + 仪表盘
 2. 接 inbox 真实扫描 + filter 原因从日志/quarantine 读
-3. 改 distill：主题 upsert + 固定写入 agent使用技巧
+3. ✅ 待入库 → pi 归类：agent使用技巧 自动写入；项目主题 待确认（v0.2）
 4. Obsidian→Hindsight sync worker
 5. （可选）网页内编辑 = 改 vault 文件的 UI

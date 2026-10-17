@@ -3,8 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0d10" />
   <title>hinddian · 管线仪表盘</title>
-  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/styles.css?v=4" />
 </head>
 <body>
   <div class="shell">
@@ -23,135 +24,121 @@
       </div>
     </header>
 
-    <!-- Pipeline: inbox → filter → distill → result -->
-    <section class="pipeline" id="pipeline" aria-label="流水线">
+    <!-- 1 收件箱 → 2 过滤 -->
+    <section class="pipe-top" aria-label="流水线入口">
       <div class="pipe-stage" data-stage="inbox">
         <div class="stage-head">
           <span class="stage-num">1</span>
-          <div>
-            <h2>收件箱</h2>
-            <p class="stage-desc">等待捡起</p>
-          </div>
+          <div><h2>收件箱</h2><p class="stage-desc">华为 · 等待 worker 捡起</p></div>
         </div>
         <div class="stage-count" id="pipe-inbox">—</div>
-        <p class="stage-hint">原始会话 JSON</p>
+        <p class="stage-hint">原始会话 JSON（OTLP / ingest）</p>
       </div>
-
       <div class="pipe-chevron" aria-hidden="true">›</div>
-
       <div class="pipe-stage" data-stage="filter">
         <div class="stage-head">
           <span class="stage-num">2</span>
-          <div>
-            <h2>过滤</h2>
-            <p class="stage-desc">通过 → 提炼 · 拒绝 → 隔离</p>
-          </div>
+          <div><h2>过滤</h2><p class="stage-desc">分三路 ↓</p></div>
         </div>
-        <div class="stage-count warn" id="pipe-quarantine">—</div>
-        <p class="stage-hint">拒绝 → 隔离（下方展开原因）</p>
-        <p class="pass-flow"><span class="pass-arrow">通 →</span> 进入提炼队列</p>
-        <button type="button" class="reasons-toggle" id="btn-reasons" aria-expanded="false">
-          隔离原因 ▾
-        </button>
-        <div class="reasons" id="filter-reasons" hidden></div>
-        <p class="stage-side">
-          <span class="badge side">Hindsight retain</span>
-          <span class="muted-inline">过滤通过后并行入库，不替代提炼</span>
-        </p>
-      </div>
-
-      <div class="pipe-chevron" aria-hidden="true">›</div>
-
-      <div class="pipe-stage" data-stage="distill">
-        <div class="stage-head">
-          <span class="stage-num">3</span>
-          <div>
-            <h2>提炼</h2>
-            <p class="stage-desc">合并进主题笔记</p>
-          </div>
-        </div>
-        <div class="filter-split">
-          <div class="split-ok">
-            <span class="split-label">排队</span>
-            <span class="split-val warn" id="pipe-pending">—</span>
-          </div>
-          <div class="split-ok">
-            <span class="split-label">进行中</span>
-            <span class="split-val info" id="pipe-running">—</span>
-          </div>
-        </div>
-        <p class="stage-hint" id="distill-note">任务跟踪可能仍为 stub</p>
-      </div>
-
-      <div class="pipe-chevron" aria-hidden="true">›</div>
-
-      <div class="pipe-stage pipe-end" data-stage="result">
-        <div class="stage-head">
-          <span class="stage-num">4</span>
-          <div>
-            <h2>结果</h2>
-            <p class="stage-desc">提炼终点</p>
-          </div>
-        </div>
-        <div class="result-split">
-          <div class="result-ok">
-            <span class="split-label">已处理</span>
-            <span class="split-val ok" id="pipe-processed">—</span>
-          </div>
-          <div class="result-fail">
-            <span class="split-label">失败</span>
-            <span class="split-val danger" id="pipe-failed">—</span>
-          </div>
-        </div>
-        <p class="stage-hint">文件落在 processed / failed</p>
+        <p class="stage-hint">冒烟 / 过短 / 提炼回流 / 问候 → 隔离；其余进提炼队列，并行 Hindsight retain</p>
       </div>
     </section>
 
-    <p class="flow-legend" id="flow-legend">
-      流水线：收件箱 → 过滤（拒→隔离 / 通→提炼）→ 提炼 → 已处理 · 失败
+    <div class="branch-fork" aria-hidden="true"><span></span><span></span><span></span></div>
+
+    <section class="branches" aria-label="三路分支">
+      <!-- a 隔离 -->
+      <div class="branch branch-q">
+        <div class="branch-tag">a · 隔离</div>
+        <div class="pipe-stage">
+          <div class="stage-count warn" id="pipe-quarantine">—</div>
+          <p class="stage-hint">quarantine/ · 不提炼</p>
+          <button type="button" class="reasons-toggle" id="btn-reasons" aria-expanded="false">隔离原因 ▾</button>
+          <div class="reasons" id="filter-reasons" hidden></div>
+        </div>
+      </div>
+
+      <!-- b 提炼 → 待入库 → pi 归类 -->
+      <div class="branch branch-main">
+        <div class="branch-tag">b · 提炼 → 待入库 → pi 归类</div>
+        <div class="lane">
+          <div class="pipe-stage mini">
+            <div class="stage-head"><span class="stage-num">3</span><div><h2>提炼</h2><p class="stage-desc">华为 worker → magpie</p></div></div>
+            <div class="result-split">
+              <div class="result-ok"><span class="split-label">已提炼</span><span class="split-val ok" id="pipe-processed">—</span></div>
+              <div class="result-fail"><span class="split-label">失败</span><span class="split-val danger" id="pipe-failed">—</span></div>
+            </div>
+          </div>
+          <div class="pipe-chevron" aria-hidden="true">›</div>
+          <div class="pipe-stage mini">
+            <div class="stage-head"><span class="stage-num">4</span><div><h2>待入库</h2><p class="stage-desc">DMIT vault 草稿</p></div></div>
+            <div class="stage-count info" id="pipe-pending-items">—</div>
+            <p class="stage-hint" id="pending-by-project"></p>
+          </div>
+          <div class="pipe-chevron" aria-hidden="true">›</div>
+          <div class="pipe-stage mini">
+            <div class="stage-head"><span class="stage-num">5</span><div><h2>pi 归类</h2><p class="stage-desc" id="classify-model">DMIT · 每 15 分钟 5 条</p></div></div>
+            <div class="outcomes">
+              <div class="oc oc-ok"><span class="split-label">已写入 agent使用技巧</span><span class="split-val ok" id="pipe-auto">—</span></div>
+              <a class="oc oc-warn" href="#proposals"><span class="split-label">待确认建议</span><span class="split-val warn" id="pipe-proposals">—</span></a>
+              <div class="oc"><span class="split-label">已确认 / 已拒绝</span><span class="split-val" id="pipe-decided">—</span></div>
+              <div class="oc"><span class="split-label">忽略</span><span class="split-val muted" id="pipe-ignored">—</span></div>
+              <div class="oc oc-bad"><span class="split-label">归类失败</span><span class="split-val danger" id="pipe-cfailed">—</span></div>
+            </div>
+            <p class="stage-hint" id="classify-last">—</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- c Hindsight retain -->
+      <div class="branch branch-h">
+        <div class="branch-tag">c · Hindsight retain</div>
+        <div class="pipe-stage">
+          <div class="stage-count" id="pipe-hindsight">—</div>
+          <p class="stage-hint">bank 文档数</p>
+          <p class="stage-hint" id="hindsight-note">—</p>
+        </div>
+      </div>
+    </section>
+
+    <p class="flow-legend">
+      收件箱 → 过滤 → a 隔离 ｜ b 提炼 → 待入库 → pi 归类 →（agent使用技巧 自动写入 · 项目主题 待你确认 · 忽略）｜ c Hindsight retain
     </p>
 
-    <section class="grid-2">
-      <article class="card">
-        <header class="card-h">
-          <h2>收件箱最近</h2>
-          <span class="mono" id="inbox-count">—</span>
-        </header>
-        <div class="card-b" id="inbox-list"><p class="empty">加载中…</p></div>
-      </article>
+    <section class="card wide" id="proposals">
+      <header class="card-h">
+        <h2>待确认建议</h2>
+        <span class="hint">项目主题：确认后才写入 Obsidian</span>
+        <span class="mono" id="proposals-count">—</span>
+      </header>
+      <div class="card-b tall" id="proposals-list"><p class="empty">加载中…</p></div>
+    </section>
 
-      <article class="card">
-        <header class="card-h">
-          <h2>提炼任务</h2>
-          <span class="mono" id="jobs-count">—</span>
-        </header>
-        <div class="card-b" id="jobs-list"><p class="empty">加载中…</p></div>
-      </article>
+    <section class="card wide">
+      <header class="card-h">
+        <h2>归类记录</h2>
+        <span class="hint">会话 → 主题（非一会话一笔记）</span>
+      </header>
+      <div class="card-b" id="recent-list"><p class="empty">加载中…</p></div>
     </section>
 
     <section class="grid-2">
       <article class="card">
-        <header class="card-h">
-          <h2>主题 / 待入库</h2>
-          <span class="mono" id="topics-count">—</span>
-        </header>
-        <div class="card-b" id="topics-list"><p class="empty">加载中…</p></div>
+        <header class="card-h"><h2>收件箱最近</h2><span class="mono" id="inbox-count">—</span></header>
+        <div class="card-b" id="inbox-list"><p class="empty">加载中…</p></div>
       </article>
-
       <article class="card">
-        <header class="card-h">
-          <h2>主题合并历史</h2>
-          <span class="hint">会话 → 主题（非一会话一笔记）</span>
-        </header>
-        <div class="card-b" id="merges-list"><p class="empty">加载中…</p></div>
+        <header class="card-h"><h2>主题</h2><span class="mono" id="topics-count">—</span></header>
+        <div class="card-b" id="topics-list"><p class="empty">加载中…</p></div>
       </article>
     </section>
 
     <footer class="foot">
-      <span>固定全局主题 <code>topic/agent-usage-tips</code> · agent使用技巧</span>
+      <span>固定全局主题 <code>topic/agent-usage-tips</code> · <code>00-系统/agent使用技巧.md</code></span>
       <span id="demo-flag"></span>
     </footer>
   </div>
-  <script src="/static/app.js"></script>
+  <div id="toast" class="toast" hidden></div>
+  <script src="/static/app.js?v=4"></script>
 </body>
 </html>

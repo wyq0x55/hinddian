@@ -407,3 +407,66 @@ code {
 .pass-arrow { color: var(--accent); font-weight: 600; }
 .pipe-stage[data-stage="filter"] .stage-count { color: var(--warn); }
 .pipe-stage[data-stage="filter"] .stage-count.zero { color: var(--muted); }
+
+/* ---------- v3: branched pipeline ---------- */
+.pipe-top { display: flex; align-items: stretch; gap: 8px; margin-top: 8px; }
+.pipe-top .pipe-stage { flex: 1; }
+.branch-fork { display: grid; grid-template-columns: 1fr 2.6fr 1fr; gap: 12px; height: 18px; margin: 2px 0; }
+.branch-fork span { border-left: 2px solid var(--border); margin-left: 50%; }
+.branches { display: grid; grid-template-columns: 1fr 2.6fr 1fr; gap: 12px; align-items: start; }
+.branch { border: 1px dashed var(--border); border-radius: 12px; padding: 8px; background: rgba(255,255,255,0.01); }
+.branch-tag { font-size: 11px; color: var(--muted); font-family: var(--mono); margin: 0 0 6px 2px; letter-spacing: .02em; }
+.branch-q .branch-tag { color: var(--warn); }
+.branch-main .branch-tag { color: var(--accent); }
+.branch-h .branch-tag { color: var(--info); }
+.lane { display: flex; align-items: stretch; gap: 6px; }
+.lane .pipe-stage.mini { flex: 1; min-width: 0; }
+.lane .pipe-chevron { align-self: center; }
+.stage-count.info { color: var(--info); }
+.outcomes { display: grid; grid-template-columns: 1fr; gap: 4px; margin-top: 6px; }
+.oc { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 4px 8px;
+  border-radius: 8px; background: var(--bg2); border: 1px solid var(--border-soft); text-decoration: none; color: inherit; }
+.oc .split-val { font-size: 16px; }
+.oc-ok { border-color: var(--accent-dim); }
+.oc-warn { border-color: var(--warn-dim); }
+.oc-bad { border-color: var(--danger-dim); }
+.split-val.muted { color: var(--muted); }
+.card.wide { margin-top: 14px; }
+.card-b.tall { max-height: 640px; }
+.prop { padding: 12px 14px; border-bottom: 1px solid var(--border-soft); }
+.prop:last-child { border-bottom: 0; }
+.prop .reason { color: var(--text); opacity: .85; font-size: 12.5px; margin-top: 4px; }
+.prop details { margin-top: 8px; }
+.prop summary { cursor: pointer; color: var(--info); font-size: 12px; }
+.prop-actions { display: flex; gap: 8px; margin-top: 10px; }
+.btn.ok { border-color: var(--accent-dim); color: var(--accent); }
+.btn.danger { border-color: var(--danger-dim); color: var(--danger); }
+.btn:disabled { opacity: .4; }
+pre.diff { margin: 8px 0 0; padding: 10px; background: #080a0d; border: 1px solid var(--border-soft); border-radius: 8px;
+  font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; max-height: 360px; overflow: auto; }
+.d-add { color: var(--accent); background: rgba(110,231,183,.06); display: inline-block; width: 100%; }
+.d-del { color: var(--danger); background: rgba(224,108,117,.06); display: inline-block; width: 100%; }
+.d-hunk { color: var(--info); }
+.d-file { color: var(--muted); }
+.badge.warn { color: var(--warn); border-color: var(--warn-dim); }
+.badge.info { color: var(--info); border-color: var(--info-dim); }
+.badge.ok { color: var(--accent); border-color: var(--accent-dim); }
+.badge.danger { color: var(--danger); border-color: var(--danger-dim); }
+.badge.muted { color: var(--muted); }
+.toast { position: fixed; left: 50%; bottom: max(20px, env(safe-area-inset-bottom)); transform: translateX(-50%);
+  background: var(--panel); border: 1px solid var(--accent-dim); color: var(--text); padding: 10px 14px; border-radius: 10px;
+  font-size: 13px; z-index: 50; max-width: 90vw; box-shadow: 0 6px 24px rgba(0,0,0,.4); }
+.toast.bad { border-color: var(--danger-dim); }
+@media (max-width: 860px) {
+  .branch-fork { display: none; }
+  .branches { grid-template-columns: 1fr; }
+  .lane { flex-direction: column; }
+  .lane .pipe-chevron { transform: rotate(90deg); }
+  .pipe-top { flex-direction: column; }
+  .pipe-top .pipe-chevron { transform: rotate(90deg); align-self: center; }
+}
+.prop .title { font-size: 13px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.prop .meta { font-size: 11px; color: var(--muted); margin-top: 4px; font-family: var(--mono); word-break: break-word; }
+.prop code { font-size: 12px; }
+.branch-fork { grid-template-columns: 1fr 2.6fr 1fr; }
+.branch-fork span { margin-left: 50%; }
