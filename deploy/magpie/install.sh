@@ -31,10 +31,5 @@ chmod +x "$DIR"/*.py "$DIR"/*.sh 2>/dev/null || true
 cp -f "$TMP/HOOKS_VERSION" "$DIR/HOOKS_VERSION"
 cp -f "$TMP/HOOKS_VERSION" "$DIR/.version"
 echo "installed hinddian-magpie hooks → $DIR ver=$(tr -d '[:space:]' <"$DIR/.version")"
-# Optional: patch local library if present (same machine as Magpie config)
-if [[ -f "${MAGPIE_LIBRARY:-$HOME/.config/magpie/library.json}" ]]; then
-  if [[ -f "$DIR/apply_library.py" ]]; then
-    python3 "$DIR/apply_library.py" || true
-  fi
-fi
-echo "Next: Magpie WebDAV pull (or wait ~3m) so library hook entries match DMIT; then open a new session."
+echo "Scripts only — do NOT run apply_library here (DMIT is library SoT)."
+echo "Next: magpie webdav now  # pull library/hooks from DMIT, then open a new session"
