@@ -1,0 +1,14 @@
+{
+  "providers": {
+    "magpie": {
+      "baseUrl": "http://127.0.0.1:3425/v1",
+      "api": "openai-completions",
+      "apiKey": "magpie",
+      "compat": { "supportsDeveloperRole": false, "supportsReasoningEffort": false },
+      "models": [
+        { "id": "group/auto-flash", "name": "Magpie auto-flash", "contextWindow": 200000, "maxTokens": 16000 },
+        { "id": "antigravity/gemini-3.8-flash", "name": "Gemini 3.8 Flash via magpie", "contextWindow": 200000, "maxTokens": 16000 }
+      ]
+    }
+  }
+}
