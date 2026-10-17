@@ -29,7 +29,16 @@ Magpie Library 只挂本 MCP，不再挂原生 Hindsight MCP。
 
 ## Jev（System One）门控
 
-TYPESAFE_API_KEY 放在 `/opt/hinddian/.env`（勿进 git）。用于：should-recall、项目匹配、本轮是否值得记、类型/项目分类、写入四态。低置信度 → Magpie 小模型或跳过。
+**优先走 Magpie 本机网关**（不要求华为上填云端 `TYPESAFE_API_KEY`）：
+
+- URL：`POST http://127.0.0.1:3425/v1/systemone`（可用 `JEV_BASE_URL` / `MAGPIE_JEV_URL` 覆盖）
+- Auth：`Authorization: Bearer magpie`（或 `MAGPIE_GATEWAY_KEY`）
+- Model：`typesafe/jev-latest`（Magpie 里需已 `magpie provider add typesafe <key>` 并 expose 模型）
+- Magpie 各机：hooks 本机直连网关做 should-recall / classify，再 `push_draft` 到华为
+- 华为：`magpie-tunnel.service` 把本机 `:3425` 转到 DMIT Magpie；MCP 上的 Jev 同样走该隧道
+- 可选云端兜底：`TYPESAFE_API_KEY` → `api.typesafe.ai`；再不行 → Magpie `group/auto-flash`
+
+用于：should-recall、项目匹配、本轮是否值得记、类型/项目分类、写入四态。
 
 ## OTLP
 

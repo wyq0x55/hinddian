@@ -1,4 +1,8 @@
-import json, os, urllib.parse, urllib.request
+"""SessionStart: routing tables from hinddian; should-recall via Magpie-local Jev when possible."""
+import json, os, sys, urllib.parse, urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 url = os.environ.get("HINDDIAN_MEMORY_URL", "http://124.70.90.224/hinddian").rstrip("/")
 token = os.environ.get("HINDDIAN_MCP_TOKEN") or os.environ.get("HINDSIGHT_API_KEY") or ""
@@ -16,6 +20,21 @@ def req(method, path, body=None, timeout=12):
     r = urllib.request.Request(url + path, data=data, headers=headers, method=method)
     with urllib.request.urlopen(r, timeout=timeout) as resp:
         return json.loads(resp.read())
+
+def should_recall_local(cwd_: str, message: str, projects: list) -> dict | None:
+    try:
+        import jev
+        r = jev.should_recall(cwd_, message, projects)
+        return {
+            "ok": r.ok,
+            "should_recall": r.value,
+            "confidence": r.confidence,
+            "source": r.source,
+            "error": r.error,
+        }
+    except Exception as e:
+        print(f"session-start local Jev skipped: {type(e).__name__}: {str(e)[:100]}")
+        return None
 
 def main():
     try:
@@ -37,10 +56,13 @@ def main():
         if n and n.lower() in blob:
             proj = n
             break
-    try:
-        gate = req("POST", "/api/memory/gates/should_recall", {"cwd": cwd, "message": msg}, timeout=20)
-    except Exception:
-        gate = {"should_recall": True, "source": "fallback"}
+    names = [p.get("name") for p in projects if p.get("name")]
+    gate = should_recall_local(cwd, msg, names)
+    if gate is None:
+        try:
+            gate = req("POST", "/api/memory/gates/should_recall", {"cwd": cwd, "message": msg}, timeout=20)
+        except Exception:
+            gate = {"should_recall": True, "source": "fallback"}
     if proj:
         try:
             pr = req("GET", "/api/memory/routing/project/" + urllib.parse.quote(proj))

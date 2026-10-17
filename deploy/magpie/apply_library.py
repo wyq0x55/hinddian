@@ -46,7 +46,7 @@ def main():
     )]
     hooks.append({
         "name": "hinddian-session-start",
-        "description": "SessionStart: inject routing tables + Jev should-recall gate via hinddian-memory",
+        "description": "SessionStart: routing tables from hinddian; should-recall via Magpie-local Jev (/v1/systemone) with Huawei fallback",
         "event": "session-start",
         "command": f"HINDDIAN_MEMORY_URL={MEMORY_URL} HINDDIAN_MCP_TOKEN=${{HINDDIAN_MCP_TOKEN:-${{HINDSIGHT_API_KEY:-}}}} python3 {HOOK_DIR}/session_start.py",
         "agents": ["claude", "codex", "grok", "pi"],
@@ -54,7 +54,7 @@ def main():
     })
     hooks.append({
         "name": "hinddian-turn-end",
-        "description": "TurnEnd: Jev/LLM classify this turn only → push_draft (no full-session write)",
+        "description": "TurnEnd: Magpie-local Jev classify this turn → push_draft to hinddian (no full-session write)",
         "event": "turn-end",
         "command": f"HINDDIAN_MEMORY_URL={MEMORY_URL} HINDDIAN_MCP_TOKEN=${{HINDDIAN_MCP_TOKEN:-${{HINDSIGHT_API_KEY:-}}}} python3 {HOOK_DIR}/turn_end.py",
         "agents": ["claude", "codex", "grok", "pi"],
