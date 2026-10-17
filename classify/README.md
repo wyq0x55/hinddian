@@ -12,7 +12,16 @@
 源草稿处理完即移出 vault → /var/lib/hinddian-classify/archive/<日期>/{classified,ignored,failed}/
 ```
 
-- agent使用技巧 自动写入的条件：置信度 ≥ 0.6 且未命中密钥正则；否则也转成待确认建议。
+### 过滤规则（v0.3，默认 ignore）
+
+1. **预过滤（不调模型）**：标题是审批流/子 agent 汇报转录（`Codex agent history…`、`Inspect subagent updates`、`继续`/`echo`…）；草稿 DECISIONS 与 LESSONS 都为空；两节合计 < 80 字。
+2. **pi 判断**：AGENTS.md + skill 写明「必须 ignore」清单（过程流水、一次性排障、临时进度、寒暄、已记过、子 agent 执行细节）与 5 个正反示例；目标笔记全文 + 待确认队列都内联给它查重。
+3. **runner 规则**：置信度 < 0.6 → ignore；项目建议需 ≥ 0.8；agent使用技巧需 ≥ 0.75 才自动写（否则 ignore）；子 agent/lane 类会话需 ≥ 0.9；每条草稿最多 1 条项目建议；PROJECT_STATE 只接受 3 天内的会话；与目标笔记某节 bigram 覆盖 ≥ 0.55 或与同目标待确认建议覆盖 ≥ 0.33 → 视为重复。
+4. `hinddian-classify reeval` 把当前规则重新套到待确认建议上；被忽略的保留 JSON（status `ignored_by_rule`），`restore <id>` 可恢复。
+
+### 批量确认
+
+`approve-batch / reject-batch <id…>`：一把锁内按「目标文件 → 创建时间」顺序逐条写；每条写之前重读目标文件，`D-xxx` / `L-xxx` 按当前最大编号续号，避免撞号。
 - 项目类建议可以指向新项目（例如 `项目/ut-agent/…`）；确认时按 `_模板` 建文件。
 - 草稿 10 分钟内被改过的先跳过（worker 可能还在 upsert 同一 document_id）。
 - pi 失败 3 次的条目移到 `archive/…/failed/`。
@@ -37,6 +46,9 @@ hinddian-classify proposals --json [--status pending|applied|rejected|all]
 hinddian-classify recent --json
 hinddian-classify approve <id>
 hinddian-classify reject <id> --reason '…'
+hinddian-classify approve-batch <id…> | reject-batch <id…> [--reason …]
+hinddian-classify reeval [--dry-run] | restore <id>
+hinddian-classify run --dry-run --sample 30   # 抽样试跑，不写
 ```
 
 ## 定时
