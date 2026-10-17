@@ -14,19 +14,20 @@ MCP: `POST http://127.0.0.1:8787/mcp` (Bearer). Public: `http://<huawei>/hinddia
 
 ## Magpie
 
-WebDAV syncs **library / settings / providers** (whole-file LWW).
+WebDAV syncs MCP / skills / instructions / settings / providers (whole-file LWW).
 
-Hook scripts are **embedded inside library hook `command` strings** (gzip+base64
-self-extract on first run into `~/.config/magpie/hinddian-hooks/`). Other computers
-only need `magpie webdav now` — no `/usr/local/lib` install and no HTTP bootstrap.
+**Magpie does NOT sync Hooks yet** (upstream `library.Bundle` has no `Hooks` field).
+DMIT keeps hooks locally. Other PCs get the `hinddian-hooks` **skill** via WebDAV, then
+run install once so the Hooks panel fills.
 
-1. DMIT (library SoT): run `python3 deploy/magpie/apply_library.py` then
-   `python3 deploy/magpie/disable_otel.py`, then `magpie webdav now`.
-2. Other PCs: `magpie webdav now` (or wait ~3m), open a new session.
-3. OTLP off: settings `otel.enabled=false` (synced) + local `/etc/magpie.env`
-   `MAGPIE_OTEL_ENABLED=0`.
+1. DMIT: `python3 deploy/magpie/apply_library.py` then `disable_otel.py` then `magpie webdav now`
+2. Windows (after pull), PowerShell:
+   `py -3 "$env:USERPROFILE\.config\magpie\library\skills\hinddian-hooks\install.py"`
+   then `magpie library sync`
+3. Open Magpie → Library → Hooks → `hinddian-session-start`, `hinddian-turn-end`
+4. OTLP off: settings `otel.enabled=false` + local `MAGPIE_OTEL_ENABLED=0`
 
-Do **not** run `apply_library.py` on non-DMIT hosts (LWW overwrite risk).
+Do not run `apply_library.py` on non-DMIT hosts.
 
 ## Jev
 
