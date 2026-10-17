@@ -1,4 +1,4 @@
-/* hinddian dashboard — Magpie-like dense dark UI */
+/* hinddian dashboard — Magpie-like pipeline UI */
 (function () {
   const $ = (id) => document.getElementById(id);
 
@@ -26,26 +26,63 @@
     }
   }
 
-  function statCard(label, value, cls) {
-    return `<div class="stat"><div class="label">${esc(label)}</div>` +
-      `<div class="value ${cls || ""}">${esc(value)}</div></div>`;
+  function setCount(el, n, clsWhenPositive) {
+    const v = Number(n) || 0;
+    el.textContent = String(v);
+    el.className = "stage-count" + (v === 0 ? " zero" : clsWhenPositive ? " " + clsWhenPositive : "");
   }
 
-  function renderStats(s) {
-    const grid = $("stats-grid");
-    grid.innerHTML = [
-      statCard("收件箱", s.inbox_count, s.inbox_count > 0 ? "warn" : "ok"),
-      statCard("隔离区", s.quarantine_count),
-      statCard("已处理", s.processed_count, "ok"),
-      statCard("失败", s.failed_count, s.failed_count ? "danger" : ""),
-      statCard("提炼排队", s.jobs_pending, "warn"),
-      statCard("提炼中", s.jobs_running, "info"),
-      statCard("待入库", s.pending_ingests, s.pending_ingests ? "warn" : "ok"),
-      statCard("主题数", s.topics_tracked),
-    ].join("");
+  function setSplit(el, n) {
+    el.textContent = String(Number(n) || 0);
+  }
+
+  function renderPipeline(s, filters) {
+    const inbox = s.inbox_count || 0;
+    setCount($("pipe-inbox"), inbox, inbox > 0 ? "" : "ok");
+    if (inbox === 0) $("pipe-inbox").classList.add("ok");
+
+    const q = s.quarantine_count || 0;
+    const qEl = $("pipe-quarantine");
+    qEl.textContent = String(q);
+    qEl.className = "stage-count" + (q === 0 ? " zero" : "");
+    setSplit($("pipe-pending"), s.jobs_pending || 0);
+    setSplit($("pipe-running"), s.jobs_running || 0);
+    setSplit($("pipe-processed"), s.processed_count || 0);
+    setSplit($("pipe-failed"), s.failed_count || 0);
+
+    const jobTrackEmpty =
+      !(s.jobs_pending || s.jobs_running || s.jobs_done || s.jobs_failed);
+    $("distill-note").textContent = jobTrackEmpty
+      ? "任务跟踪可能仍为 stub（sqlite 无 job）"
+      : "sqlite 任务 · pending / running / done / failed";
+
+    // demo pill
+    const demoPill = $("demo-pill");
+    if (s.demo) {
+      demoPill.textContent = "demo: true";
+      demoPill.className = "pill demo";
+    } else {
+      demoPill.textContent = "demo: false · 真实数据";
+      demoPill.className = "pill live";
+    }
     $("demo-flag").textContent = s.demo
       ? "演示数据 · USE_DEMO_DATA"
       : "真实数据 · USE_DEMO_DATA=false";
+
+    // quarantine reasons under filter stage
+    const box = $("filter-reasons");
+    if (!filters || !filters.length) {
+      box.innerHTML = `<div class="reason-row"><span class="empty" style="padding:8px 0">暂无隔离原因</span></div>`;
+    } else {
+      box.innerHTML = filters
+        .map(
+          (r) => `<div class="reason-row">
+            <code>${esc(r.reason)}</code>
+            <span class="reason-n">${esc(r.count)}</span>
+          </div>`
+        )
+        .join("");
+    }
   }
 
   function renderInbox(items) {
@@ -67,35 +104,17 @@
       .join("");
   }
 
-  function renderFilters(rows) {
-    const total = rows.reduce((a, r) => a + (r.count || 0), 0);
-    $("filter-count").textContent = String(total);
-    if (!rows.length) {
-      $("filter-list").innerHTML = `<p class="empty">暂无过滤记录</p>`;
-      return;
-    }
-    $("filter-list").innerHTML = rows
-      .map(
-        (r) => `<div class="row">
-          <div>
-            <div class="title"><code>${esc(r.reason)}</code></div>
-            <div class="meta">${esc((r.examples || []).slice(0, 2).join(" · ") || "—")}</div>
-          </div>
-          <span class="badge">${esc(r.count)}</span>
-        </div>`
-      )
-      .join("");
-  }
-
   function renderJobs(jobs) {
     $("jobs-count").textContent = String(jobs.length);
     if (!jobs.length) {
-      $("jobs-list").innerHTML = `<p class="empty">无任务</p>`;
+      $("jobs-list").innerHTML = `<p class="empty">无任务 · 提炼 job 跟踪可能尚未接入</p>`;
       return;
     }
     $("jobs-list").innerHTML = jobs
       .map((j) => {
-        const targets = (j.target_document_ids || []).map((id) => `<code>${esc(id)}</code>`).join(" ");
+        const targets = (j.target_document_ids || [])
+          .map((id) => `<code>${esc(id)}</code>`)
+          .join(" ");
         return `<div class="row">
           <div>
             <div class="title">${esc(j.title || j.id)}</div>
@@ -168,13 +187,21 @@
       get("/api/topics"),
       get("/api/merges"),
     ]);
-    renderStats(stats);
+    renderPipeline(stats, filters);
     renderInbox(inbox);
-    renderFilters(filters);
     renderJobs(jobs);
     renderTopics(topics);
     renderMerges(merges);
   }
+
+  const btnReasons = $("btn-reasons");
+  const reasonsBox = $("filter-reasons");
+  btnReasons.addEventListener("click", () => {
+    const open = btnReasons.getAttribute("aria-expanded") === "true";
+    btnReasons.setAttribute("aria-expanded", open ? "false" : "true");
+    reasonsBox.hidden = open;
+    btnReasons.textContent = open ? "隔离原因 ▾" : "隔离原因 ▴";
+  });
 
   $("btn-refresh").addEventListener("click", () => {
     refresh().catch((e) => console.error(e));
