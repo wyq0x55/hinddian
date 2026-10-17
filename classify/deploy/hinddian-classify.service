@@ -1,14 +1,14 @@
 [Unit]
-Description=hinddian classify: 待入库 → pi 归类 → Obsidian 主题笔记 / 待确认建议
+Description=hinddian batch: drafts (/var/lib/hinddian/drafts) → gated batch / incremental distill → atomic notes
 After=network-online.target magpie-web.service
 
 [Service]
 Type=oneshot
 User=root
 Environment=HC_HOME=/opt/hinddian-classify
-ExecStart=/usr/local/bin/hinddian-classify run --limit 5
+ExecStart=/usr/local/bin/hinddian-batch run
 Nice=10
 MemoryMax=600M
-TimeoutStartSec=1500
+TimeoutStartSec=3000
 StandardOutput=append:/var/log/hinddian-classify.log
 StandardError=append:/var/log/hinddian-classify.log

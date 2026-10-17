@@ -1,0 +1,12 @@
+[Unit]
+Description=hinddian: Obsidian atomic notes → Hindsight (retain by frontmatter id / delete removed)
+After=network-online.target hindsight.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /opt/hinddian/bin/obsidian_hindsight_sync.py
+Nice=10
+TimeoutStartSec=3600
+StandardOutput=append:/var/log/hinddian-hindsight-sync.log
+StandardError=append:/var/log/hinddian-hindsight-sync.log
