@@ -70,6 +70,7 @@ h1 { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: -.01em; }
 .rt-node strong { font: 650 22px/1.15 var(--code); letter-spacing: -.02em; margin: 3px 0 1px; }
 .rt-node small { font-size: 11px; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rt-node small em { font-style: normal; color: var(--red); }
+.rt-node small.fail { color: var(--red); min-height: 0; }
 .rt-hub { border-color: var(--fg); box-shadow: 0 0 0 4px var(--card-2); padding: 14px 9px 11px; }
 .rt-hub i { font-style: normal; font-size: 10.5px; font-weight: 560; margin-top: 6px; padding: 1px 8px; border-radius: 999px; background: var(--fg); color: var(--card); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lane-q strong { color: var(--amber); }

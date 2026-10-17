@@ -1,6 +1,8 @@
 /* hinddian dashboard — routing-style pipeline graph + grouped batch confirm */
 (function () {
   const $ = (id) => document.getElementById(id);
+  const setText = (id, v) => { const el = $(id); if (el) el.textContent = v == null ? "—" : String(v); };
+  const setHtml = (id, html) => { const el = $(id); if (el) el.innerHTML = html; };
   const NS = "http://www.w3.org/2000/svg";
   const state = { stats: {}, c: {}, proposals: [] };
 
@@ -21,9 +23,9 @@
   }
   const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   const fmtTime = (iso) => { if (!iso) return "—"; try { return new Date(iso).toLocaleString("zh-CN", { hour12: false }); } catch { return iso; } };
-  const setN = (id, v) => { $(id).textContent = v == null ? "—" : String(v); };
   function toast(msg, bad) {
-    const t = $("toast"); t.textContent = msg; t.className = "toast" + (bad ? " bad" : ""); t.hidden = false;
+    const t = $("toast"); if (!t) return;
+    t.textContent = msg; t.className = "toast" + (bad ? " bad" : ""); t.hidden = false;
     clearTimeout(toast._t); toast._t = setTimeout(() => (t.hidden = true), 4000);
   }
 
@@ -34,11 +36,19 @@
     const l = r.left - s.left, t = r.top - s.top;
     return { l, t, r: l + r.width, b: t + r.height, cx: l + r.width / 2, cy: t + r.height / 2 };
   }
-  // Horizontal bezier when the target sits to the right, vertical otherwise (as Magpie's stage does).
+  // Prefer vertical when the target is below (mobile fan-out), else horizontal to the right.
+  // fan: stagger the exit point toward the target so analysis→技巧 exits cleanly, not sideways.
   // t: where along the curve the count label sits (fan-outs label near the target).
-  function wirePath(a, b, t = 0.5) {
+  function wirePath(a, b, t = 0.5, fan = false) {
     let p0, p1, p2, p3;
-    if (b.l >= a.r - 2) {
+    const below = b.t >= a.b - 4;
+    const right = b.l >= a.r - 2;
+    if (below) {
+      // Exit bottom of source (nudged toward target on fan-outs), enter top of target.
+      const exitX = fan ? a.cx + (b.cx - a.cx) * 0.35 : a.cx;
+      const my = a.b + Math.max(12, (b.t - a.b) * 0.45);
+      [p0, p1, p2, p3] = [[exitX, a.b], [exitX, my], [b.cx, my], [b.cx, b.t]];
+    } else if (right) {
       const mx = (a.r + b.l) / 2;
       [p0, p1, p2, p3] = [[a.r, a.cy], [mx, a.cy], [mx, b.cy], [b.l, b.cy]];
     } else {
@@ -73,13 +83,14 @@
 
   function drawWires() {
     const stage = $("stage"), svg = $("wires");
+    if (!stage || !svg) return;
     svg.innerHTML = "";
     const node = (k) => stage.querySelector(`[data-n="${k}"]`);
     for (const e of edges()) {
       const a = node(e.f), b = node(e.t);
       if (!a || !b) continue;
       const fan = e.f === "filter" || e.f === "analysis";
-      const w = wirePath(box(a, stage), box(b, stage), fan ? 0.7 : 0.5);
+      const w = wirePath(box(a, stage), box(b, stage), fan ? 0.72 : 0.5, fan);
       const p = document.createElementNS(NS, "path");
       const n = Number(e.n) || 0;
       let cls = e.col;
@@ -100,32 +111,35 @@
   }
   let raf = 0;
   const redraw = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(drawWires); };
-  new ResizeObserver(redraw).observe($("stage"));
+  const stageEl = $("stage"); if (stageEl) new ResizeObserver(redraw).observe(stageEl);
   window.addEventListener("resize", redraw);
 
   // ---------------- stage numbers ----------------
   function renderStage(filters) {
     const s = state.stats || {}, c = state.c || {}, g = state.g || {}, os = c.obsidian_sync, h = c.hindsight;
-    setN("n-inbox", s.inbox_count || 0);
-    setN("n-quar", s.quarantine_count || 0);
-    $("n-dfail").textContent = s.failed_count ? `失败 ${s.failed_count}` : "";
-    const box = $("filter-reasons");
-    box.innerHTML = !filters || !filters.length
-      ? `<div class="reason-row"><span class="note">暂无隔离原因</span></div>`
-      : filters.map((r) => `<div class="reason-row"><code>${esc(r.reason)}</code><b>${esc(r.count)}</b></div>`).join("");
+    setText("n-inbox", s.inbox_count || 0);
+    setText("n-quar", s.quarantine_count || 0);
+    // n-dfail is a sibling of drafts-by (not nested) so innerHTML updates cannot remove it
+    setText("n-dfail", s.failed_count ? `失败 ${s.failed_count}` : "");
+    const reasons = $("filter-reasons");
+    if (reasons) {
+      reasons.innerHTML = !filters || !filters.length
+        ? `<div class="reason-row"><span class="note">暂无隔离原因</span></div>`
+        : filters.map((r) => `<div class="reason-row"><code>${esc(r.reason)}</code><b>${esc(r.count)}</b></div>`).join("");
+    }
     const ps = g.projects || [];
-    setN("n-drafts", g.projects ? gsum() : null);
-    $("drafts-by").innerHTML = ps.filter((p) => p.drafts).map((p) => `${esc(p.project)} ${p.drafts}`).join(" · ") || "无积压";
-    setN("n-batch", ps.filter((p) => p.state === "ready").length);
-    setN("n-incr", gsum(["incremental"]));
-    setN("n-tips", gsum(["auto-tips"]));
-    $("analysis-chip").textContent = c.timer_active === false ? "定时已暂停" : "每 15 分钟";
-    setN("n-notes", os ? os.notes : null);
-    if (os) { setN("n-hs", `${os.synced}/${os.notes}`); $("hs-note").textContent = `${os.pending ? "同步中 · 剩 " + os.pending : "已全部同步"} · ${fmtTime(os.at)}`; }
-    else { setN("n-hs", h && !h.error ? h.documents : null); $("hs-note").textContent = "等待首次同步"; }
+    setText("n-drafts", g.projects ? gsum() : null);
+    setText("drafts-by", ps.filter((p) => p.drafts).map((p) => `${p.project} ${p.drafts}`).join(" · ") || "无积压");
+    setText("n-batch", ps.filter((p) => p.state === "ready").length);
+    setText("n-incr", gsum(["incremental"]));
+    setText("n-tips", gsum(["auto-tips"]));
+    setText("analysis-chip", c.timer_active === false ? "定时已暂停" : "每 15 分钟");
+    setText("n-notes", os ? os.notes : null);
+    if (os) { setText("n-hs", `${os.synced}/${os.notes}`); setText("hs-note", `${os.pending ? "同步中 · 剩 " + os.pending : "已全部同步"} · ${fmtTime(os.at)}`); }
+    else { setText("n-hs", h && !h.error ? h.documents : null); setText("hs-note", "等待首次同步"); }
     const hold = Object.entries(g.holdout || {}).map(([k, v]) => `${k} ${v}`).join(" · ");
-    $("rt-mode").textContent = `Hindsight 只索引 Obsidian 笔记（document_id = 笔记 id）；原始会话不再直接 retain${hold ? " ｜ 保留集 " + hold : ""}`;
-    $("rt-cap").textContent = ps.map((p) => `${p.project}：${({ ready: "待批准", accumulating: "积累中", incremental: "增量", "auto-tips": "技巧" })[p.state] || p.state} · 已处理 ${p.processed}`).join(" ｜ ") || "—";
+    setText("rt-mode", `Hindsight 只索引 Obsidian 笔记（document_id = 笔记 id）；原始会话不再直接 retain${hold ? " ｜ 保留集 " + hold : ""}`);
+    setText("rt-cap", ps.map((p) => `${p.project}：${({ ready: "待批准", accumulating: "积累中", incremental: "增量", "auto-tips": "技巧" })[p.state] || p.state} · 已处理 ${p.processed}`).join(" ｜ ") || "—");
     redraw();
   }
 
@@ -140,11 +154,11 @@
   }
   function renderProposals(list) {
     state.proposals = list;
-    $("proposals-count").textContent = String(list.length);
-    if (!list.length) { $("proposals-list").innerHTML = `<p class="empty">没有待确认的建议</p>`; updateSel(); return; }
+    setText("proposals-count", String(list.length));
+    if (!list.length) { setHtml("proposals-list", `<p class="empty">没有待确认的建议</p>`); updateSel(); return; }
     const groups = {};
     for (const p of list) (groups[p.target_path] = groups[p.target_path] || []).push(p);
-    $("proposals-list").innerHTML = Object.keys(groups).sort().map((path) => {
+    setHtml("proposals-list", Object.keys(groups).sort().map((path) => {
       const ps = groups[path].sort((a, b) => (a.created_at || "").localeCompare(b.created_at || ""));
       const isNew = ps.some((p) => !p.target_exists) ? `<span class="badge info">新建</span>` : "";
       return `<div class="pgroup" data-path="${esc(path)}">
@@ -173,14 +187,14 @@
           </div>`;
         }).join("")}
       </div>`;
-    }).join("");
+    }).join(""));
     updateSel();
   }
   function selectedIds() { return [...document.querySelectorAll("#proposals-list .prop .sel:checked")].map((c) => c.closest(".prop").dataset.id); }
   function updateSel() {
     const n = selectedIds().length;
-    $("batchbar").hidden = n === 0;
-    $("sel-count").textContent = `已选 ${n} 条`;
+    const bar = $("batchbar"); if (bar) bar.hidden = n === 0;
+    setText("sel-count", `已选 ${n} 条`);
   }
   async function decide(ids, act) {
     if (!ids.length) return;
@@ -205,31 +219,31 @@
     }
     await refreshClassify();
   }
-  $("proposals-list").addEventListener("change", (ev) => {
+  $("proposals-list")?.addEventListener("change", (ev) => {
     if (ev.target.classList.contains("sel-all")) {
       ev.target.closest(".pgroup").querySelectorAll(".sel").forEach((c) => (c.checked = ev.target.checked));
     }
     updateSel();
   });
-  $("proposals-list").addEventListener("click", (ev) => {
+  $("proposals-list")?.addEventListener("click", (ev) => {
     const b = ev.target.closest("button");
     if (!b) return;
     if (b.dataset.act) decide([b.closest(".prop").dataset.id], b.dataset.act);
     if (b.dataset.group) decide([...b.closest(".pgroup").querySelectorAll(".prop")].map((p) => p.dataset.id), b.dataset.group);
   });
-  $("batchbar").addEventListener("click", (ev) => {
+  $("batchbar")?.addEventListener("click", (ev) => {
     const b = ev.target.closest("button[data-bulk]");
     if (b) decide(selectedIds(), b.dataset.bulk);
   });
 
   function renderIgnored(list) {
-    $("ignored-count").textContent = list.length ? `（${list.length}）` : "";
-    $("ignored-list").innerHTML = !list.length ? `<p class="note">无</p>` : list.map((p) => `<div class="row">
+    setText("ignored-count", list.length ? `（${list.length}）` : "");
+    setHtml("ignored-list", !list.length ? `<p class="note">无</p>` : list.map((p) => `<div class="row">
       <div><div class="title"><code>${esc(p.target_path)}</code> ${esc((p.patch_markdown || "").split("\n")[0].replace(/^#+\s*/, ""))}</div>
       <div class="meta">${esc(p.rule)} · ${esc(p.rule_reason || "")}</div></div>
-      <button type="button" class="btn sm" data-restore="${esc(p.id)}">恢复</button></div>`).join("");
+      <button type="button" class="btn sm" data-restore="${esc(p.id)}">恢复</button></div>`).join(""));
   }
-  $("ignored-list").addEventListener("click", async (ev) => {
+  $("ignored-list")?.addEventListener("click", async (ev) => {
     const b = ev.target.closest("button[data-restore]");
     if (!b) return;
     b.disabled = true;
@@ -246,27 +260,27 @@
   };
   function renderRecent(list) {
     const rows = (list || []).filter((e) => e.event !== "classified");
-    $("recent-list").innerHTML = !rows.length ? `<p class="empty">暂无归类记录</p>` : rows.map((e) => {
+    setHtml("recent-list", !rows.length ? `<p class="empty">暂无归类记录</p>` : rows.map((e) => {
       const [zh, cls] = EVENT_ZH[e.event] || [e.event, ""];
       const why = e.reason || e.error || e.summary || "";
       return `<div class="row"><div>
         <div class="title">${esc(e.title || e.source || e.proposal || "")} ${e.target ? `→ <code>${esc(e.target)}</code>` : ""}</div>
         <div class="meta">${fmtTime(e.at)}${why ? " · " + esc(why).slice(0, 160) : ""}</div></div>
         <span class="badge ${cls}">${esc(zh)}</span></div>`;
-    }).join("");
+    }).join(""));
   }
   function renderInbox(items) {
-    $("inbox-count").textContent = String(items.length);
-    $("inbox-list").innerHTML = !items.length ? `<p class="empty">收件箱为空</p>` : items.map((it) => `<div class="row">
+    setText("inbox-count", String(items.length));
+    setHtml("inbox-list", !items.length ? `<p class="empty">收件箱为空</p>` : items.map((it) => `<div class="row">
       <div><div class="title">${esc(it.title || it.id)}</div>
       <div class="meta">${esc(it.project || "—")} · ${esc(it.source || "?")} · ${fmtTime(it.received_at)}</div></div>
-      <span class="badge">${esc(it.bytes != null ? it.bytes + " B" : "")}</span></div>`).join("");
+      <span class="badge">${esc(it.bytes != null ? it.bytes + " B" : "")}</span></div>`).join(""));
   }
   function renderTopics(topics) {
-    $("topics-count").textContent = String(topics.length);
-    $("topics-list").innerHTML = !topics.length ? `<p class="empty">无主题</p>` : topics.map((t) => `<div class="row">
+    setText("topics-count", String(topics.length));
+    setHtml("topics-list", !topics.length ? `<p class="empty">无主题</p>` : topics.map((t) => `<div class="row">
       <div><div class="title">${esc(t.title)}</div><div class="meta"><code>${esc(t.document_id)}</code> · ${esc(t.vault_relpath)}</div></div>
-      <span class="badge ${t.kind === "global" ? "ok" : ""}">${t.kind === "global" ? "全局 · 自动写入" : "项目 · 需确认"}</span></div>`).join("");
+      <span class="badge ${t.kind === "global" ? "ok" : ""}">${t.kind === "global" ? "全局 · 自动写入" : "项目 · 需确认"}</span></div>`).join(""));
   }
 
   async function refreshClassify() {
@@ -293,7 +307,7 @@
       ${p.state === "ready" && !p.running ? `<button type="button" class="btn primary gate-go" data-p="${esc(p.project)}">开始批量分析</button>` : ""}</div>`);
     const hold = Object.entries(g.holdout || {}).map(([k, v]) => `${k} ${v}`).join(" · ");
     el.innerHTML = rows.join("") + (hold ? `<p class="note">增量测试保留集（不处理）：${esc(hold)}</p>` : "");
-    $("gate-count").textContent = g.projects.filter((p) => p.state === "ready").length + " 个待批准";
+    setText("gate-count", g.projects.filter((p) => p.state === "ready").length + " 个待批准");
     el.querySelectorAll(".gate-go").forEach((b) => b.addEventListener("click", async () => {
       if (!confirm(`对「${b.dataset.p}」的全部草稿做一次批量分析？之后该项目的新草稿会自动增量合并。`)) return;
       b.disabled = true;
@@ -305,9 +319,9 @@
   async function refresh() {
     try {
       const health = await get("/api/health");
-      $("health-pill").textContent = "在线 · v" + health.version; $("health-pill").className = "pill ok";
-      $("demo-flag").textContent = health.demo ? "演示数据" : "";
-    } catch { $("health-pill").textContent = "离线"; $("health-pill").className = "pill warn"; }
+      const pill = $("health-pill"); if (pill) { pill.textContent = "在线 · v" + health.version; pill.className = "pill ok"; }
+      setText("demo-flag", health.demo ? "演示数据" : "");
+    } catch { const pill = $("health-pill"); if (pill) { pill.textContent = "离线"; pill.className = "pill warn"; } }
     const cp = refreshClassify(); refreshGate();
     const [stats, inbox, filters, topics] = await Promise.all([get("/api/stats"), get("/api/inbox"), get("/api/filters"), get("/api/topics")]);
     state.stats = stats; state._filters = filters;
@@ -315,11 +329,12 @@
     await cp;
   }
 
-  $("btn-reasons").addEventListener("click", () => {
-    const r = $("filter-reasons"); r.hidden = !r.hidden;
-    $("btn-reasons").textContent = r.hidden ? "原因 ▾" : "原因 ▴";
+  $("btn-reasons")?.addEventListener("click", () => {
+    const r = $("filter-reasons"); if (!r) return;
+    r.hidden = !r.hidden;
+    setText("btn-reasons", r.hidden ? "原因 ▾" : "原因 ▴");
   });
-  $("btn-refresh").addEventListener("click", () => refresh().catch((e) => toast(e.message, true)));
+  $("btn-refresh")?.addEventListener("click", () => refresh().catch((e) => toast(e.message, true)));
   refresh().catch((e) => { console.error(e); toast("加载失败：" + e.message, true); });
   setInterval(() => { refreshClassify().catch(() => {}); refreshGate(); }, 60000);
 })();
