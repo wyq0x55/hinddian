@@ -53,4 +53,4 @@ Magpie settings `otel.enabled=false`（WebDAV 同步到各机）；`/etc/magpie.
 | `jev.py` | Jev 门控 + LLM fallback |
 | `classify/hinddian_batch.py` | 草稿批量/增量（DMIT） |
 | `deploy/huawei/obsidian_hindsight_sync.py` | Obsidian → Hindsight |
-| `deploy/magpie/*` | SessionStart / TurnEnd hooks；脚本 **嵌入** library `command`（WebDAV LWW 即同步），解压到 `~/.config/magpie/hinddian-hooks/` |
+| `deploy/magpie/*` | Hooks 嵌在 library（仅本机）；WebDAV **不同步 hooks**，靠 skill `hinddian-hooks` + 各机 `install.py` 写入 Hooks UI |
