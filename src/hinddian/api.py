@@ -196,6 +196,29 @@ def classify_reject(pid: str, payload: dict = Body(default={}), settings: Settin
         raise HTTPException(502, str(e)) from e
 
 
+@app.post("/api/classify/proposals/batch", dependencies=[Depends(require_auth), Depends(require_csrf)])
+def classify_batch(payload: dict = Body(...), settings: Settings = Depends(_settings)) -> dict:
+    """{ids: [...], action: approve|reject, reason?} — DMIT applies sequentially under one lock,
+    re-reading the target before each write and renumbering D-/L- ids."""
+    _classify_guard(settings)
+    action = payload.get("action")
+    if action not in ("approve", "reject"):
+        raise HTTPException(400, "action must be approve|reject")
+    try:
+        return classify_remote.batch(list(payload.get("ids") or []), action == "approve", str(payload.get("reason") or ""))
+    except classify_remote.RemoteError as e:
+        raise HTTPException(502, str(e)) from e
+
+
+@app.post("/api/classify/proposals/{pid}/restore", dependencies=[Depends(require_auth), Depends(require_csrf)])
+def classify_restore(pid: str, settings: Settings = Depends(_settings)) -> dict:
+    _classify_guard(settings)
+    try:
+        return classify_remote.restore(pid)
+    except classify_remote.RemoteError as e:
+        raise HTTPException(502, str(e)) from e
+
+
 @app.get("/")
 def index() -> FileResponse:
     index_path = WEB_DIR / "index.html"

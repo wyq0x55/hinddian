@@ -2,8 +2,8 @@
 Description=hinddian classify every 15 min
 
 [Timer]
-OnBootSec=5min
-OnUnitActiveSec=15min
+# wall-clock schedule: survives stop/start (OnUnitActiveSec stalls after a restart)
+OnCalendar=*:0/15
 RandomizedDelaySec=60
 Persistent=true
 

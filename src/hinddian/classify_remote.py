@@ -74,7 +74,7 @@ def stats() -> dict:
 
 
 def proposals(status: str = "pending") -> list[dict]:
-    if status not in ("pending", "applied", "rejected", "all"):
+    if status not in ("pending", "applied", "rejected", "ignored_by_rule", "all"):
         status = "pending"
     return cached(f"proposals:{status}", ["proposals", "--json", "--status", status, "--limit", "100"])
 
@@ -94,6 +94,30 @@ def decide(pid: str, approve: bool, reason: str = "") -> dict:
         safe = re.sub(r"[^\w\u4e00-\u9fff ，。、,.!?！？:：()（）-]", "", reason)[:200]
         args = ["reject", pid] + (["--reason", f"'{safe}'"] if safe else [])
     data = _ssh(args, timeout=40)
+    invalidate()
+    return data
+
+
+def _safe_reason(reason: str) -> str:
+    return re.sub(r"[^\w\u4e00-\u9fff ，。、,.!?！？:：()（）-]", "", reason or "")[:200]
+
+
+def batch(ids: list[str], approve: bool, reason: str = "") -> dict:
+    ids = [i for i in ids if isinstance(i, str)][:100]
+    if not ids or not all(_PID.match(i) for i in ids):
+        raise RemoteError("bad proposal ids")
+    args = ["approve-batch" if approve else "reject-batch", *ids]
+    if not approve and _safe_reason(reason):
+        args += ["--reason", f"'{_safe_reason(reason)}'"]
+    data = _ssh(args, timeout=120)
+    invalidate()
+    return data
+
+
+def restore(pid: str) -> dict:
+    if not _PID.match(pid):
+        raise RemoteError("bad proposal id")
+    data = _ssh(["restore", pid], timeout=30)
     invalidate()
     return data
 
