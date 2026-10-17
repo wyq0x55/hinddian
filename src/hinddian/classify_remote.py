@@ -30,13 +30,13 @@ class RemoteError(RuntimeError):
     pass
 
 
-def _ssh(args: list[str], timeout: int = 25) -> Any:
+def _ssh(args: list[str], timeout: int = 25, binary: str = "hinddian-classify") -> Any:
     s = get_settings()
     cmd = [
         "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
         "-o", "ControlMaster=auto", "-o", "ControlPath=/run/hinddian-ssh-%C",
         "-o", "ControlPersist=300",
-        s.classify_ssh_host, "hinddian-classify", *args,
+        s.classify_ssh_host, binary, *args,
     ]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -145,3 +145,36 @@ def hindsight_stats() -> dict | None:
         }
     except Exception:  # noqa: BLE001
         return {"error": "unreachable"}
+
+
+# ---------------- batch gate (hinddian-batch on DMIT) ----------------
+_PROJ = re.compile(r"^[\w\u4e00-\u9fff.-]{1,40}$")
+SYNC_STATUS = "/var/lib/hinddian/hindsight-sync-status.json"
+
+
+def gate() -> dict:
+    now = time.time()
+    with _lock:
+        hit = _cache.get("gate")
+        if hit and now - hit[0] < 15:
+            return hit[1]
+    data = _ssh(["gate", "--json"], binary="hinddian-batch")
+    with _lock:
+        _cache["gate"] = (time.time(), data)
+    return data
+
+
+def approve_batch(project: str) -> dict:
+    if not _PROJ.match(project) or project in ("holdout", "通用-未定"):
+        raise RemoteError("bad project")
+    data = _ssh(["approve", project], timeout=40, binary="hinddian-batch")
+    invalidate()
+    return data
+
+
+def sync_status() -> dict | None:
+    try:
+        with open(SYNC_STATUS) as f:
+            return json.load(f)
+    except Exception:  # noqa: BLE001
+        return None

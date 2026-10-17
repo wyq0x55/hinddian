@@ -156,8 +156,28 @@ def classify_stats(settings: Settings = Depends(_settings)) -> dict:
     except classify_remote.RemoteError as e:
         data = {"reachable": False, "error": str(e)}
     data["hindsight"] = classify_remote.hindsight_stats()
-    data["hindsight_retain_enabled"] = settings.hindsight_retain_enabled
+    sync = classify_remote.sync_status()
+    data["obsidian_sync"] = sync
+    data["hindsight_retain_enabled"] = settings.hindsight_retain_enabled or bool(sync)
     return data
+
+
+@app.get("/api/gate", dependencies=[Depends(require_auth)])
+def batch_gate(settings: Settings = Depends(_settings)) -> dict:
+    _classify_guard(settings)
+    try:
+        return classify_remote.gate()
+    except classify_remote.RemoteError as e:
+        raise HTTPException(502, str(e)) from e
+
+
+@app.post("/api/gate/{project}/approve", dependencies=[Depends(require_auth), Depends(require_csrf)])
+def batch_approve(project: str, settings: Settings = Depends(_settings)) -> dict:
+    _classify_guard(settings)
+    try:
+        return classify_remote.approve_batch(project)
+    except classify_remote.RemoteError as e:
+        raise HTTPException(400, str(e)) from e
 
 
 @app.get("/api/classify/proposals", dependencies=[Depends(require_auth)])
