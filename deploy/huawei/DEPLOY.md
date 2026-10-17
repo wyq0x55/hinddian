@@ -127,3 +127,14 @@ rm -f /tmp/iphone.pem /tmp/iphone.key
 systemctl stop hinddian
 # 恢复 Caddyfile 备份后 reload
 ```
+
+## 10. 归类阶段（v0.2，DMIT pi）
+
+`.env` 追加（600）：
+
+```bash
+CLASSIFY_SSH_HOST=dmit-vps          # 华为 root ~/.ssh/config 里已有（session-distill 同款）
+HINDSIGHT_API_KEY=…                 # 从 /opt/hindsight/secrets.env 的 HINDSIGHT_API_TENANT_API_KEY 拷，勿打印
+```
+
+hinddian 通过 `ssh dmit-vps hinddian-classify …` 读统计/建议、执行确认/拒绝；DMIT 侧安装见 `classify/README.md`。

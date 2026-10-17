@@ -34,6 +34,7 @@
 ```
 src/hinddian/     FastAPI + topic resolver + status store + sync stubs
 web/              Magpie-like dark dashboard (static SPA)
+classify/         DMIT 上的 pi 归类阶段（待入库 → 主题笔记 / 待确认建议）
 scripts/          run_dev.sh
 deploy/           systemd + Caddy snippet examples
 ARCHITECTURE.md   三层模型与同步方向
