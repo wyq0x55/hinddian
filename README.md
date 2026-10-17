@@ -5,7 +5,7 @@ Obsidian 原子笔记为唯一人读来源；**hinddian-memory MCP** 供 Agent �
 ## Quick start (Huawei)
 
 ```bash
-cp .env.example .env   # fill HINDSIGHT_API_KEY; optional TYPESAFE_API_KEY for Jev
+cp .env.example .env   # fill HINDSIGHT_API_KEY; Jev uses Magpie :3425/v1/systemone (optional TYPESAFE_API_KEY cloud fallback)
 pip install -e .
 uvicorn hinddian.api:app --host 127.0.0.1 --port 8787
 ```
@@ -20,7 +20,7 @@ MCP: `POST http://127.0.0.1:8787/mcp` (Bearer). Public: `http://<huawei>/hinddia
 
 ## Jev
 
-Set `TYPESAFE_API_KEY` in `/opt/hinddian/.env` or `/etc/hinddian-memory.env`. Without it, gates fall back to Magpie `group/auto-flash`.
+Primary: Magpie local gateway `POST /v1/systemone` (Bearer `magpie`, model `typesafe/jev-latest`). On Magpie hosts the hooks call it directly; on Huawei `magpie-tunnel.service` forwards `:3425` to DMIT Magpie. Add the provider once on Magpie: `magpie provider add typesafe <key>` then `magpie provider models typesafe +jev-latest`. Optional cloud: `TYPESAFE_API_KEY`. Else LLM fallback `group/auto-flash`.
 
 ## Docs
 
