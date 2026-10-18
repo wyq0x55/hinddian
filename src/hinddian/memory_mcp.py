@@ -1,6 +1,6 @@
 """hinddian-memory MCP (HTTP JSON-RPC) + REST helpers for Magpie hooks.
 
-Tools: routing_global, routing_project, recall, get_note, upsert_note, list_notes, push_draft
+Tools: routing_global, routing_project, recall, get_note, upsert_note, suggest_correction, list_notes, push_draft
 Magpie transport: http → POST /mcp (JSON-RPC). Also REST under /api/memory/* for hooks.
 Vault ops run locally if VAULT_ROOT exists, else via SSH to CLASSIFY_SSH_HOST (DMIT).
 """
@@ -79,13 +79,18 @@ TOOLS = [
     },
     {
         "name": "upsert_note",
-        "description": "Write atomic note with 4-state verdict: add|update|supersede|noop. Writes Obsidian only; sync layer updates Hindsight. Never write secrets.",
+        "description": (
+            "Gated write to Obsidian (SoT). Actions: add|update|supersede|noop|obsolete. "
+            "tip/preference and face_correction=true may write directly (auto_verdict OK). "
+            "decision/architecture without user_confirmed=true is queued as a dashboard suggestion (no silent write). "
+            "Hard delete forbidden — use supersede or obsolete. Never Hindsight retain. No secrets."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "description": "add|update|supersede|noop"},
+                "action": {"type": "string", "description": "add|update|supersede|noop|obsolete (not delete)"},
                 "id": {"type": "string"},
-                "type": {"type": "string"},
+                "type": {"type": "string", "description": "decision|lesson|tip|preference"},
                 "project": {"type": "string"},
                 "title": {"type": "string"},
                 "slug": {"type": "string"},
@@ -95,7 +100,35 @@ TOOLS = [
                 "supersedes": {"type": "array", "items": {"type": "string"}},
                 "tags": {"type": "array", "items": {"type": "string"}},
                 "sources": {"type": "array", "items": {"type": "string"}},
-                "auto_verdict": {"type": "boolean", "description": "If true, Jev decides 4-state against similar notes"},
+                "auto_verdict": {"type": "boolean", "description": "Jev 4-state; OK for tip/preference"},
+                "face_correction": {"type": "boolean", "description": "User explicitly corrected a wrong memory in this turn"},
+                "user_confirmed": {"type": "boolean", "description": "User one-line confirmed this decision write"},
+                "mode": {"type": "string", "description": "suggest = force queue to dashboard"},
+                "correction_reason": {"type": "string"},
+            },
+            "required": ["title"],
+        },
+    },
+    {
+        "name": "suggest_correction",
+        "description": (
+            "Queue an Agent memory correction for dashboard approval (preferred for decision/architecture). "
+            "Does not write Obsidian until user approves. Use when unsure or when changing a decision note."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "description": "update|supersede|obsolete|add"},
+                "id": {"type": "string"},
+                "type": {"type": "string"},
+                "project": {"type": "string"},
+                "title": {"type": "string"},
+                "scene": {"type": "string"},
+                "practice": {"type": "string"},
+                "reason": {"type": "string"},
+                "supersedes": {"type": "array", "items": {"type": "string"}},
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "correction_reason": {"type": "string"},
             },
             "required": ["title"],
         },
@@ -189,24 +222,39 @@ def call_tool(name: str, args: dict) -> Any:
 
     if name == "upsert_note":
         payload = dict(args)
+        # Never allow auto_verdict to bypass decision gate silently: keep flags.
         if payload.get("auto_verdict"):
-            cands = call_tool(
-                "list_notes",
-                {"project": payload.get("project"), "type": payload.get("type"), "status": "active", "limit": 20},
-            )
-            digest = f"{payload.get('title')}\n{payload.get('scene')}\n{payload.get('practice')}"
-            ver = jev.write_verdict(digest, cands if isinstance(cands, list) else [])
-            if ver.ok:
-                if isinstance(ver.value, str):
-                    payload["action"] = ver.value
-                elif isinstance(ver.raw, dict) and ver.raw.get("verdict"):
-                    payload["action"] = ver.raw["verdict"]
-                    if ver.raw.get("target_id"):
-                        payload["id"] = ver.raw["target_id"]
+            typ = (payload.get("type") or "").lower()
+            if typ in ("decision",) and not (
+                payload.get("user_confirmed") or payload.get("face_correction")
+            ):
+                # Force suggest path instead of silent auto write
+                payload["mode"] = payload.get("mode") or "suggest"
+            else:
+                cands = call_tool(
+                    "list_notes",
+                    {"project": payload.get("project"), "type": payload.get("type"), "status": "active", "limit": 20},
+                )
+                digest = f"{payload.get('title')}\n{payload.get('scene')}\n{payload.get('practice')}"
+                ver = jev.write_verdict(digest, cands if isinstance(cands, list) else [])
+                if ver.ok:
+                    if isinstance(ver.value, str):
+                        payload["action"] = ver.value
+                    elif isinstance(ver.raw, dict) and ver.raw.get("verdict"):
+                        payload["action"] = ver.raw["verdict"]
+                        if ver.raw.get("target_id"):
+                            payload["id"] = ver.raw["target_id"]
             payload.pop("auto_verdict", None)
         if _vault_local():
             return _notes_mod().upsert_note(payload)
         return _ssh_cli(["upsert_note"], payload)
+
+    if name == "suggest_correction":
+        payload = dict(args)
+        payload["mode"] = "suggest"
+        if _vault_local():
+            return _notes_mod().enqueue_correction(payload)
+        return _ssh_cli(["suggest_correction"], payload)
 
     if name == "push_draft":
         meta_keys = (
@@ -438,3 +486,40 @@ async def api_classify_turn(request: Request, authorization: str | None = Header
     projects = [p["name"] for p in g.get("projects", [])]
     r = jev.classify_turn(args.get("turn", "") or args.get("text", ""), projects)
     return {"ok": r.ok, "value": r.value, "confidence": r.confidence, "source": r.source, "error": r.error}
+
+
+@router.get("/api/memory/corrections")
+def api_list_corrections(status: str = "pending", authorization: str | None = Header(default=None)):
+    _check_auth(authorization)
+    if _vault_local():
+        return _notes_mod().list_corrections(status=status)
+    return _ssh_cli(["list_corrections", f"--status={status}"])
+
+
+@router.post("/api/memory/corrections/{cid}/approve")
+async def api_approve_correction(cid: str, authorization: str | None = Header(default=None)):
+    _check_auth(authorization)
+    if _vault_local():
+        return _notes_mod().decide_correction(cid, approve=True)
+    return _ssh_cli(["decide_correction", "--id", cid, "--approve"])
+
+
+@router.post("/api/memory/corrections/{cid}/reject")
+async def api_reject_correction(cid: str, request: Request, authorization: str | None = Header(default=None)):
+    _check_auth(authorization)
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    reason = str((body or {}).get("reason") or "")
+    if _vault_local():
+        return _notes_mod().decide_correction(cid, approve=False, reason=reason)
+    return _ssh_cli(["decide_correction", "--id", cid, "--reject", "--reason", reason])
+
+
+@router.post("/api/memory/suggest_correction")
+async def api_suggest_correction(request: Request, authorization: str | None = Header(default=None)):
+    _check_auth(authorization)
+    args = await request.json()
+    return call_tool("suggest_correction", args)

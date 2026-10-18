@@ -241,6 +241,41 @@ def classify_restore(pid: str, settings: Settings = Depends(_settings)) -> dict:
         raise HTTPException(502, str(e)) from e
 
 
+
+@app.get("/api/corrections", dependencies=[Depends(require_auth)])
+def list_agent_corrections(status: str = "pending") -> list[dict]:
+    """Agent gated-upsert suggestions queued on DMIT (alongside distill proposals)."""
+    try:
+        if memory_mcp._vault_local():
+            return memory_mcp._notes_mod().list_corrections(status=status)
+        return memory_mcp._ssh_cli(["list_corrections", f"--status={status}", "--limit", "100"])
+    except Exception as e:
+        raise HTTPException(502, str(e)[:300]) from e
+
+
+@app.post("/api/corrections/{cid}/approve", dependencies=[Depends(require_auth), Depends(require_csrf)])
+def approve_agent_correction(cid: str) -> dict:
+    try:
+        if memory_mcp._vault_local():
+            return memory_mcp._notes_mod().decide_correction(cid, approve=True)
+        return memory_mcp._ssh_cli(["decide_correction", "--id", cid, "--approve"])
+    except Exception as e:
+        raise HTTPException(502, str(e)[:300]) from e
+
+
+@app.post("/api/corrections/{cid}/reject", dependencies=[Depends(require_auth), Depends(require_csrf)])
+def reject_agent_correction(cid: str, payload: dict = Body(default={})) -> dict:
+    reason = str((payload or {}).get("reason") or "")
+    try:
+        if memory_mcp._vault_local():
+            return memory_mcp._notes_mod().decide_correction(cid, approve=False, reason=reason)
+        return memory_mcp._ssh_cli(
+            ["decide_correction", "--id", cid, "--reject", "--reason", reason]
+        )
+    except Exception as e:
+        raise HTTPException(502, str(e)[:300]) from e
+
+
 @app.get("/")
 def index() -> FileResponse:
     index_path = WEB_DIR / "index.html"

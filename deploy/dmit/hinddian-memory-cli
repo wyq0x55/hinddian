@@ -5,7 +5,7 @@ import argparse, json, os, sys
 from pathlib import Path
 
 # Prefer /opt/hinddian/src over classify copy
-_paths = [str(Path(__file__).resolve().parents[2] / "src"), "/opt/hinddian-classify/src", "/opt/hinddian/src"]
+_paths = ["/opt/hinddian/src", str(Path(__file__).resolve().parents[2] / "src"), "/opt/hinddian-classify/src"]
 for _p in _paths:
     if _p not in sys.path and Path(_p).is_dir():
         sys.path.insert(0, _p)
@@ -30,6 +30,7 @@ def main():
     ap.add_argument("cmd", choices=[
         "routing_global", "routing_project", "get_note", "list_notes",
         "upsert_note", "push_draft", "export_routing",
+        "suggest_correction", "list_corrections", "decide_correction",
     ])
     ap.add_argument("--project")
     ap.add_argument("--id")
@@ -37,6 +38,9 @@ def main():
     ap.add_argument("--status", default="active")
     ap.add_argument("--limit", type=int, default=50)
     ap.add_argument("--json", dest="payload", default=None, help="JSON payload (or pass via stdin)")
+    ap.add_argument("--approve", action="store_true")
+    ap.add_argument("--reject", action="store_true")
+    ap.add_argument("--reason", default="")
     a = ap.parse_args()
     if a.cmd == "routing_global":
         out = notes.routing_global()
@@ -48,6 +52,17 @@ def main():
         out = notes.list_notes(project=a.project, type_=a.type, status=a.status, limit=a.limit)
     elif a.cmd == "upsert_note":
         out = notes.upsert_note(_payload(a.payload))
+    elif a.cmd == "suggest_correction":
+        pl = _payload(a.payload)
+        pl["mode"] = "suggest"
+        out = notes.enqueue_correction(pl)
+    elif a.cmd == "list_corrections":
+        out = notes.list_corrections(status=a.status or "pending", limit=a.limit)
+    elif a.cmd == "decide_correction":
+        if a.reject:
+            out = notes.decide_correction(a.id or "", approve=False, reason=a.reason or "")
+        else:
+            out = notes.decide_correction(a.id or "", approve=True, reason=a.reason or "")
     elif a.cmd == "push_draft":
         pl = _payload(a.payload)
         meta = (

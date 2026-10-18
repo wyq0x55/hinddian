@@ -14,9 +14,13 @@ from typing import Any
 
 VAULT = pathlib.Path(os.environ.get("VAULT_ROOT") or os.environ.get("HC_VAULT") or "/srv/obsidian/vault")
 DRAFTS = pathlib.Path(os.environ.get("HB_DRAFTS") or "/var/lib/hinddian/drafts")
+CORRECTIONS = pathlib.Path(os.environ.get("HB_CORRECTIONS") or "/var/lib/hinddian/agent_corrections")
 ROUTING_CACHE = pathlib.Path(os.environ.get("HINDDIAN_ROUTING") or "/var/lib/hinddian/routing")
 OWNER = os.environ.get("HC_OWNER", "obsidian")
 FOLDER = {"decision": "决策", "lesson": "经验"}
+HARD_DELETE_ACTIONS = {"delete", "remove", "purge", "hard_delete", "forget", "erase"}
+SOFT_RETIRE_ACTIONS = {"obsolete", "retire", "archive"}
+AUTO_WRITE_TYPES = {"tip"}  # preference maps to tip+tag
 SECRET_RE = [
     re.compile(r"(?i)(password|passwd|secret|token|api[_-]?key|bearer)\s*[:=]\s*['\"]?[A-Za-z0-9_\-\.]{12,}"),
     re.compile(r"sk-[A-Za-z0-9]{16,}"),
@@ -219,7 +223,10 @@ def routing_global() -> dict:
         "guidance": (
             "稳定前缀：本路由表。易变 recall 结果放对话后部。"
             "先 match 项目；再看项目路由的 when_to_recall；不需要就跳过。"
-            "写入只走 upsert_note / 流水线，禁止 Hindsight retain。"
+            "写入：禁止 Hindsight retain。优先 hooks→草稿。"
+            "门控 upsert：tip/preference 与用户当面纠错(face_correction)可直接 upsert_note；"
+            "decision/架构定论须 user_confirmed=true 或走 suggest_correction（仪表盘确认）；"
+            "禁止硬删，只用 supersede/obsolete。"
         ),
     }
 
@@ -312,13 +319,154 @@ def list_notes(*, project: str | None = None, type_: str | None = None, status: 
     return sorted(out, key=lambda x: x["title"])
 
 
+def _norm_type(raw: str | None) -> tuple[str, list[str]]:
+    """Map preference→tip+tag; unknown→lesson."""
+    t = (raw or "lesson").strip().lower()
+    extra: list[str] = []
+    if t in ("preference", "pref", "prefs"):
+        return "tip", ["preference"]
+    if t not in ("decision", "lesson", "tip"):
+        return "lesson", []
+    return t, extra
+
+
+def _gate_flags(payload: dict) -> dict:
+    return {
+        "face_correction": bool(
+            payload.get("face_correction")
+            or payload.get("user_face_correction")
+            or payload.get("face_correct")
+        ),
+        "user_confirmed": bool(
+            payload.get("user_confirmed")
+            or payload.get("confirmed")
+            or payload.get("_from_dashboard")
+        ),
+        "mode": str(payload.get("mode") or "").strip().lower(),
+    }
+
+
+def _write_allowed(typ: str, tags: list[str], flags: dict, *, action: str, notes: dict, supersedes: list[str]) -> bool:
+    """Gated upsert policy: tip/preference & face-correction auto; decision needs confirm."""
+    if flags["user_confirmed"] or flags["face_correction"]:
+        return True
+    if typ in AUTO_WRITE_TYPES or "preference" in (tags or []):
+        return True
+    if flags["mode"] in ("suggest", "suggestion", "queue"):
+        return False
+    if typ == "decision":
+        return False
+    # lesson: allow add/update; superseding a decision still gated
+    if action == "supersede":
+        for old in supersedes:
+            if old in notes and notes[old].get("type") == "decision":
+                return False
+    return True
+
+
+def enqueue_correction(payload: dict) -> dict:
+    """Queue Agent correction for dashboard approval (Obsidian SoT; no silent decision write)."""
+    CORRECTIONS.mkdir(parents=True, exist_ok=True)
+    ts = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    title = safe_title(payload.get("title") or payload.get("id") or "correction")
+    cid = f"ac-{ts}-{slugify(title)[:24]}"
+    clean = {
+        k: payload[k]
+        for k in (
+            "action", "verdict", "id", "target_id", "type", "project", "title", "slug",
+            "scene", "practice", "reason", "supersedes", "tags", "sources", "related",
+            "origin", "face_correction", "correction_reason",
+        )
+        if k in payload and payload[k] is not None
+    }
+    clean["action"] = (clean.get("action") or clean.get("verdict") or "update").lower()
+    doc = {
+        "id": cid,
+        "status": "pending",
+        "created_at": dt.datetime.now().isoformat(timespec="seconds"),
+        "kind": "agent_correction",
+        "summary": title,
+        "type": clean.get("type") or "",
+        "project": clean.get("project") or "",
+        "action": clean.get("action"),
+        "target_id": clean.get("id") or clean.get("target_id") or "",
+        "reason": str(payload.get("correction_reason") or payload.get("reason") or "")[:500],
+        "payload": clean,
+    }
+    path = CORRECTIONS / f"{cid}.json"
+    path.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        os.chmod(path, 0o664)
+    except Exception:
+        pass
+    return {
+        "ok": True,
+        "action": "suggested",
+        "queued": True,
+        "suggestion_id": cid,
+        "hint": "decision/架构类已入仪表盘「Agent 修正」队列；确认后才写 Obsidian。或请用户一句话确认后带 user_confirmed=true 再 upsert。",
+    }
+
+
+def list_corrections(*, status: str = "pending", limit: int = 50) -> list[dict]:
+    if not CORRECTIONS.is_dir():
+        return []
+    out: list[dict] = []
+    for p in sorted(CORRECTIONS.glob("ac-*.json"), reverse=True):
+        try:
+            doc = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if status != "all" and doc.get("status") != status:
+            continue
+        out.append(doc)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def decide_correction(cid: str, *, approve: bool, reason: str = "") -> dict:
+    cid = "".join(c for c in (cid or "") if c.isalnum() or c in "-_")
+    path = CORRECTIONS / f"{cid}.json"
+    if not path.is_file():
+        return {"ok": False, "error": "not_found", "id": cid}
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    if doc.get("status") != "pending":
+        return {"ok": False, "error": "not_pending", "status": doc.get("status"), "id": cid}
+    if approve:
+        pl = dict(doc.get("payload") or {})
+        pl["user_confirmed"] = True
+        pl["_from_dashboard"] = True
+        result = upsert_note(pl)
+        doc["status"] = "applied" if result.get("ok") else "failed"
+        doc["applied_at"] = dt.datetime.now().isoformat(timespec="seconds")
+        doc["apply_result"] = result
+        path.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+        return {"ok": bool(result.get("ok")), "id": cid, "status": doc["status"], "result": result}
+    doc["status"] = "rejected"
+    doc["rejected_at"] = dt.datetime.now().isoformat(timespec="seconds")
+    doc["reject_reason"] = (reason or "")[:300]
+    path.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"ok": True, "id": cid, "status": "rejected"}
+
+
 def upsert_note(payload: dict) -> dict:
-    """4-state write. payload: action/add|update|supersede|noop, id?, type, project, title, scene, practice, reason, supersedes?, tags?, sources?"""
+    """Gated 4-state write. tip/preference & face_correction auto; decision needs confirm or suggest queue.
+    No hard delete — supersede/obsolete only. Obsidian SoT; sync layer follows notes.
+    """
     action = (payload.get("action") or payload.get("verdict") or "add").lower()
+    if action in HARD_DELETE_ACTIONS:
+        return {
+            "ok": False,
+            "error": "hard_delete_forbidden",
+            "hint": "Use action=supersede (with supersedes=[old_id]) or action=obsolete. Never delete.",
+        }
     if action in ("noop", "ignore"):
         return {"ok": True, "action": "noop", "reason": payload.get("reason", "noop")}
+
     notes = load_notes(include_inactive=True)
-    typ = payload.get("type") if payload.get("type") in ("decision", "lesson", "tip") else "lesson"
+    typ, extra_tags = _norm_type(payload.get("type"))
+    tags = list(dict.fromkeys(list(payload.get("tags") or []) + extra_tags))
     project = (payload.get("project") or "").strip()
     if typ != "tip" and not project:
         project = "通用-未定"
@@ -326,6 +474,34 @@ def upsert_note(payload: dict) -> dict:
     slug = slugify(payload.get("slug") or title)
     target_id = payload.get("id") or payload.get("target_id") or ""
     supersedes = list(payload.get("supersedes") or [])
+    flags = _gate_flags(payload)
+
+    # Soft retire
+    if action in SOFT_RETIRE_ACTIONS:
+        if not target_id or target_id not in notes:
+            return {"ok": False, "error": "obsolete_needs_id", "hint": "Pass id of note to mark obsolete"}
+        if not _write_allowed(notes[target_id].get("type") or typ, tags, flags, action="obsolete", notes=notes, supersedes=[]):
+            pl = dict(payload)
+            pl["action"] = "obsolete"
+            pl["id"] = target_id
+            pl["title"] = notes[target_id].get("title") or title
+            pl["type"] = notes[target_id].get("type") or typ
+            return enqueue_correction(pl)
+        n = notes[target_id]
+        n["status"] = "obsolete"
+        n["updated"] = today()
+        write_file(n["path"], render(n, notes))
+        return {"ok": True, "action": "obsolete", "id": target_id, "path": n["path"]}
+
+    # Gate before write
+    if not _write_allowed(typ, tags, flags, action=action, notes=notes, supersedes=supersedes):
+        pl = dict(payload)
+        pl["type"] = typ
+        pl["tags"] = tags
+        pl["project"] = project
+        pl["title"] = title
+        pl["action"] = action
+        return enqueue_correction(pl)
 
     if action == "update":
         if target_id not in notes:
@@ -339,21 +515,20 @@ def upsert_note(payload: dict) -> dict:
                 updated=today(),
                 origin=payload.get("origin") or n.get("origin") or "upsert",
             )
-            if payload.get("tags"):
-                n["tags"] = list(dict.fromkeys((n.get("tags") or []) + list(payload["tags"])))
+            if tags:
+                n["tags"] = list(dict.fromkeys((n.get("tags") or []) + tags))
             if payload.get("sources"):
                 n["sources"] = list(dict.fromkeys((n.get("sources") or []) + list(payload["sources"])))
             n["related"] = n.get("related") or []
             n["supersedes"] = n.get("supersedes") or []
             write_file(n["path"], render(n, notes))
-            return {"ok": True, "action": "update", "id": target_id, "path": n["path"]}
+            return {"ok": True, "action": "update", "id": target_id, "path": n["path"], "gated": "auto"}
 
     if action in ("add", "create", "supersede"):
         nid = target_id if target_id and action != "supersede" else (
             f"tip/{slug}" if typ == "tip" else f"proj/{project}/{typ}/{slug}"
         )
         if action == "supersede" or nid in notes:
-            # new id for supersede
             if action == "supersede" or nid in notes:
                 nid = f"tip/{slug}" if typ == "tip" else f"proj/{project}/{typ}/{slug}"
                 if nid in notes:
@@ -366,7 +541,7 @@ def upsert_note(payload: dict) -> dict:
             "path": path,
             "type": typ,
             "project": "" if typ == "tip" else project,
-            "tags": list(payload.get("tags") or []),
+            "tags": tags,
             "status": "active",
             "sources": list(payload.get("sources") or []),
             "related": list(payload.get("related") or []),
@@ -388,7 +563,7 @@ def upsert_note(payload: dict) -> dict:
                         n["supersedes"].append(old)
                     write_file(notes[old]["path"], render(notes[old], notes))
         write_file(path, render(n, notes))
-        return {"ok": True, "action": action if action != "create" else "add", "id": nid, "path": path}
+        return {"ok": True, "action": action if action != "create" else "add", "id": nid, "path": path, "gated": "auto"}
 
     return {"ok": False, "error": f"unknown action {action}"}
 
