@@ -1,25 +1,25 @@
 # Install hinddian as an agent plugin (Claude Code / Codex)
 
-This is **not** Magpie’s plugin market. These are **Claude Code** and **Codex / Agent Plugins** marketplace installs.
+这是 **Claude Code / Codex Agent Plugins** 市场安装，**不是** Magpie 自己的 Library 插件市场。
 
-## What ships in one plugin
+## 一包装什么
 
-| Component | Claude Code | Codex CLI / desktop |
-|-----------|-------------|---------------------|
-| MCP `hinddian-memory` (HTTP) | Yes (`.mcp.json`) | Yes (`.mcp.json` / `mcp.json`) |
-| Lifecycle hooks SessionStart + Stop | Yes | Yes, but **user must trust hooks**; not eligible for public directory with hooks |
-| Skills (`setup`, `memory`) | Yes | Yes |
+| 组件 | Claude Code | Codex CLI / 桌面 |
+|------|-------------|------------------|
+| MCP `hinddian-memory`（HTTP） | 是（`.mcp.json`） | 是（`.mcp.json` / `mcp.json`） |
+| Lifecycle hooks SessionStart + Stop | 是 | 是，但须用户 **trust hooks**；带 hooks 的包不能上 Codex 公开目录 |
+| Skills（`setup`、`memory`） | 是 | 是 |
+
+默认 MCP URL：`http://124.70.90.224/hinddian/mcp`。需要 Bearer 时在客户端 MCP 配置里加 `Authorization`（勿把 token 写进仓库）。
 
 ## Claude Code
 
 ```bash
-# Add this repo as a marketplace, then install
 claude plugin marketplace add wyq0x55/hinddian
-# or in-session:
+# 会话内：
 # /plugin marketplace add wyq0x55/hinddian
 # /plugin install hinddian@hinddian-plugins
 
-# Dev without marketplace:
 claude --plugin-dir ./plugins/hinddian
 claude plugin validate ./plugins/hinddian
 ```
@@ -29,16 +29,16 @@ claude plugin validate ./plugins/hinddian
 ```bash
 codex plugin marketplace add wyq0x55/hinddian
 codex plugin add hinddian@hinddian-plugins
-# or local:
-codex plugin marketplace add ./   # repo root with .agents/plugins/marketplace.json
+# 本地：
+codex plugin marketplace add ./   # 仓库根含 .agents/plugins/marketplace.json
 ```
 
-After enable: **review/trust** bundled hooks in Codex settings. Public Codex directory rejects plugins that ship lifecycle hooks — use marketplace / desktop / CLI install.
+启用后在 Codex 设置里 **审查/trust** 捆绑 hooks。公开目录拒收 lifecycle-hook 插件 — 用 marketplace / 桌面 / CLI。
 
-## Magpie (separate host)
+## Magpie（另一套宿主）
 
-Magpie WebDAV **does not sync Library Hooks**. Use `skills/hinddian-hooks` + `install.ps1`, or Magpie `plugin add` tools — see repo README Magpie section.
+Magpie WebDAV **不同步 Library Hooks**。用仓库 `skills/hinddian-hooks` + **Windows `install.ps1`**（或 Unix `install.py`）。见根 README「Magpie 安装」。不要用本文件里的 Claude/Codex 命令代替 Magpie hooks 安装。
 
-## Windows
+## Windows 钩子运行时
 
-Need `python3` or `py -3` on PATH for hook scripts.
+Claude/Codex 插件内的 hook 脚本需要 PATH 上有 `python3` 或 `py -3`。
