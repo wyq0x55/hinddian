@@ -1,93 +1,75 @@
-# classify · 待入库 → pi 归类 → Obsidian 主题笔记
+# classify · 会话草稿 → 原子笔记（DMIT）
 
-跑在 **DMIT**（vault 所在机）。华为 worker 提炼出的 `项目/*/待入库/*.md` 草稿，由 **pi 1.x**（`@earendil-works/pi-coding-agent`，非 pi-durable）逐条归类，合并进主题笔记——**永不一会话一笔记**。
+跑在 **DMIT**（vault 所在机）。hooks / MCP `push_draft` 产生的**会话桶草稿**落在 `/var/lib/hinddian/drafts/<项目>/`，由 **`hinddian_batch.py`**（及可选 pi 归类）合并进 Obsidian **原子笔记**——**永不一会话一笔记**，也不再写 `DECISIONS.md` / `LESSONS.md` 大文件。
 
-## 流程（Mode B）
+## 现行主路径（v0.5+）
 
 ```
-待入库草稿 ──pi(-p, --no-session)──► JSON 合并方案 ──► runner 校验
-   ├─ topic/agent-usage-tips（00-系统/agent使用技巧.md）  → 自动写入（备份 + 原子替换 + 文件锁）
-   ├─ 项目主题（项目/<名>/DECISIONS|LESSONS|PROJECT_STATE.md）→ 待确认建议（proposals/），确认后才写
-   └─ ignore                                               → 归档并记原因
-源草稿处理完即移出 vault → /var/lib/hinddian-classify/archive/<日期>/{classified,ignored,failed}/
+Magpie/Claude hooks
+  turn-end：白名单 → 会话缓冲
+  finalize：Jev keep → push_draft
+       ↓
+/var/lib/hinddian/drafts/<project>/session-*.md
+       ↓
+hinddian-batch（timer）
+  ├─ 未批准项目：满阈值(20) → 仪表盘「开始批量分析」
+  ├─ 已批准项目：增量自动
+  └─ 技巧 / 通用：可自动
+       ↓
+原子笔记（项目/*/决策|经验|…、技巧/*.md）
+       ↓
+华为 hinddian-hindsight-sync → Hindsight 索引
 ```
 
-### 过滤规则（v0.3，默认 ignore）
+Agent 查重 / 召回只用 **`mcp__hinddian-memory__recall`**（及 `list_notes` / `get_note`），**不要** `mcp__hindsight__recall`，**不要**写旧三件套路径。
 
-1. **预过滤（不调模型）**：标题是审批流/子 agent 汇报转录（`Codex agent history…`、`Inspect subagent updates`、`继续`/`echo`…）；草稿 DECISIONS 与 LESSONS 都为空；两节合计 < 80 字。
-2. **pi 判断**：AGENTS.md + skill 写明「必须 ignore」清单（过程流水、一次性排障、临时进度、寒暄、已记过、子 agent 执行细节）与 5 个正反示例；目标笔记全文 + 待确认队列都内联给它查重。
-3. **runner 规则**：置信度 < 0.6 → ignore；项目建议需 ≥ 0.8；agent使用技巧需 ≥ 0.75 才自动写（否则 ignore）；子 agent/lane 类会话需 ≥ 0.9；每条草稿最多 1 条项目建议；PROJECT_STATE 只接受 3 天内的会话；与目标笔记某节 bigram 覆盖 ≥ 0.55 或与同目标待确认建议覆盖 ≥ 0.33 → 视为重复。
-4. `hinddian-classify reeval` 把当前规则重新套到待确认建议上；被忽略的保留 JSON（status `ignored_by_rule`），`restore <id>` 可恢复。
+## 历史 Mode B（pi 逐条 · 仍可用）
 
-### 批量确认
+早期「待入库 md + pi JSON 建议」路径仍留在本目录工具中，但产品主叙事是上面的 **session drafts + batch**。若跑 pi：
 
-`approve-batch / reject-batch <id…>`：一把锁内按「目标文件 → 创建时间」顺序逐条写；每条写之前重读目标文件，`D-xxx` / `L-xxx` 按当前最大编号续号，避免撞号。
-- 项目类建议可以指向新项目（例如 `项目/ut-agent/…`）；确认时按 `_模板` 建文件。
-- 草稿 10 分钟内被改过的先跳过（worker 可能还在 upsert 同一 document_id）。
-- pi 失败 3 次的条目移到 `archive/…/failed/`。
+- `PI_CODING_AGENT_DIR=/opt/hinddian-classify/pi-agent`
+- `mcp.json`：**仅** `hinddian-memory` → `http://124.70.90.224/hinddian/mcp`
+- 已移除原生 Hindsight MCP；AGENTS 铁律见 `classify/AGENTS.md`
 
-## pi 配置（只在 DMIT，本地、不进 Magpie Library）
+### 过滤要点
 
-- 运行时：`/opt/node22`（私有 Node 22，系统 node 仍是 v20）；`/usr/local/bin/pi` 包装器 → `/opt/pi`。
-- `PI_CODING_AGENT_DIR=/opt/hinddian-classify/pi-agent`（独立 agent 目录，不碰 `~/.pi`，Magpie 不会同步它）
-  - `models.json`：provider `magpie` → `http://127.0.0.1:3425/v1`，模型 `group/auto-flash`
-  - `mcp.json`：`hinddian-memory` → `http://124.70.90.224/hinddian/mcp`（Bearer `${HINDDIAN_MCP_TOKEN}`）；已移除原生 Hindsight MCP。旧描述：`hindsight` → `http://124.70.90.224/hindsight/mcp/wanwan/`，`Authorization: Bearer ${HINDSIGHT_API_KEY}`；只暴露 `recall`（其余工具 hidden）
-  - `AGENTS.md`：归类铁律
-- skill：`/opt/hinddian-classify/skills/topic-merge/SKILL.md`，prompt 首行 `/skill:topic-merge …` 展开
-- pi 只给 `--tools mcp__hindsight__recall`：没有 bash / read / write，写入全部由 runner 做。目标笔记全文由 runner 内联进 prompt。
-- 密钥：`/etc/hinddian-classify/secrets.env`（root 600，`HINDSIGHT_API_KEY=`），不进 git。
+默认 **ignore**。预过滤空/流水账；置信度门槛；本地 bigram 去重；`approve` / `reject` / `approve-batch`。
 
-## 命令
+### 命令
 
 ```bash
-hinddian-classify run [--limit 5] [--item 项目/笔记系统/待入库/doc-xxx.md] [--dry-run]
-hinddian-classify stats --json
-hinddian-classify proposals --json [--status pending|applied|rejected|all]
-hinddian-classify recent --json
-hinddian-classify approve <id>
-hinddian-classify reject <id> --reason '…'
-hinddian-classify approve-batch <id…> | reject-batch <id…> [--reason …]
-hinddian-classify reeval [--dry-run] | restore <id>
-hinddian-classify run --dry-run --sample 30   # 抽样试跑，不写
+hinddian-batch run [--limit N] [--dry-run]
+hinddian-batch run-force   # 已批准项目草稿不足阈值也分析
+hinddian-classify run|stats|proposals|approve|reject|…   # 若仍启用 pi 路径
 ```
 
-## 定时
+定时：`hinddian-classify.timer` / batch service（见 deploy）；日志 `/var/log/hinddian-classify.log`。
 
-`hinddian-classify.timer`：每 15 分钟一次，每次最多 5 条（`MemoryMax=600M`，单个 pi 进程约 100MB RSS，单条约 5–15 秒）。日志 `/var/log/hinddian-classify.log`。
+## 与华为仪表盘
 
-## 确认流程（华为 hinddian ↔ DMIT）
+华为 hinddian 经 SSH `dmit-vps` 调 CLI：统计、批准项目、**Agent 修正**（`list_corrections` / `decide_correction`）。  
+前端写操作带 `X-Hinddian: 1`；公网 mTLS。
 
-hinddian 后端用华为已有的 root SSH 信任（与 session-distill worker 同一把 key、同一个 `dmit-vps` 别名）调用 `ssh dmit-vps hinddian-classify …`（ControlMaster 复用连接，读接口缓存 15s）。不开新公网端口、不加新 token。前端 POST 必须带 `X-Hinddian: 1` 头（防跨站请求），整站仍由 Caddy mTLS（Magpie 同一张客户端证书）守门。
+## 状态目录
 
-## 状态目录 `/var/lib/hinddian-classify`（700）
+| 路径 | 内容 |
+|------|------|
+| `/var/lib/hinddian/drafts/` | 会话草稿 |
+| `/var/lib/hinddian/agent_corrections/` | Agent 修正队列 |
+| `/var/lib/hinddian-classify/` | proposals / ledger / archive / backups |
+| `/var/lib/hinddian/hindsight-sync*.json` | 同步状态（华为侧为主） |
 
-`proposals/*.json` · `ledger.jsonl` · `archive/` · `backups/`（写入前的旧版本，不放 vault，避免 .bak 被 LiveSync 同步）· `attempts.json` · `last_run.json`
-
-## 安装
+## 安装（DMIT）
 
 ```bash
-# 在 DMIT
 tar … → /opt/hinddian-classify/src && bash /opt/hinddian-classify/src/deploy/install-dmit.sh
 systemctl enable --now hinddian-classify.timer
-cp deploy/logrotate.conf /etc/logrotate.d/hinddian-classify
 ```
 
-## v0.4 · 原子笔记 + 分批分析（2026-10-17 上线）
+## 版本摘要
 
-- 笔记格式：一条一文件，frontmatter `id`（= Hindsight document_id，英文 slug）/`type`/`project`/`status`/`supersedes`/`related`/`sources`；
-  正文 场景/做法/理由；`[[wikilink]]` 连项目枢纽 `项目/<名>/README.md`、`技巧/技巧.md` 与相关笔记。INDEX/README 链接段由脚本生成。
-- 草稿不进 vault：`session-distill-remote write 项目/*/待入库/x.md` 改写到 `/var/lib/hinddian/drafts/<推断项目>/`（`hinddian-infer`）。
-- `hinddian_batch.py`（timer `hinddian-classify.service` → `hinddian-batch run`）：
-  - 未批准项目：积累到阈值（20）→ 仪表盘「开始批量分析」→ 批量归纳（每批 20 份，对照已有笔记 update/merge）。
-  - 已批准项目：之后的新草稿每次自动增量合并；`通用-未定` 只抽通用技巧，自动。
-  - 本地去重（标题+做法 bigram）把模型误判的 create 转为 update；`repair_notes` 修断链并按相似度补 related。
-- `deploy/huawei/obsidian_hindsight_sync.py`（timer 每 10 分钟）：导出 → 新/改的 active 笔记 retain（document_id=id），删除/取代的笔记 DELETE。
-- 工具：`tools/restructure.py`（旧三件套拆分）、`tools/check_links.py`、`tools/go_live.py`。
-
-
-## v0.5 · hinddian-memory + Jev hooks（2026-10-17）
-
-- Agent 只挂 `hinddian-memory` MCP；SessionStart 注入路由表 + Jev should-recall；turn-end 只推本轮草稿。
-- pi AGENTS/skill 改为原子笔记四态（禁止写 DECISIONS.md 大文件）。
-- `hinddian-batch run-force` + 每日 timer：已批准项目草稿不足 tip 阈值也分析。
-- OTLP：Magpie settings `otel.enabled=false`。
+| 版 | 要点 |
+|----|------|
+| v0.4 | 原子笔记；草稿不进 vault；batch 阈值+批准；hindsight-sync |
+| v0.5 | hinddian-memory；Jev hooks；禁止 Agent retain；OTLP 关 |
+| v0.5+ | 会话桶 + 白名单；Jev 写失败不记；门控 upsert / Agent 修正队列 |

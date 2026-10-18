@@ -12,7 +12,7 @@
    - 项目经验 → `项目/<名>/经验/<中文标题>.md`（`type: lesson`，id `proj/<名>/lesson/<slug>`）
    - 项目「当前状态」只在 `项目/<名>/README.md` 的「当前状态」节覆盖写，不另开决策/经验文件。
 2. **禁止**创建或修改已归档的 `DECISIONS.md` / `LESSONS.md` / `PROJECT_STATE.md` / `00-系统/agent使用技巧.md`（它们在 `_归档`）。
-3. **先读目标笔记 + 用 MCP 查重，再决定。** 已经记过（哪怕说法不同）→ `ignore` 或 `update` 合并进已有 id。查重用 `mcp__hinddian-memory__recall` / `list_notes` / `get_note`（若不可用则用 `mcp__hindsight__recall`）。
+3. **先读目标笔记 + 用 MCP 查重，再决定。** 已经记过（哪怕说法不同）→ `ignore` 或 `update` 合并进已有 id。查重用 `mcp__hinddian-memory__recall` / `list_notes` / `get_note`。**禁止**使用 `mcp__hindsight__*`（含 recall/retain）；Library 不应挂原生 Hindsight MCP。
 4. **四态裁决：** `create`（新建）/ `update`（合并进已有 id）/ `supersede`（新笔记取代旧 id，旧标 superseded）/ `ignore`（noop）。禁止平行长出近重复。
 5. **不写秘密。** 密码、Token、API key、Bearer、私钥、带凭据的 URL 一律不写，写「（见 secrets，勿入库）」。
 6. **用中文**，一条一个结论：场景 / 做法 / 理由；`status` 默认 `active`。
