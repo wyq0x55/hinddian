@@ -16,8 +16,8 @@ import tarfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-SCRIPT_NAMES = ("jev.py", "session_start.py", "turn_end.py")
-DEFAULT_VER = "20261017.8"
+SCRIPT_NAMES = ("jev.py", "extract.py", "session_buf.py", "finalize.py", "session_start.py", "turn_end.py")
+DEFAULT_VER = "20261018.1"
 MEMORY_URL = os.environ.get("HINDDIAN_MEMORY_URL", "http://124.70.90.224/hinddian")
 
 
@@ -72,7 +72,7 @@ if need:
             if not m.isfile():
                 continue
             name = pathlib.Path(m.name).name
-            if name not in ("jev.py", "session_start.py", "turn_end.py"):
+            if name not in ("jev.py", "extract.py", "session_buf.py", "finalize.py", "session_start.py", "turn_end.py"):
                 continue
             (D / name).write_bytes(tf.extractfile(m).read())
     (D / ".version").write_text(V + "\\n")
@@ -135,7 +135,7 @@ def hook_defs(src_dir: Path | None = None, py: str | None = None) -> list[dict]:
     return [
         {
             "name": "hinddian-session-start",
-            "description": "SessionStart: routing + Magpie-local Jev; payload embedded (install via hinddian-hooks skill — WebDAV does not sync hooks)",
+            "description": "SessionStart: finalize prior session draft + routing + Jev should-recall (WebDAV does not sync hooks)",
             "event": "session-start",
             "command": ss,
             "agents": agents,
@@ -143,7 +143,7 @@ def hook_defs(src_dir: Path | None = None, py: str | None = None) -> list[dict]:
         },
         {
             "name": "hinddian-turn-end",
-            "description": "TurnEnd: Magpie-local Jev classify → push_draft; payload embedded",
+            "description": "TurnEnd: whitelist extract → session buffer (finalize on session-start/idle)",
             "event": "turn-end",
             "command": te,
             "agents": agents,

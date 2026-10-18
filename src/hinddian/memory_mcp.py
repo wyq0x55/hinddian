@@ -102,7 +102,7 @@ TOOLS = [
     },
     {
         "name": "push_draft",
-        "description": "Push a turn-end draft into drafts/<project>/ for later batch/incremental analysis. Not a full-session write.",
+        "description": "Push one session draft into drafts/<project>/ (session_id upserts same file). Threshold counts session drafts, not turns. Include jev_source when known.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -209,11 +209,20 @@ def call_tool(name: str, args: dict) -> Any:
         return _ssh_cli(["upsert_note"], payload)
 
     if name == "push_draft":
+        meta_keys = (
+            "type", "confidence", "origin", "session_id", "jev_source",
+            "turn_count", "finalize_reason",
+        )
+        meta = {k: args[k] for k in meta_keys if k in args and args[k] is not None}
+        # also accept nested meta
+        if isinstance(args.get("meta"), dict):
+            for k, v in args["meta"].items():
+                meta.setdefault(k, v)
         kw = dict(
             project=args.get("project") or "通用-未定",
-            title=args.get("title") or "turn",
+            title=args.get("title") or "session",
             body=args.get("body") or "",
-            meta={k: args[k] for k in ("type", "confidence", "origin") if k in args},
+            meta=meta,
         )
         if _vault_local():
             return _notes_mod().push_draft(**kw)

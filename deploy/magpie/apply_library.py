@@ -79,11 +79,13 @@ def main():
     marker = "<!-- hinddian-hooks-install -->"
     note = (
         f"\n{marker}\n"
-        "## hinddian hooks (other computers)\n\n"
-        "Magpie WebDAV **does not sync Hooks**. After `magpie webdav now` on a new PC, run once:\n\n"
-        "- Windows: `py -3 $env:USERPROFILE\\.config\\magpie\\library\\skills\\hinddian-hooks\\install.py` then `magpie library sync`\n"
-        "- Linux/macOS: `python3 ~/.config/magpie/library/skills/hinddian-hooks/install.py` then `magpie library sync`\n\n"
-        "Then Library → Hooks should list `hinddian-session-start` and `hinddian-turn-end`.\n"
+        "## hinddian install (other computers)\n\n"
+        "Magpie WebDAV **does not sync Hooks**. After `magpie webdav now`, run the skill installer once "
+        "(writes Hooks + ensures MCP `hinddian-memory`):\n\n"
+        "- Windows: `& $env:USERPROFILE\\.config\\magpie\\library\\skills\\hinddian-hooks\\install.ps1`\n"
+        "- Linux/macOS: `python3 ~/.config/magpie/library/skills/hinddian-hooks/install.py && magpie library sync`\n\n"
+        "Hooks panel: `hinddian-session-start` + `hinddian-turn-end`. "
+        "Memory writes are **session drafts** (Jev Magpie→cloud only; fail → no write).\n"
         f"{marker}\n"
     )
     if instr.is_file():

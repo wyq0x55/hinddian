@@ -394,23 +394,44 @@ def upsert_note(payload: dict) -> dict:
 
 
 def push_draft(*, project: str, title: str, body: str, meta: dict | None = None) -> dict:
+    """Write one draft file. With meta.session_id, upsert the same session draft (threshold counts sessions)."""
     project = (project or "通用-未定").strip() or "通用-未定"
     # never write into holdout from hooks
     if project == "holdout":
         project = "通用-未定"
     d = DRAFTS / project
     d.mkdir(parents=True, exist_ok=True)
+    meta = dict(meta or {})
+    sid = str(meta.get("session_id") or "").strip()
     ts = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    slug = slugify(title)[:40] or "turn"
-    path = d / f"{ts}-{slug}.md"
-    fm = ["---", f"title: {safe_title(title)}", f"project: {project}", f"origin: turn-end", f"created: {today()}"]
-    if meta:
-        for k, v in meta.items():
-            if k in ("title", "project", "body"):
-                continue
-            if isinstance(v, (str, int, float, bool)):
-                fm.append(f"{k}: {v}")
+    slug = slugify(title)[:40] or "session"
+    if sid:
+        safe_sid = "".join(c if c.isalnum() or c in "-_" else "_" for c in sid)[:80]
+        path = d / f"session-{safe_sid}.md"
+    else:
+        path = d / f"{ts}-{slug}.md"
+    origin = meta.get("origin") or ("session-finalize" if sid else "turn-end")
+    fm = [
+        "---",
+        f"title: {safe_title(title)}",
+        f"project: {project}",
+        f"origin: {origin}",
+        f"created: {today()}",
+        f"updated: {today()}",
+    ]
+    for k, v in meta.items():
+        if k in ("title", "project", "body", "origin"):
+            continue
+        if isinstance(v, (str, int, float, bool)):
+            fm.append(f"{k}: {v}")
     fm.append("---")
     text = redact("\n".join(fm) + "\n\n# " + safe_title(title) + "\n\n" + (body or "").strip() + "\n")
     path.write_text(text, encoding="utf-8")
-    return {"ok": True, "path": str(path), "project": project}
+    return {
+        "ok": True,
+        "path": str(path),
+        "project": project,
+        "session_id": sid or None,
+        "jev_source": meta.get("jev_source"),
+        "upsert": bool(sid),
+    }

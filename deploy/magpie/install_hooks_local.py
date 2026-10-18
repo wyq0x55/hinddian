@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Write hinddian hooks into *this computer's* Magpie library.json, then remind to sync.
+"""One-step local install: Magpie Hooks + hinddian-memory MCP.
 
-Why: Magpie WebDAV/backup intentionally does NOT carry hooks yet
-(https://github.com/yetone/magpie — library.Bundle has no Hooks field).
-MCP/skills/instructions sync; hooks stay empty on other PCs until this runs once.
+WebDAV does NOT sync Hooks (upstream). After pulling the skill via WebDAV
+(or GitHub skill install), run this once on each computer.
+
+DMIT remains library SoT via apply_library.py — do NOT run apply_library here.
 """
 from __future__ import annotations
 
@@ -15,31 +16,29 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+MCP_URL = os.environ.get("HINDDIAN_MCP_URL", "http://124.70.90.224/hinddian/mcp")
+MCP_NAME = "hinddian-memory"
+HOOK_NAMES = {"hinddian-session-start", "hinddian-turn-end"}
 
 
 def magpie_dirs() -> list[Path]:
     home = Path.home()
     out: list[Path] = []
-    # Magpie installed mode (all OS): ~/.config/magpie  or $XDG_CONFIG_HOME/magpie
     xdg = os.environ.get("XDG_CONFIG_HOME")
     if xdg:
         out.append(Path(xdg) / "magpie")
     out.append(home / ".config" / "magpie")
-    # Windows extras often checked by users
     appdata = os.environ.get("APPDATA")
     local = os.environ.get("LOCALAPPDATA")
     if appdata:
         out.append(Path(appdata) / "magpie")
     if local:
         out.append(Path(local) / "magpie")
-    # Portable: data/ beside magpie.exe (env hint)
     for env in ("MAGPIE_DATA", "MAGPIE_HOME"):
         v = os.environ.get(env)
         if v:
             out.append(Path(v))
-    # de-dupe
-    seen = set()
-    uniq = []
+    seen, uniq = set(), []
     for p in out:
         r = str(p)
         if r not in seen:
@@ -64,40 +63,80 @@ def find_library() -> Path:
 
 
 def load_embed():
-    # Prefer sibling embed_hooks.py (skill or deploy/magpie)
     sys.path.insert(0, str(HERE))
-    # scripts may sit beside install or in parent
     for cand in (HERE, HERE.parent):
         if (cand / "embed_hooks.py").is_file() and (cand / "jev.py").is_file():
             sys.path.insert(0, str(cand))
             break
     import embed_hooks  # type: ignore
+
     return embed_hooks
+
+
+def ensure_mcp(data: dict) -> dict:
+    bearer = None
+    for m in data.get("mcp") or []:
+        h = (m.get("headers") or {}).get("Authorization") or ""
+        if h.lower().startswith("bearer "):
+            bearer = h.split(" ", 1)[1].strip()
+            break
+    env_tok = (os.environ.get("HINDDIAN_MCP_TOKEN") or os.environ.get("HINDSIGHT_API_KEY") or "").strip()
+    if env_tok:
+        bearer = env_tok
+    agents = ["claude", "codex", "grok", "pi", "cursor", "gemini"]
+    new_mcp = [m for m in (data.get("mcp") or []) if m.get("name") not in ("hindsight", MCP_NAME)]
+    entry = {
+        "name": MCP_NAME,
+        "transport": "http",
+        "url": MCP_URL,
+        "agents": agents,
+    }
+    if bearer:
+        entry["headers"] = {"Authorization": f"Bearer {bearer}"}
+    new_mcp.insert(0, entry)
+    data["mcp"] = new_mcp
+    return {"mcp": MCP_NAME, "url": MCP_URL, "bearer": bool(bearer)}
 
 
 def main() -> int:
     lib_path = find_library()
     emb = load_embed()
-    hooks = emb.hook_defs(src_dir=Path(emb.__file__).resolve().parent)
+    # Prefer scripts shipped inside this skill folder
+    src_dir = HERE if (HERE / "jev.py").is_file() else Path(emb.__file__).resolve().parent
+    hooks = emb.hook_defs(src_dir=src_dir)
     bak = lib_path.with_suffix(lib_path.suffix + f".bak.{int(time.time())}")
     shutil.copy2(lib_path, bak)
     data = json.loads(lib_path.read_text(encoding="utf-8"))
+    mcp_info = ensure_mcp(data)
     names = {h["name"] for h in hooks}
     kept = [h for h in (data.get("hooks") or []) if h.get("name") not in names]
     data["hooks"] = kept + hooks
+    # ensure skill listed (no absolute path)
+    skills = [s for s in (data.get("skills") or []) if s.get("name") != "hinddian-hooks"]
+    skills.append({"name": "hinddian-hooks", "agents": ["claude", "codex", "grok", "cursor", "gemini"]})
+    data["skills"] = skills
     lib_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({
-        "ok": True,
-        "library": str(lib_path),
-        "backup": str(bak),
-        "hooks": [h["name"] for h in data["hooks"]],
-        "python": emb.python_bin(),
-        "ver": emb.hooks_version(),
-    }, ensure_ascii=False, indent=2))
+    hook_names = [h["name"] for h in data["hooks"] if h.get("name") in HOOK_NAMES]
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "library": str(lib_path),
+                "backup": str(bak),
+                "hooks": hook_names,
+                "all_hooks": [h.get("name") for h in data["hooks"]],
+                "mcp": mcp_info,
+                "python": emb.python_bin(),
+                "ver": emb.hooks_version(),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
     print()
-    print("Next: open Magpie → Library → Hooks — you should see hinddian-session-start / hinddian-turn-end.")
-    print("Then run:  magpie library sync")
-    print("(WebDAV still will NOT push hooks to other PCs — run this install on each PC once.)")
+    print("Next: Magpie → Library → Hooks should list hinddian-session-start / hinddian-turn-end.")
+    print("Then: magpie library sync")
+    print("Do not run apply_library.py on this PC (DMIT is SoT).")
     return 0
 
 
