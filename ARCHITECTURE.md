@@ -54,3 +54,10 @@ Magpie settings `otel.enabled=false`（WebDAV 同步到各机）；`/etc/magpie.
 | `classify/hinddian_batch.py` | 草稿批量/增量（DMIT） |
 | `deploy/huawei/obsidian_hindsight_sync.py` | Obsidian → Hindsight |
 | `deploy/magpie/*` | Hooks 嵌在 library（仅本机）；WebDAV **不同步 hooks**，靠 skill `hinddian-hooks` + 各机 `install.py` 写入 Hooks UI |
+
+
+## Magpie 安装 / 市场
+
+- **不能**靠 WebDAV 或 `magpie plugin add` 单独自动写入 Library Hooks（上游 Bundle 无 Hooks；plugin 市场装的是网关/工具）。
+- 产品路径：`skills/hinddian-hooks`（Library → Skills 从 GitHub 装）+ 本机 `install.ps1` / 插件工具 `hinddian_install`。
+- 仓库根 `package.json` 供 `magpie plugin add github:wyq0x55/hinddian`；侧边栏 Hinddian 页说明安装。

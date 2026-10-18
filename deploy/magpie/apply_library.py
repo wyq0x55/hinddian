@@ -19,7 +19,8 @@ from embed_hooks import hook_defs, hooks_version  # noqa: E402
 
 LIB = Path(os.environ.get("MAGPIE_LIBRARY") or (Path.home() / ".config/magpie/library.json"))
 MCP_URL = os.environ.get("HINDDIAN_MCP_URL", "http://124.70.90.224/hinddian/mcp")
-SKILL_SRC = HERE / "skill-hinddian-hooks"
+_REPO = HERE.parents[1]  # /workspace/hinddian
+SKILL_SRC = (_REPO / "skills" / "hinddian-hooks") if (_REPO / "skills" / "hinddian-hooks" / "SKILL.md").is_file() else (HERE / "skill-hinddian-hooks")
 SKILL_NAME = "hinddian-hooks"
 
 

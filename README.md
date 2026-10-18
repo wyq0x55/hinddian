@@ -16,6 +16,44 @@ MCP: `POST http://127.0.0.1:8787/mcp` (Bearer). Public: `http://<huawei>/hinddia
 
 WebDAV syncs MCP / skills / instructions / settings / providers (whole-file LWW).
 
+## Magpie install (marketplace-style)
+
+**Can Magpie marketplace one-click install Library Hooks?**  
+**No (hard limit).** Upstream Magpie: WebDAV/backup `Bundle` does **not** carry Hooks; `magpie plugin add` is for providers/middleware/tools/pages — enabling a plugin does **not** write Library Hooks.
+
+**Closest marketplace-grade paths that work:**
+
+| Path | User action | Writes Hooks? |
+|------|-------------|---------------|
+| **A. Library Skills (GitHub)** | Magpie → Library → Skills → paste `wyq0x55/hinddian` → install `hinddian-hooks` → run `install.ps1` once | Yes (after install.ps1) |
+| **B. Plugins** | `magpie plugin add github:wyq0x55/hinddian` → agent calls `hinddian_install` (or install.ps1) | Yes (tool/script) |
+| **C. WebDAV skill** | `magpie webdav now` then install.ps1 | Yes |
+
+### Windows（推荐 A 或 C）
+
+```powershell
+# After skill is present (WebDAV or Library→Skills from GitHub):
+magpie webdav now
+& "$env:USERPROFILE\.config\magpie\library\skills\hinddian-hooks\install.ps1"
+```
+
+Or plugin:
+
+```powershell
+magpie plugin add github:wyq0x55/hinddian
+# then ask any agent: 安装 hinddian
+```
+
+Private repo needs Magpie → Settings → GitHub token.
+
+### Verify
+
+Magpie → **Library → Hooks**: `hinddian-session-start`, `hinddian-turn-end`  
+**Library → MCP**: `hinddian-memory`
+
+Do **not** run `apply_library.py` on non-DMIT machines.
+
+
 **Magpie does NOT sync Hooks yet** (upstream `library.Bundle` has no `Hooks` field).
 Turn-end buffers by `session_id` (whitelist user+assistant); finalize on next session-start/idle → one draft.
 DMIT keeps hooks locally. Other PCs get the `hinddian-hooks` **skill** via WebDAV, then
