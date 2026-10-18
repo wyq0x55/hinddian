@@ -5,7 +5,7 @@
 ## 现行主路径（v0.5+）
 
 ```
-Magpie/Claude hooks
+Host hooks (Claude/Codex; optional Magpie adapter)
   turn-end：白名单 → 会话缓冲
   finalize：Jev keep → push_draft
        ↓

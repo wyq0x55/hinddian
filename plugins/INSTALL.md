@@ -1,6 +1,6 @@
 # Install hinddian as an agent plugin (Claude Code / Codex)
 
-这是 **Claude Code / Codex Agent Plugins** 市场安装，**不是** Magpie 自己的 Library 插件市场。
+这是 **Claude Code / Codex Agent Plugins** 市场安装（hinddian 首选宿主）。
 
 ## 一包装什么
 
@@ -35,10 +35,6 @@ codex plugin marketplace add ./   # 仓库根含 .agents/plugins/marketplace.jso
 
 启用后在 Codex 设置里 **审查/trust** 捆绑 hooks。公开目录拒收 lifecycle-hook 插件 — 用 marketplace / 桌面 / CLI。
 
-## Magpie（另一套宿主）
+## 可选 Magpie 宿主
 
-Magpie WebDAV **不同步 Library Hooks**。用仓库 `skills/hinddian-hooks` + **Windows `install.ps1`**（或 Unix `install.py`）。见根 README「Magpie 安装」。不要用本文件里的 Claude/Codex 命令代替 Magpie hooks 安装。
-
-## Windows 钩子运行时
-
-Claude/Codex 插件内的 hook 脚本需要 PATH 上有 `python3` 或 `py -3`。
+产品不依赖 Magpie。若需要：见仓库 [`adapters/magpie/README.md`](../adapters/magpie/README.md)。
