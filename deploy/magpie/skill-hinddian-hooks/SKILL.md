@@ -1,68 +1,66 @@
 ---
 name: hinddian-hooks
-description: Install hinddian Magpie MCP + session-start/turn-end hooks on this computer (WebDAV does not sync Hooks). One-step product install.
+description: Install hinddian Magpie MCP + session-start/turn-end Library Hooks on this computer. WebDAV does not sync Hooks. Marketplace-style install via Magpie Library Skills (GitHub) or plugin tools.
 ---
 
-# hinddian (Magpie install)
+# hinddian（Magpie 安装）
 
-Magpie **WebDAV does not sync Hooks** (upstream `library.Bundle` has no `Hooks` field).
-Skills / MCP / instructions sync; Hooks must be written **locally** once per PC.
+## 硬限制（上游）
 
-This skill is the product installer: **MCP (`hinddian-memory`) + Hooks** in one step.
+Magpie **WebDAV / 备份 Bundle 不同步 Hooks**（`library.Bundle` 无 Hooks 字段）。  
+Skills / MCP / instructions 会同步；**Hooks 必须每台电脑本地写一次**。
 
-## Behaviour (after install)
+插件市场（`magpie plugin add`）装的是网关/工具插件，**不会**在启用时自动写入 Library Hooks。
 
-- **session-start**: finalize prior session buffer (Jev keep → one `push_draft`); inject routing; should-recall gate
-- **turn-end**: whitelist extract (user + final assistant only) → append **session buffer** (no per-turn draft)
-- **Jev**: Magpie `127.0.0.1:3425/v1/systemone` → optional TypeSafe cloud → if both fail **do not write** (`source=none`)
-- Gate threshold **20** = ~session drafts / project, not turn scraps
+## 像插件市场一样装（推荐）
 
-## Windows (once after WebDAV / GitHub skill pull)
+### A. Magpie Library → Skills（官方技能市场路径）
 
-PowerShell:
+1. 打开 Magpie → **Library → Skills**
+2. 粘贴 GitHub：`wyq0x55/hinddian`（或本仓库 URL）→ Probe → 安装 **hinddian-hooks**
+3. Windows 再跑一次安装器（写入 Hooks 面板）：
 
 ```powershell
 magpie webdav now
-# preferred one-liner:
 & "$env:USERPROFILE\.config\magpie\library\skills\hinddian-hooks\install.ps1"
-# or:
-py -3 "$env:USERPROFILE\.config\magpie\library\skills\hinddian-hooks\install.py"
 magpie library sync
 ```
 
-If the skill path differs:
+私有仓库：Magpie Settings 里填 GitHub token。
+
+### B. Magpie Plugins（Discover / plugin add）
 
 ```powershell
-Get-ChildItem -Path "$env:USERPROFILE\.config\magpie","$env:APPDATA\magpie","$env:LOCALAPPDATA\magpie" -Recurse -Filter install.py -ErrorAction SilentlyContinue | Where-Object { $_.Directory.Name -eq 'hinddian-hooks' }
+magpie plugin add github:wyq0x55/hinddian
 ```
 
-Then Magpie → **Library → Hooks**:
+然后对任意已挂 **Magpie tools** MCP 的 Agent 说：**安装 hinddian**（调用 `hinddian_install`），或仍跑上面的 `install.ps1`。
 
-- `hinddian-session-start` (session-start)
-- `hinddian-turn-end` (turn-end)
+侧边栏会出现 **Hindian** 说明页。
 
-And **Library → MCP** should list `hinddian-memory`.
+### C. WebDAV 已拉到 skill（无 GitHub）
 
-## Linux / macOS
-
-```bash
+```powershell
 magpie webdav now
-python3 ~/.config/magpie/library/skills/hinddian-hooks/install.py
-magpie library sync
+& "$env:USERPROFILE\.config\magpie\library\skills\hinddian-hooks\install.ps1"
 ```
 
-## GitHub skill install (optional)
+## Agent 应做什么
 
-If Magpie can install skills from GitHub on this build:
+若用户说「安装 hinddian / 装记忆 hooks」：
 
-```text
-Library → Skills → from GitHub → wyq0x55/hinddian
-(path: deploy/magpie/skill-hinddian-hooks)
-```
+1. 优先调用工具 `hinddian_install`（若 Magpie 插件已启用）
+2. 否则在本机执行本 skill 目录下的 `install.ps1`（Windows）或 `install.py`（Linux/macOS）
+3. 再 `magpie library sync`
+4. 确认 Library → Hooks 有 `hinddian-session-start`、`hinddian-turn-end`；MCP 有 `hinddian-memory`
 
-Then still run `install.py` / `install.ps1` once so **Hooks** land in local `library.json`.
+## 装好后的行为
 
-## Do not
+- **session-start**：结束上一会话缓冲（Jev keep → 一次 `push_draft`）；注入路由；should-recall
+- **turn-end**：白名单抽取（用户话 + 最终回复）→ 会话缓冲（不按回合推草稿）
+- **Jev**：本机 Magpie `127.0.0.1:3425/v1/systemone` → 可选云端 → 都失败则不写（`source=none`）
 
-- Do not run `apply_library.py` on non-DMIT hosts (library SoT is DMIT).
-- Do not expect WebDAV alone to fill the Hooks panel.
+## 不要
+
+- 不要在非 DMIT 机器跑 `apply_library.py`
+- 不要指望只跑 `magpie webdav now` 就填满 Hooks 面板
