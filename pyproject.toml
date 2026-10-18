@@ -1,7 +1,7 @@
 [project]
 name = "hinddian"
 version = "0.5.0"
-description = "Hindsight + Obsidian topic memory pipeline with Magpie-style dashboard"
+description = "Host-agnostic Obsidian + Hindsight memory pipeline (hinddian-memory MCP)"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

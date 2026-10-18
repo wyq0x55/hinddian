@@ -1,8 +1,8 @@
-# Architecture — hinddian (v0.5+)
+# Architecture — hinddian (v0.6+)
 
 ## 一句话
 
-**会话是原料，原子笔记才是记忆；权威在 Obsidian，Hindsight 只做最后一层索引；Agent 只走 hinddian-memory MCP。**
+**会话是原料，原子笔记才是记忆；权威在 Obsidian，Hindsight 只做最后一层索引；Agent 只走 hinddian-memory MCP。宿主无关（Claude / Codex / 其它）；Magpie 仅为可选适配器。**
 
 ## 流水线
 
@@ -39,19 +39,19 @@ Agent 会话
 
 阈值 20 = **会话草稿数**，不是回合碎片数。
 
-## Jev（System One）
+## Jev（System One，可选）
 
 **写路径（keep / 是否入库）严格：**
 
-1. 本机 Magpie：`POST http://127.0.0.1:3425/v1/systemone`（Bearer `magpie`，model `typesafe/jev-latest`）
+1. 本机 / 隧道：`POST {JEV_BASE_URL}`（默认 `http://127.0.0.1:3425/v1/systemone`）
 2. 可选云端 TypeSafe（`TYPESAFE_API_KEY`）
 3. 都失败 → **`source=none`，本轮不写**（无松弛 LLM auto-keep）
 
-**读/UX 路径（should-recall 等）**：本机失败时仍可用 Magpie chat / soft fallback，只影响是否提示 recall，不自动写草稿。
+**读/UX 路径（should-recall 等）**：本机失败时可用 chat completions soft fallback，只影响是否提示 recall，不自动写草稿。
 
-- Magpie 各机：hooks 直连本机网关
-- 华为 API / MCP：`magpie-tunnel.service` → DMIT `:3425`
-- 仪表盘 / 日志可见 `source=jev:magpie|cloud|none`
+- 任意暴露 System One 的本机网关均可；与 Magpie 产品身份无关
+- 华为 API 可选经 SSH LocalForward 使用远端 `:3425`（infra，非产品品牌）
+- 仪表盘 / 日志：`source=jev:local|cloud|none`（`jev:magpie` 旧标签归一为 `jev:local`）
 
 用于：should-recall、项目匹配、本会话是否值得记、类型/项目分类、写入四态辅助。
 
@@ -66,7 +66,7 @@ Agent 会话
 | `suggest_correction` | 入仪表盘「Agent 修正」队列 |
 | `push_draft` | hooks / 工具推会话草稿 |
 
-Magpie Library **只挂**本 MCP，不挂原生 Hindsight MCP。
+任何宿主 **只挂**本 MCP，不挂原生 Hindsight MCP 给 Agent。
 
 ### 门控 upsert 政策
 
@@ -81,7 +81,7 @@ Magpie Library **只挂**本 MCP，不挂原生 Hindsight MCP。
 
 ## OTLP
 
-Magpie settings `otel.enabled=false`（WebDAV 同步）；`/etc/magpie.env` 保留 `MAGPIE_OTEL_ENABLED=0` 兜底。记忆主路径是 hooks，不是 OTLP。
+记忆主路径是 host hooks + MCP，不是 OTLP。各宿主自行关闭无关遥测即可。
 
 ## 组件
 
@@ -89,18 +89,12 @@ Magpie settings `otel.enabled=false`（WebDAV 同步）；`/etc/magpie.env` 保�
 |------|------|
 | `src/hinddian/memory_mcp.py` | MCP + REST（hooks / 仪表盘） |
 | `src/hinddian/notes.py` | 原子笔记 / 路由 / 四态 / 修正队列 / 草稿 |
-| `skills/hinddian-hooks/jev.py` 等 | Jev + 会话桶 + 白名单（SoT：`skills/hinddian-hooks/`） |
+| `src/hinddian/jev.py` | System One 闸门（核心，宿主无关） |
+| `plugins/hinddian/` | Claude / Codex 插件包（**首选安装**） |
 | `classify/hinddian_batch.py` | 草稿批量/增量（DMIT） |
 | `deploy/huawei/obsidian_hindsight_sync.py` | Obsidian → Hindsight；timer `hinddian-hindsight-sync` |
-| `deploy/magpie/*` | DMIT apply_library；skill 镜像；**WebDAV 不同步 Hooks** |
-| `plugins/hinddian/` | Claude / Codex 插件包 |
+| `adapters/magpie/` | **可选** Magpie skill / install / DMIT apply_library |
 | `web/` | 仪表盘（图谱、批准、Agent 修正） |
-
-## Magpie 安装 / 市场
-
-- **不能**靠 WebDAV 或单独 `magpie plugin add` 自动写入 Library Hooks。
-- 产品路径：`skills/hinddian-hooks` + 本机 **`install.ps1`（Windows）** / `install.py`（Unix）/ 工具 `hinddian_install`。
-- 仓库根 `package.json` 供 `magpie plugin add github:wyq0x55/hinddian`。
 
 ## Agent plugins (Claude / Codex)
 
@@ -108,6 +102,6 @@ Magpie settings `otel.enabled=false`（WebDAV 同步）；`/etc/magpie.env` 保�
 - 市场清单：`.claude-plugin/marketplace.json`、`.agents/plugins/marketplace.json`
 - Codex 公开目录不接受带 lifecycle hooks 的插件；用 CLI/桌面 + trust hooks
 
-## Skill 副本 SoT
+## Magpie adapter（可选）
 
-**编辑 `skills/hinddian-hooks/`**，再复制到 `deploy/magpie/skill-hinddian-hooks/` 后由 DMIT `apply_library.py` 发布。两目录应保持一致。
+见 [`adapters/magpie/README.md`](adapters/magpie/README.md)。编辑 `adapters/magpie/skills/hinddian-hooks/`，镜像到 `adapters/magpie/deploy/skill-hinddian-hooks/`，仅 DMIT 跑 `apply_library.py`。
