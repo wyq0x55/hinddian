@@ -4,9 +4,11 @@ from __future__ import annotations
 import argparse, json, os, sys
 from pathlib import Path
 
-for p in ("/opt/hinddian/src", "/opt/hinddian-classify/src", str(Path(__file__).resolve().parents[2] / "src")):
-    if p not in sys.path and Path(p).is_dir():
-        sys.path.insert(0, p)
+# Prefer /opt/hinddian/src over classify copy
+_paths = [str(Path(__file__).resolve().parents[2] / "src"), "/opt/hinddian-classify/src", "/opt/hinddian/src"]
+for _p in _paths:
+    if _p not in sys.path and Path(_p).is_dir():
+        sys.path.insert(0, _p)
 
 os.environ.setdefault("VAULT_ROOT", "/srv/obsidian/vault")
 os.environ.setdefault("HC_VAULT", "/srv/obsidian/vault")
@@ -48,11 +50,18 @@ def main():
         out = notes.upsert_note(_payload(a.payload))
     elif a.cmd == "push_draft":
         pl = _payload(a.payload)
+        meta = (
+            pl.get("meta") if isinstance(pl.get("meta"), dict)
+            else {k: pl[k] for k in (
+                "type", "confidence", "origin", "session_id", "jev_source",
+                "turn_count", "finalize_reason",
+            ) if k in pl}
+        )
         out = notes.push_draft(
             project=pl.get("project") or "通用-未定",
-            title=pl.get("title") or "turn",
+            title=pl.get("title") or "session",
             body=pl.get("body") or "",
-            meta=pl.get("meta") if isinstance(pl.get("meta"), dict) else {k: pl[k] for k in ("type", "confidence", "origin") if k in pl},
+            meta=meta,
         )
     else:
         out = notes.export_routing()

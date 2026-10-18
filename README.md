@@ -17,6 +17,7 @@ MCP: `POST http://127.0.0.1:8787/mcp` (Bearer). Public: `http://<huawei>/hinddia
 WebDAV syncs MCP / skills / instructions / settings / providers (whole-file LWW).
 
 **Magpie does NOT sync Hooks yet** (upstream `library.Bundle` has no `Hooks` field).
+Turn-end buffers by `session_id` (whitelist user+assistant); finalize on next session-start/idle → one draft.
 DMIT keeps hooks locally. Other PCs get the `hinddian-hooks` **skill** via WebDAV, then
 run install once so the Hooks panel fills.
 
@@ -31,7 +32,7 @@ Do not run `apply_library.py` on non-DMIT hosts.
 
 ## Jev
 
-Primary: Magpie local gateway `POST /v1/systemone` (Bearer `magpie`, model `typesafe/jev-latest`). On Magpie hosts the hooks call it directly; on Huawei `magpie-tunnel.service` forwards `:3425` to DMIT Magpie. Add the provider once on Magpie: `magpie provider add typesafe <key>` then `magpie provider models typesafe +jev-latest`. Optional cloud: `TYPESAFE_API_KEY`. Else LLM fallback `group/auto-flash`.
+Primary: Magpie local gateway `POST /v1/systemone` (Bearer `magpie`, model `typesafe/jev-latest`). On Magpie hosts the hooks call it directly; on Huawei `magpie-tunnel.service` forwards `:3425` to DMIT Magpie. Add the provider once on Magpie: `magpie provider add typesafe <key>` then `magpie provider models typesafe +jev-latest`. Optional cloud: `TYPESAFE_API_KEY`. If both fail: **do not write** this session (`source=none`). No loose LLM auto-keep.
 
 ## Docs
 

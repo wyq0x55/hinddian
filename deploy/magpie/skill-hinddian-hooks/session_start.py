@@ -1,13 +1,22 @@
-"""SessionStart: routing tables from hinddian; should-recall via Magpie-local Jev when possible."""
-import json, os, sys, urllib.parse, urllib.request
+"""SessionStart: finalize previous session buffer; inject routing; Jev should-recall."""
+from __future__ import annotations
+
+import json
+import os
+import sys
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import extract
+import finalize
+import session_buf
+
 url = os.environ.get("HINDDIAN_MEMORY_URL", "http://124.70.90.224/hinddian").rstrip("/")
 token = os.environ.get("HINDDIAN_MCP_TOKEN") or os.environ.get("HINDSIGHT_API_KEY") or ""
-cwd = os.environ.get("MAGPIE_CWD") or os.environ.get("PWD") or ""
-msg = os.environ.get("MAGPIE_FIRST_MESSAGE") or os.environ.get("MAGPIE_PROMPT") or ""
+
 
 def req(method, path, body=None, timeout=12):
     headers = {"Accept": "application/json"}
@@ -21,9 +30,11 @@ def req(method, path, body=None, timeout=12):
     with urllib.request.urlopen(r, timeout=timeout) as resp:
         return json.loads(resp.read())
 
-def should_recall_local(cwd_: str, message: str, projects: list) -> dict | None:
+
+def should_recall_local(cwd_: str, message: str, projects: list):
     try:
         import jev
+
         r = jev.should_recall(cwd_, message, projects)
         return {
             "ok": r.ok,
@@ -36,7 +47,22 @@ def should_recall_local(cwd_: str, message: str, projects: list) -> dict | None:
         print(f"session-start local Jev skipped: {type(e).__name__}: {str(e)[:100]}")
         return None
 
+
 def main():
+    stdin = ""
+    if not sys.stdin.isatty():
+        stdin = sys.stdin.read(50000)
+    payload = extract.parse_hook_payload(stdin)
+    cwd = payload.get("cwd") or os.environ.get("MAGPIE_CWD") or os.environ.get("PWD") or ""
+    msg = payload.get("first_message") or os.environ.get("MAGPIE_FIRST_MESSAGE") or os.environ.get("MAGPIE_PROMPT") or ""
+    new_sid = session_buf.stable_session_id(payload.get("session_id"), cwd, msg[:80] if msg else "new")
+
+    # Flush previous session drafts (Magpie has no portable session-end)
+    flushed = finalize.finalize_idle_and_others(current_sid=new_sid)
+    for fr in flushed:
+        src = fr.get("source") or fr.get("skipped")
+        print(f"hinddian finalize session={fr.get('session_id')} source={src} reason={fr.get('reason')}")
+
     try:
         global_rt = req("GET", "/api/memory/routing/global")
     except Exception as e:
@@ -49,6 +75,7 @@ def main():
     print("hinddian-memory MCP (not raw Hindsight). Stable prefix — do not rewrite.")
     print(f"Projects: {plist}")
     print(f"Guidance: {global_rt.get('guidance', '')}")
+    print("Memory write: session-bucket (one draft/session after Jev keep). Threshold counts session drafts.")
     proj = None
     blob = (cwd + " " + msg).lower()
     for p in projects:
@@ -76,13 +103,14 @@ def main():
         print(
             f"Gate should_recall=YES (source={src}). If task needs memory: MCP routing_project then "
             "recall(project=…). Put recall AFTER this prefix. Never Hindsight retain; write via "
-            "upsert_note or turn-end drafts only. No secrets in notes."
+            "upsert_note or session-finalize drafts only. No secrets in notes."
         )
     else:
         print(
             f"Gate should_recall=NO (source={src}). Skip recall unless the user asks about prior "
             "decisions. No secrets in notes."
         )
+
 
 if __name__ == "__main__":
     main()

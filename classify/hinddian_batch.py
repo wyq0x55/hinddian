@@ -3,7 +3,7 @@
 
 Drafts:   /var/lib/hinddian/drafts/<project>/*.md   (holdout/ is never touched by `run`)
 Gate:     /var/lib/hinddian/gate.json  {project: {"approved": bool, "approved_at": iso}}
-Policy:   project not yet approved: wait until >= THRESHOLD drafts -> "ready" (dashboard approve button)
+Policy:   project not yet approved: wait until >= THRESHOLD session drafts -> "ready" (dashboard approve button)
           approved project: every run processes new drafts incrementally against existing notes (automatic)
           通用-未定: tips-only extraction, automatic (global tips are always automatic)
 Commands: run | approve <project> [--now] | gate --json | process <project> [--dry-run] [--dir D] [--batch N]

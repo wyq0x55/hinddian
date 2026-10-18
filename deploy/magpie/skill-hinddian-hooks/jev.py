@@ -14,7 +14,8 @@ Secondary (optional):
   Auth: Bearer TYPESAFE_API_KEY
   Model: jev-latest
 
-Tertiary: Magpie chat completions LLM fallback (group/auto-flash).
+Write path (keep/classify): Magpie → cloud only; if both fail → do NOT write (source=none). No loose LLM auto-keep.
+Recall/routing may still use Magpie chat completions as soft UX fallback.
 
 Never log or return API keys.
 """
@@ -106,7 +107,7 @@ def _endpoints() -> list[tuple[str, str, str, str]]:
         out.append((_magpie_systemone_url(), _magpie_key(), MAGPIE_MODEL, "magpie"))
     ts = _typesafe_key()
     if ts:
-        out.append((CLOUD_URL, ts, CLOUD_MODEL, "typesafe-cloud"))
+        out.append((CLOUD_URL, ts, CLOUD_MODEL, "cloud"))
     return out
 
 
@@ -130,9 +131,11 @@ def backend_info() -> dict[str, Any]:
         for url, _key, model, label in _endpoints()
     ]
     return {
-        "prefer": eps[0]["label"] if eps else None,
+        "prefer": ("jev:" + eps[0]["label"]) if eps else None,
         "endpoints": eps,
-        "llm_fallback": GATEWAY,
+        "write_policy": "jev_only_no_llm_keep",
+        "sources": ["jev:magpie", "jev:cloud", "none"],
+        "recall_llm_fallback": GATEWAY,
         "llm_model": FALLBACK_MODEL,
         "force_cloud": _force_cloud(),
     }
@@ -302,70 +305,108 @@ def match_project(cwd: str, message: str, projects: list[str]) -> GateResult:
 
 
 def turn_worth_keeping(turn_text: str) -> GateResult:
+    """Jev-only keep gate. On failure → source=none (caller must not write)."""
     r = noul(
         (turn_text or "")[:6000],
-        "Does this single turn contain a reusable engineering decision, pitfall, or agent tip worth drafting into long-term memory? Ignore process chatter.",
-        true_c="Reusable decision/lesson/tip",
+        "Does this session (user+assistant whitelist only) contain a reusable engineering decision, pitfall, preference, or agent tip worth drafting into long-term memory? Ignore process chatter.",
+        true_c="Reusable decision/lesson/preference/tip",
         false_c="Process, chit-chat, one-off, or already trivial",
     )
     if r.ok:
         return r
-    if r.source in ("skip", "error") or r.error == "low_confidence" or str(r.source).startswith("jev"):
-        try:
-            data = _llm_json(
-                "只分析这一轮对话。JSON: {\"keep\": true|false, \"confidence\": 0-1, \"type\": \"decision|lesson|tip|none\", "
-                "\"project\": \"项目名或通用-未定\", \"title\": \"中文短标题\", \"summary\": \"一句话\"}\n"
-                f"TURN:\n{turn_text[:5000]}"
-            )
-            return GateResult(True, data, float(data.get("confidence") or 0.5), "llm", data)
-        except Exception as e:
-            return GateResult(True, {"keep": False}, 0.3, "error", None, str(e)[:120])
-    return r
+    # No LLM auto-keep: Magpie+cloud failed or low confidence → do not write
+    src = "none"
+    if str(r.source).startswith("jev:"):
+        src = "none"
+    return GateResult(False, False, r.confidence, src, r.raw, r.error or "jev_unavailable")
 
 
 def classify_turn(turn_text: str, projects: list[str]) -> GateResult:
-    """Return dict with keep/type/project/title/summary via Jev choice+noul or LLM."""
+    """Return dict with keep/type/project/structured fields. Write only when Jev keep=true."""
     keep = turn_worth_keeping(turn_text)
-    if keep.source == "llm" and isinstance(keep.value, dict):
-        return keep
-    if keep.ok and keep.value is False:
-        return GateResult(True, {"keep": False, "type": "none"}, keep.confidence, keep.source, keep.raw)
-    if keep.ok and keep.value is True:
-        typ = choice(
-            turn_text[:4000],
-            "Classify the reusable knowledge type.",
-            {
-                "decision": "Chose A over B with lasting reasons",
-                "lesson": "Pitfall and how to avoid it",
-                "tip": "Cross-project agent/tool usage tip",
-                "none": "Not worth keeping",
-            },
+    if not keep.ok:
+        return GateResult(
+            True,
+            {"keep": False, "type": "none"},
+            keep.confidence,
+            "none",
+            keep.raw,
+            keep.error or "jev_unavailable",
         )
-        proj = match_project("", turn_text, projects)
-        payload = {
-            "keep": True,
-            "type": typ.value if typ.ok else "lesson",
-            "project": proj.value or "通用-未定",
-            "title": "",
-            "summary": "",
-            "confidence": min(keep.confidence, typ.confidence if typ.ok else keep.confidence),
-        }
-        if payload["type"] == "none":
-            payload["keep"] = False
-        try:
-            data = _llm_json(
-                "根据原文写 JSON: {\"title\": \"中文短标题\", \"summary\": \"一句话\", "
-                "\"scene\": \"场景\", \"practice\": \"做法\", \"reason\": \"理由\"}\n"
-                f"type={payload['type']}\nTEXT:\n{turn_text[:4000]}"
-            )
-            payload.update({k: data.get(k, "") for k in ("title", "summary", "scene", "practice", "reason")})
-        except Exception:
-            payload["title"] = payload["type"] or "草稿"
-            payload["summary"] = (turn_text or "")[:120]
-        return GateResult(True, payload, payload["confidence"], "jev+llm", {"keep": keep.raw, "type": typ.raw})
-    if isinstance(keep.value, dict):
-        return keep
-    return GateResult(True, {"keep": False}, keep.confidence, keep.source, keep.raw, keep.error)
+    if keep.value is False:
+        return GateResult(True, {"keep": False, "type": "none"}, keep.confidence, keep.source, keep.raw)
+    # keep.value is True — classify with Jev; title fields may use LLM enrich (not keep gate)
+    typ = choice(
+        turn_text[:4000],
+        "Classify the reusable knowledge type.",
+        {
+            "decision": "Chose A over B with lasting reasons",
+            "lesson": "Pitfall and how to avoid it",
+            "preference": "User preference or standing constraint",
+            "tip": "Cross-project agent/tool usage tip",
+            "none": "Not worth keeping",
+        },
+    )
+    if not typ.ok and typ.source in ("skip", "error", "none"):
+        return GateResult(
+            True,
+            {"keep": False, "type": "none"},
+            typ.confidence,
+            "none",
+            typ.raw,
+            typ.error or "jev_type_unavailable",
+        )
+    proj = match_project("", turn_text, projects)
+    # match_project may use path/LLM; project label failure must not invent keep
+    payload = {
+        "keep": True,
+        "type": typ.value if typ.ok and typ.value else "lesson",
+        "project": (proj.value if proj.ok and proj.value else None) or "通用-未定",
+        "title": "",
+        "summary": "",
+        "decision": [],
+        "lesson": [],
+        "preference": [],
+        "confidence": min(keep.confidence, typ.confidence if typ.ok else keep.confidence),
+    }
+    if payload["type"] == "none":
+        payload["keep"] = False
+        return GateResult(True, payload, payload["confidence"], keep.source, {"keep": keep.raw, "type": typ.raw})
+    # Structured short sentences via Jev noul is heavy; use LLM enrich ONLY after keep=true
+    try:
+        data = _llm_json(
+            "从白名单用户/助手原文抽取短句。JSON: "
+            '{"title":"中文短标题","summary":"一句话",'
+            '"decision":["决策短句"],"lesson":["经验短句"],"preference":["偏好短句"],'
+            '"scene":"场景","practice":"做法","reason":"理由"}\n'
+            "只用原文里明确说过的；没有就空数组。\n"
+            f"type={payload['type']}\nTEXT:\n{turn_text[:5000]}"
+        )
+        payload.update({k: data.get(k, payload.get(k, "")) for k in ("title", "summary", "scene", "practice", "reason")})
+        for k in ("decision", "lesson", "preference"):
+            v = data.get(k) or []
+            if isinstance(v, str):
+                v = [v] if v.strip() else []
+            payload[k] = [str(x).strip() for x in v if str(x).strip()][:6]
+        # map primary type into lists if empty
+        if payload["type"] == "decision" and not payload["decision"] and payload.get("summary"):
+            payload["decision"] = [payload["summary"]]
+        if payload["type"] == "lesson" and not payload["lesson"] and payload.get("summary"):
+            payload["lesson"] = [payload["summary"]]
+        if payload["type"] == "preference" and not payload["preference"] and payload.get("summary"):
+            payload["preference"] = [payload["summary"]]
+        if payload["type"] == "tip" and not payload["lesson"] and payload.get("summary"):
+            payload["lesson"] = [payload["summary"]]
+    except Exception:
+        payload["title"] = payload["type"] or "会话草稿"
+        payload["summary"] = (turn_text or "")[:120]
+        bucket = {"decision": "decision", "lesson": "lesson", "preference": "preference", "tip": "lesson"}.get(
+            payload["type"], "lesson"
+        )
+        if payload["summary"]:
+            payload[bucket] = [payload["summary"]]
+    # source stays jev:magpie|jev:cloud (keep gate), not llm
+    return GateResult(True, payload, payload["confidence"], keep.source, {"keep": keep.raw, "type": typ.raw})
 
 
 def write_verdict(new_summary: str, candidates: list[dict]) -> GateResult:

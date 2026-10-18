@@ -309,13 +309,13 @@
     if (!g || !g.projects) { el.innerHTML = `<p class="empty">DMIT 不可达</p>`; return; }
     const rows = g.projects.map((p) => `<div class="gate-row ${p.state}"><b>${esc(p.project)}</b>
       <span class="t">${esc(GATE_ZH[p.state] || p.state)}${p.running ? " · 运行中" : ""}</span>
-      <span>草稿 ${p.drafts}${p.state === "accumulating" || p.state === "ready" ? " / " + p.threshold : ""} · 已处理 ${p.processed}</span>
+      <span>会话草稿 ${p.drafts}${p.state === "accumulating" || p.state === "ready" ? " / " + p.threshold : ""} · 已处理 ${p.processed}</span>
       ${p.state === "ready" && !p.running ? `<button type="button" class="btn primary gate-go" data-p="${esc(p.project)}">开始批量分析</button>` : ""}</div>`);
     const hold = Object.entries(g.holdout || {}).map(([k, v]) => `${k} ${v}`).join(" · ");
     el.innerHTML = rows.join("") + (hold ? `<p class="note">增量测试保留集（不处理）：${esc(hold)}</p>` : "");
     setText("gate-count", g.projects.filter((p) => p.state === "ready").length + " 个待批准");
     el.querySelectorAll(".gate-go").forEach((b) => b.addEventListener("click", async () => {
-      if (!confirm(`对「${b.dataset.p}」的全部草稿做一次批量分析？之后该项目的新草稿会自动增量合并。`)) return;
+      if (!confirm(`对「${b.dataset.p}」的全部会话草稿做一次批量分析？阈值按会话计（非每轮）。之后新会话草稿会自动增量合并。`)) return;
       b.disabled = true;
       try { await post(`/api/gate/${encodeURIComponent(b.dataset.p)}/approve`, {}); toast("已开始批量分析"); refreshGate(); }
       catch (e) { toast(e.message, true); b.disabled = false; }
