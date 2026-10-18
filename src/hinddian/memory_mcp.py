@@ -1,7 +1,7 @@
-"""hinddian-memory MCP (HTTP JSON-RPC) + REST helpers for Magpie hooks.
+"""hinddian-memory MCP (HTTP JSON-RPC) + REST helpers for host hooks.
 
 Tools: routing_global, routing_project, recall, get_note, upsert_note, suggest_correction, list_notes, push_draft
-Magpie transport: http → POST /mcp (JSON-RPC). Also REST under /api/memory/* for hooks.
+Transport: HTTP POST /mcp (JSON-RPC). REST under /api/memory/* for host lifecycle hooks.
 Vault ops run locally if VAULT_ROOT exists, else via SSH to CLASSIFY_SSH_HOST (DMIT).
 """
 from __future__ import annotations
@@ -428,7 +428,7 @@ async def mcp_endpoint(request: Request, authorization: str | None = Header(defa
     return JSONResponse(r)
 
 
-# -------- REST for Magpie hooks (curl-friendly) --------
+# -------- REST for host hooks (curl-friendly) --------
 @router.get("/api/memory/routing/global")
 def api_routing_global(authorization: str | None = Header(default=None)):
     _check_auth(authorization)

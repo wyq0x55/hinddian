@@ -477,8 +477,8 @@ def seed_demo_if_empty(settings: Settings | None = None) -> bool:
         MergeEvent(
             id="merge-demo-1",
             document_id="topic/agent-usage-tips",
-            session_id="sess-magpie-42",
-            summary="Magpie Library 用 Hindsight Recall MCP，人读仍走 Obsidian",
+            session_id="sess-demo-42",
+            summary="Agent 只经 hinddian-memory MCP 召回；人读仍走 Obsidian",
             at=now,
             status="applied",
         )
@@ -515,7 +515,7 @@ def demo_inbox() -> list[InboxItem]:
         InboxItem(
             id="demo-inbox-1.json",
             source="otlp",
-            agent="magpie@dmit",
+            agent="agent@demo",
             project="hinddian",
             title="主题记忆讨论",
             bytes=18420,

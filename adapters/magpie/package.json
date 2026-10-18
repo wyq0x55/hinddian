@@ -1,0 +1,42 @@
+{
+  "name": "hinddian-magpie-adapter",
+  "version": "0.3.0",
+  "description": "Optional Magpie host adapter for hinddian (Library Hooks + MCP). Not part of core product.",
+  "type": "module",
+  "main": "./plugin/index.mjs",
+  "files": [
+    "plugin",
+    "skills/hinddian-hooks",
+    "deploy/skill-hinddian-hooks",
+    "README.md"
+  ],
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "magpie",
+    "magpie-plugin",
+    "hinddian",
+    "memory",
+    "mcp"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wyq0x55/hinddian.git"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.1.0"
+  },
+  "magpie": {
+    "icon": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23111827'/%3E%3Cpath d='M18 40V24h6l8 12 8-12h6v16h-5V31l-7 10h-4l-7-10v9H18z' fill='%2360a5fa'/%3E%3C/svg%3E",
+    "page": {
+      "title": "Hindian",
+      "titles": {
+        "zh": "Hindian \u8bb0\u5fc6",
+        "zh-TW": "Hindian \u8a18\u61b6"
+      },
+      "file": "plugin/page/index.html",
+      "icon": "plugin/page/icon.svg"
+    }
+  }
+}
