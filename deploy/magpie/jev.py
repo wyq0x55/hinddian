@@ -1,21 +1,21 @@
-"""Jev (System One) gates via Magpie local gateway (preferred) or TypeSafe cloud.
+"""Jev (System One) gates via local OpenAI-compatible gateway or TypeSafe cloud.
 
-Primary (no cloud key needed when Magpie has ``typesafe`` / jev provider):
-  POST http://127.0.0.1:3425/v1/systemone
-  Auth: Authorization: Bearer magpie   (or MAGPIE_GATEWAY_KEY / JEV_API_KEY)
-  Model: typesafe/jev-latest (Magpie) — also accepts jev-latest
+Primary (configurable; no Magpie product dependency):
+  POST {JEV_BASE_URL}  default http://127.0.0.1:3425/v1/systemone
+  Auth: Authorization: Bearer {JEV_API_KEY}  (default ``magpie`` only if that is your local gateway token)
+  Model: {JEV_MODEL}  default typesafe/jev-latest
 
-  Magpie hosts call localhost:3425. Huawei uses magpie-tunnel.service
-  (LocalForward DMIT Magpie :3425 → 127.0.0.1:3425). Override with JEV_BASE_URL
-  or MAGPIE_JEV_URL (full …/v1/systemone URL).
+  Any host that exposes System One / OpenAI-compatible ``/v1/systemone`` works
+  (local agent gateway, SSH tunnel to a remote gateway, etc.). Env aliases
+  MAGPIE_JEV_URL / MAGPIE_GATEWAY_KEY remain for backward compatibility only.
 
 Secondary (optional):
   POST https://api.typesafe.ai/v1/systemone
   Auth: Bearer TYPESAFE_API_KEY
   Model: jev-latest
 
-Write path (keep/classify): Magpie → cloud only; if both fail → do NOT write (source=none). No loose LLM auto-keep.
-Recall/routing may still use Magpie chat completions as soft UX fallback.
+Write path (keep/classify): local → cloud only; if both fail → do NOT write (source=none).
+No loose LLM auto-keep. Recall/routing may soft-fallback to chat completions.
 
 Never log or return API keys.
 """
@@ -37,7 +37,7 @@ CLOUD_URL = (
     + "/v1/systemone"
 )
 CLOUD_MODEL = os.environ.get("TYPESAFE_DEFAULT_MODEL", "jev-latest")
-MAGPIE_MODEL = os.environ.get("JEV_MODEL", "typesafe/jev-latest")
+LOCAL_MODEL = os.environ.get("JEV_MODEL", "typesafe/jev-latest")
 
 
 @dataclass
@@ -51,8 +51,8 @@ class GateResult:
 
 
 def _gateway_base() -> str:
-    """Derive Magpie base (scheme://host:port) from HB_GATEWAY or default."""
-    raw = (os.environ.get("MAGPIE_GATEWAY") or "").strip()
+    """Derive local gateway base (scheme://host:port) from env or default."""
+    raw = (os.environ.get("JEV_GATEWAY") or os.environ.get("MAGPIE_GATEWAY") or "").strip()
     if raw:
         return raw.rstrip("/")
     chat = GATEWAY.rstrip("/")
@@ -65,7 +65,7 @@ def _gateway_base() -> str:
     return chat
 
 
-def _magpie_systemone_url() -> str:
+def _local_systemone_url() -> str:
     explicit = (
         os.environ.get("JEV_BASE_URL")
         or os.environ.get("MAGPIE_JEV_URL")
@@ -79,7 +79,7 @@ def _magpie_systemone_url() -> str:
     return _gateway_base().rstrip("/") + "/v1/systemone"
 
 
-def _magpie_key() -> str:
+def _local_key() -> str:
     return (
         os.environ.get("JEV_API_KEY")
         or os.environ.get("MAGPIE_GATEWAY_KEY")
@@ -104,7 +104,7 @@ def _endpoints() -> list[tuple[str, str, str, str]]:
     """Ordered (url, bearer, model, label)."""
     out: list[tuple[str, str, str, str]] = []
     if not _force_cloud():
-        out.append((_magpie_systemone_url(), _magpie_key(), MAGPIE_MODEL, "magpie"))
+        out.append((_local_systemone_url(), _local_key(), LOCAL_MODEL, "local"))
     ts = _typesafe_key()
     if ts:
         out.append((CLOUD_URL, ts, CLOUD_MODEL, "cloud"))
@@ -112,9 +112,9 @@ def _endpoints() -> list[tuple[str, str, str, str]]:
 
 
 def available() -> bool:
-    """True if Magpie-local gateway path is configured or cloud key is set.
+    """True if a local System One URL is configured or cloud key is set.
 
-    Does not probe the network; connection failures fall through to LLM.
+    Does not probe the network; connection failures fall through per caller.
     """
     return bool(_endpoints())
 
@@ -134,7 +134,7 @@ def backend_info() -> dict[str, Any]:
         "prefer": ("jev:" + eps[0]["label"]) if eps else None,
         "endpoints": eps,
         "write_policy": "jev_only_no_llm_keep",
-        "sources": ["jev:magpie", "jev:cloud", "none"],
+        "sources": ["jev:local", "jev:cloud", "none"],
         "recall_llm_fallback": GATEWAY,
         "llm_model": FALLBACK_MODEL,
         "force_cloud": _force_cloud(),
@@ -154,7 +154,7 @@ def _post_json(url: str, body: dict, headers: dict, timeout: float = 30) -> dict
 
 
 def _post_jev(state: Any, questions: dict) -> tuple[dict, str]:
-    """Try Magpie gateway then optional TypeSafe cloud. Returns (raw, label)."""
+    """Try local System One then optional TypeSafe cloud. Returns (raw, label)."""
     errors: list[str] = []
     for url, key, model, label in _endpoints():
         try:
@@ -185,7 +185,7 @@ def _llm_json(prompt: str) -> dict:
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.1,
     }
-    key = _magpie_key()
+    key = _local_key()
     raw = _post_json(
         GATEWAY,
         body,
@@ -314,7 +314,7 @@ def turn_worth_keeping(turn_text: str) -> GateResult:
     )
     if r.ok:
         return r
-    # No LLM auto-keep: Magpie+cloud failed or low confidence → do not write
+    # No LLM auto-keep: local+cloud failed or low confidence → do not write
     src = "none"
     if str(r.source).startswith("jev:"):
         src = "none"
@@ -405,7 +405,7 @@ def classify_turn(turn_text: str, projects: list[str]) -> GateResult:
         )
         if payload["summary"]:
             payload[bucket] = [payload["summary"]]
-    # source stays jev:magpie|jev:cloud (keep gate), not llm
+    # source stays jev:local|jev:cloud (keep gate), not llm
     return GateResult(True, payload, payload["confidence"], keep.source, {"keep": keep.raw, "type": typ.raw})
 
 

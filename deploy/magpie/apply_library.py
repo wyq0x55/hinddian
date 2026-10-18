@@ -19,8 +19,21 @@ from embed_hooks import hook_defs, hooks_version  # noqa: E402
 
 LIB = Path(os.environ.get("MAGPIE_LIBRARY") or (Path.home() / ".config/magpie/library.json"))
 MCP_URL = os.environ.get("HINDDIAN_MCP_URL", "http://124.70.90.224/hinddian/mcp")
-_REPO = HERE.parents[1]  # /workspace/hinddian
-SKILL_SRC = (_REPO / "skills" / "hinddian-hooks") if (_REPO / "skills" / "hinddian-hooks" / "SKILL.md").is_file() else (HERE / "skill-hinddian-hooks")
+def _skill_src() -> Path:
+    """Resolve skill pack whether this file lives in deploy/magpie or adapters/magpie/deploy."""
+    candidates = [
+        HERE / "skill-hinddian-hooks",
+        HERE.parents[1] / "skills" / "hinddian-hooks",  # deploy/magpie → repo/skills
+        HERE.parents[2] / "skills" / "hinddian-hooks",  # adapters/magpie/deploy → repo/skills
+        HERE.parents[2] / "adapters" / "magpie" / "skills" / "hinddian-hooks",
+        HERE.parents[1] / "skills" / "hinddian-hooks",  # adapters/magpie → …/skills (unlikely)
+    ]
+    for c in candidates:
+        if (c / "SKILL.md").is_file():
+            return c
+    return candidates[0]
+
+SKILL_SRC = _skill_src()
 SKILL_NAME = "hinddian-hooks"
 
 
@@ -84,7 +97,7 @@ def main():
         "Magpie WebDAV **does not sync Hooks**. After `magpie webdav now`, run the skill installer once "
         "(writes Hooks + ensures MCP `hinddian-memory`):\n\n"
         "- Windows: `& $env:USERPROFILE\\.config\\magpie\\library\\skills\\hinddian-hooks\\install.ps1`\n"
-        "- Linux/macOS: `python3 ~/.config/magpie/library/skills/hinddian-hooks/install.py && magpie library sync`\n\n"
+        "- Linux/macOS: `python3 ~/.config/magpie/library/adapters/magpie/skills/hinddian-hooks/install.py && magpie library sync`\n\n"
         "Hooks panel: `hinddian-session-start` + `hinddian-turn-end`. "
         "Memory writes are **session drafts** (Jev Magpie→cloud only; fail → no write).\n"
         f"{marker}\n"
