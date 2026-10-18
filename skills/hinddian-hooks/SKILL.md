@@ -60,6 +60,14 @@ magpie webdav now
 - **turn-end**：白名单抽取（用户话 + 最终回复）→ 会话缓冲（不按回合推草稿）
 - **Jev**：本机 Magpie `127.0.0.1:3425/v1/systemone` → 可选云端 → 都失败则不写（`source=none`）
 
+
+## Agent 修正记忆（门控 upsert）
+
+- **可直写**：`tip` / `preference`，或本轮用户当面纠错（`face_correction=true`）→ `upsert_note`（可用 `auto_verdict`）
+- **须确认**：`decision` / 架构定论 → 用户一句话确认后 `user_confirmed=true`，或 `suggest_correction` 进仪表盘「Agent 修正」队列
+- **禁止**：硬删、Hindsight `retain`；只用 `supersede` / `obsolete`
+- Obsidian 为真相源；同步层跟随笔记状态
+
 ## 不要
 
 - 不要在非 DMIT 机器跑 `apply_library.py`

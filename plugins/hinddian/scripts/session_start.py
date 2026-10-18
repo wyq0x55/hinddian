@@ -102,13 +102,14 @@ def main():
     if gate.get("should_recall"):
         print(
             f"Gate should_recall=YES (source={src}). If task needs memory: MCP routing_project then "
-            "recall(project=…). Put recall AFTER this prefix. Never Hindsight retain; write via "
-            "upsert_note or session-finalize drafts only. No secrets in notes."
+            "recall(project=…). Put recall AFTER this prefix. Never Hindsight retain. "
+            "Gated write: tip/preference or face_correction → upsert_note; decision → "
+            "user_confirmed or suggest_correction (dashboard). No hard delete (supersede/obsolete). No secrets."
         )
     else:
         print(
             f"Gate should_recall=NO (source={src}). Skip recall unless the user asks about prior "
-            "decisions. No secrets in notes."
+            "decisions. Same gated write rules if correcting memory. No secrets in notes."
         )
 
 
