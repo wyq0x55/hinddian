@@ -1,5 +1,5 @@
 [Unit]
-Description=hinddian API + Magpie-style pipeline dashboard
+Description=hinddian API + memory pipeline dashboard
 After=network.target
 
 [Service]
