@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "hinddian-memory": {
+      "type": "http",
+      "url": "http://124.70.90.224/hinddian/mcp"
+    }
+  }
+}

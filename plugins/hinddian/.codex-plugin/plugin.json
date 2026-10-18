@@ -1,0 +1,21 @@
+{
+  "name": "hinddian",
+  "version": "0.2.0",
+  "description": "Hindian memory: MCP + SessionStart/Stop hooks (desktop; hooks need trust).",
+  "author": {
+    "name": "Wanwan",
+    "url": "https://github.com/wyq0x55/hinddian"
+  },
+  "homepage": "https://github.com/wyq0x55/hinddian",
+  "repository": "https://github.com/wyq0x55/hinddian",
+  "license": "MIT",
+  "keywords": ["memory", "mcp", "hooks"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "hooks": "./hooks/hooks.json",
+  "extensions": {
+    "com.openai": {
+      "onboardingSkill": "./skills/setup/SKILL.md"
+    }
+  }
+}

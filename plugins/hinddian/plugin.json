@@ -1,0 +1,33 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "hinddian",
+  "version": "0.2.0",
+  "description": "Hindian dual-pipeline memory: Obsidian notes + MCP recall; SessionStart/Stop hooks capture decisions.",
+  "author": {
+    "name": "Wanwan",
+    "url": "https://github.com/wyq0x55/hinddian"
+  },
+  "homepage": "https://github.com/wyq0x55/hinddian",
+  "repository": "https://github.com/wyq0x55/hinddian",
+  "license": "MIT",
+  "keywords": ["memory", "mcp", "obsidian", "hindsight", "hooks"],
+  "extensions": {
+    "com.openai": {
+      "hooks": "./hooks/hooks.json",
+      "onboardingSkill": "./skills/setup/SKILL.md",
+      "interface": {
+        "displayName": "Hindian Memory",
+        "shortDescription": "MCP memory + session hooks",
+        "longDescription": "Installs hinddian-memory MCP and SessionStart/Stop hooks that draft session memory through Jev gates into Obsidian.",
+        "developerName": "Wanwan",
+        "category": "Productivity",
+        "capabilities": ["Read", "Write"],
+        "websiteURL": "https://github.com/wyq0x55/hinddian",
+        "defaultPrompt": [
+          "用 hinddian recall 查项目记忆",
+          "安装并配置 hinddian 记忆"
+        ]
+      }
+    }
+  }
+}
