@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#1a1a1e" />
   <title>hinddian · 记忆管线</title>
-  <link rel="stylesheet" href="/static/styles.css?v=10" />
+  <link rel="stylesheet" href="/static/styles.css?v=11" />
 </head>
 <body>
   <main class="page">
@@ -85,6 +85,16 @@
       </details>
     </section>
 
+
+    <section class="card" id="corrections">
+      <header class="card-h">
+        <h2>Agent 修正</h2>
+        <span class="note">门控 upsert：decision/架构类需确认；tip/preference 与当面纠错可直写</span>
+        <span class="grow"></span><span class="count" id="corrections-count">—</span>
+      </header>
+      <div class="card-b" id="corrections-list"><p class="empty">加载中…</p></div>
+    </section>
+
     <section class="card" hidden>
       <header class="card-h"><h2>归类记录</h2><span class="note">会话 → 主题（非一会话一笔记）</span></header>
       <div class="card-b" id="recent-list"><p class="empty">加载中…</p></div>
@@ -104,6 +114,6 @@
     <footer class="foot"><span>全局主题 <code>topic/agent-usage-tips</code> → <code>技巧/技巧.md</code>（一条技巧一个文件）</span><span id="demo-flag"></span></footer>
   </main>
   <div id="toast" class="toast" hidden></div>
-  <script src="/static/app.js?v=10"></script>
+  <script src="/static/app.js?v=11"></script>
 </body>
 </html>

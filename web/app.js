@@ -302,7 +302,70 @@
     renderIgnored(ign);
     renderRecent(recent);
   }
-  // ---------------- batch gate ----------------
+
+  // ---------------- agent corrections (gated upsert) ----------------
+  function renderCorrections(list) {
+    const el = $("corrections-list"); if (!el) return;
+    setText("corrections-count", String((list || []).length));
+    if (!list || !list.length) {
+      el.innerHTML = `<p class="empty">没有待确认的 Agent 修正</p>`;
+      return;
+    }
+    el.innerHTML = list.map((c) => {
+      const pl = c.payload || {};
+      const head = esc(c.summary || pl.title || c.id);
+      const meta = [
+        esc(c.action || pl.action || ""),
+        esc(c.type || pl.type || ""),
+        c.project ? esc(c.project) : "",
+        c.target_id ? `id=${esc(c.target_id)}` : "",
+        fmtTime(c.created_at),
+      ].filter(Boolean).join(" · ");
+      const body = [pl.scene, pl.practice, pl.reason || c.reason].filter(Boolean).map((x) => esc(String(x).slice(0, 240))).join("<br/>");
+      return `<div class="prop" data-cid="${esc(c.id)}">
+        <div>
+          <div class="head">${head} <span class="badge warn">Agent</span></div>
+          <div class="meta">${meta}</div>
+          <div class="reason">${body || esc(c.reason || "")}</div>
+          <div class="prop-actions">
+            <button type="button" class="btn sm ok" data-cact="approve">确认写入</button>
+            <button type="button" class="btn sm danger" data-cact="reject">拒绝</button>
+          </div>
+        </div>
+      </div>`;
+    }).join("");
+  }
+  $("corrections-list")?.addEventListener("click", async (ev) => {
+    const b = ev.target.closest("button[data-cact]");
+    if (!b) return;
+    const row = b.closest("[data-cid]");
+    if (!row) return;
+    const id = row.dataset.cid;
+    const act = b.dataset.cact;
+    let reason = "";
+    if (act === "approve") {
+      if (!confirm("确认把这条 Agent 修正写入 Obsidian？")) return;
+    } else {
+      const r = prompt("拒绝理由（可空）", "");
+      if (r === null) return;
+      reason = r;
+    }
+    b.disabled = true;
+    try {
+      await post(`/api/corrections/${encodeURIComponent(id)}/${act}`, { reason });
+      toast(act === "approve" ? "已写入 Obsidian" : "已拒绝");
+      await refreshCorrections();
+    } catch (e) {
+      toast("操作失败：" + e.message, true);
+      b.disabled = false;
+    }
+  });
+  async function refreshCorrections() {
+    const list = await get("/api/corrections?status=pending").catch(() => []);
+    renderCorrections(Array.isArray(list) ? list : []);
+  }
+
+    // ---------------- batch gate ----------------
   const GATE_ZH = { ready: "可批量分析", accumulating: "积累中", incremental: "增量自动", "auto-tips": "只抽技巧 · 自动" };
   function renderGate(g) {
     const el = $("gate-list"); if (!el) return;
@@ -328,7 +391,7 @@
       const pill = $("health-pill"); if (pill) { pill.textContent = "在线 · v" + health.version; pill.className = "pill ok"; }
       setText("demo-flag", health.demo ? "演示数据" : "");
     } catch { const pill = $("health-pill"); if (pill) { pill.textContent = "离线"; pill.className = "pill warn"; } }
-    const cp = refreshClassify(); refreshGate();
+    const cp = refreshClassify(); refreshGate(); refreshCorrections().catch(() => {});
     const [stats, inbox, filters, topics] = await Promise.all([get("/api/stats"), get("/api/inbox"), get("/api/filters"), get("/api/topics")]);
     state.stats = stats; state._filters = filters;
     renderStage(filters); renderInbox(inbox); renderTopics(topics);
@@ -342,5 +405,5 @@
   });
   $("btn-refresh")?.addEventListener("click", () => refresh().catch((e) => toast(e.message, true)));
   refresh().catch((e) => { console.error(e); toast("加载失败：" + e.message, true); });
-  setInterval(() => { refreshClassify().catch(() => {}); refreshGate(); }, 60000);
+  setInterval(() => { refreshClassify().catch(() => {}); refreshGate(); refreshCorrections().catch(() => {}); }, 60000);
 })();
