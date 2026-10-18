@@ -1,6 +1,6 @@
 # 一轮会话如何进笔记
 
-## 自动路径（hooks）
+## 自动路径（host hooks）
 
 1. **开会话（session-start）**
    - Finalize 上一会话 / 空闲缓冲：Jev `keep` → 一次 `push_draft`（或丢弃）
@@ -14,7 +14,7 @@
 
 3. **Finalize 触发**
    - 新开会话、空闲约 30 分钟、或切换项目
-   - Jev：本机 Magpie → 云端 TypeSafe → 失败则 `source=none` **不记**
+   - Jev：本机 System One（`JEV_BASE_URL`）→ 云端 TypeSafe → 失败则 `source=none` **不记**
 
 4. **草稿**
    - 华为/DMIT：`/var/lib/hinddian/drafts/<项目>/…`
@@ -37,7 +37,7 @@
 
 | 原因 | 现象 |
 |------|------|
-| Windows Hooks 面板空 | turn-end 未跑 → 无缓冲 |
+| Host hooks 未装 / 未 trust | turn-end 未跑 → 无缓冲 |
 | Jev `keep=false` 或 `source=none` | 会话被丢弃 |
 | 新项目未满阈值且未批准 | 草稿堆积在 drafts |
 | 白名单抽空 | 本轮几乎无用户/助手正文 |
