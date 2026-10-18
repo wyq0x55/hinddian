@@ -308,7 +308,11 @@ def _apply_jev_verdict(payload: dict) -> None:
             payload["id"] = ver.raw["target_id"]
 
 
+# Hindsight ≥1.0 serves only the first; the others are kept for older self-hosted builds.
 _RECALL_PATHS = ("/v1/default/banks/{bank}/memories/recall", "/v1/banks/{bank}/memories/recall", "/banks/{bank}/recall")
+# obsidian_hindsight_sync tags every note `source:obsidian`, `type:<t>`, `project:<p>`.
+# all_strict = AND, excluding untagged memories (anything not synced from the vault).
+VAULT_TAG = "source:obsidian"
 _recall_path: dict[str, str] = {}
 _recall_lock = threading.Lock()
 
@@ -327,7 +331,7 @@ def _hindsight_recall(query: str, budget: str, tags: list[str] | None = None) ->
         for path in paths:
             body: dict[str, Any] = {"query": query, "budget": budget}
             if tags:
-                body.update(tags=tags, tags_match="all")
+                body.update(tags=tags, tags_match="all_strict")
             r = client.post(base + path, headers=headers, json=body)
             if r.status_code == 422 and tags:
                 r = client.post(base + path, headers=headers, json={"query": query, "budget": budget})
@@ -353,7 +357,7 @@ def _recall(args: dict) -> dict:
     typ = str(args.get("type") or "")
     budget = str(args.get("budget") or "mid")
     try:
-        tags = [f"type:{typ}"] if typ else []
+        tags = [VAULT_TAG] + ([f"type:{typ}"] if typ else [])
         if project and typ != "tip":
             tags.append(f"project:{project}")
         items = _hindsight_recall(query, budget, tags)
@@ -365,6 +369,8 @@ def _recall(args: dict) -> dict:
 
 
 def _filter_active(items: Any, project: str, typ: str) -> Any:
+    """Belt-and-braces filter on the note metadata the sync writes. Only `metadata` is read:
+    a recall result's top-level `type` is Hindsight's fact kind (world/experience/…), not ours."""
     if not isinstance(items, list):
         return items
     out = []
@@ -372,14 +378,13 @@ def _filter_active(items: Any, project: str, typ: str) -> Any:
         if not isinstance(it, dict):
             out.append(it)
             continue
-        meta = it.get("metadata") or it.get("meta") or {}
-        status = str(meta.get("status") or it.get("status") or "active").lower()
-        if status not in ("active", ""):
+        meta = it.get("metadata") or {}
+        if str(meta.get("status") or "active").lower() not in ("active", ""):
             continue
-        p = meta.get("project") or it.get("project")
-        if project and p and p != project:  # soft filter — keep if missing
+        p = meta.get("project")
+        if project and p and p not in (project, "global") and meta.get("type") != "tip":
             continue
-        t = meta.get("type") or it.get("type")
+        t = meta.get("type")
         if typ and t and t != typ:
             continue
         out.append(it)

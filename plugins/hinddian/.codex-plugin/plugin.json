@@ -1,7 +1,7 @@
 {
   "name": "hinddian",
   "version": "0.3.0",
-  "description": "Hindian memory: MCP + SessionStart/Stop hooks (desktop; hooks need trust).",
+  "description": "hinddian memory for Codex: SessionStart/Stop hooks + skills (hooks need trust). Register the MCP server with `codex mcp add` — see INSTALL.md.",
   "author": {
     "name": "Wanwan",
     "url": "https://github.com/wyq0x55/hinddian"
@@ -15,7 +15,6 @@
     "hooks"
   ],
   "skills": "./skills/",
-  "mcpServers": "./.mcp.json",
   "hooks": "./hooks/hooks.json",
   "extensions": {
     "com.openai": {

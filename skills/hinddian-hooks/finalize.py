@@ -66,7 +66,8 @@ def _body(val: dict, title: str, typ: str) -> str:
     lessons = val.get("lesson") or []
     preferences = val.get("preference") or []
     if decisions or lessons or preferences:
-        return extract.structured_body(decisions=decisions, lessons=lessons, preferences=preferences, title=title)
+        # push_draft writes the "# title" heading itself
+        return extract.structured_body(decisions=decisions, lessons=lessons, preferences=preferences)
     nl = "\n"
     block = f"### {title}{nl}- 场景：{val.get('scene') or ''}{nl}- 做法：{val.get('practice') or ''}{nl}- 理由：{val.get('reason') or ''}{nl}"
     if typ == "decision":

@@ -100,3 +100,30 @@ def test_push_draft_rest(client):
 
 def test_health_is_public_and_minimal(client):
     assert set(client.get("/api/health").json()) == {"ok", "service", "version"}
+
+
+def test_recall_hindsight_contract(client, monkeypatch):
+    """Body matches Hindsight's RecallRequest; results are filtered on note metadata, not the
+    top-level `type` (which is Hindsight's fact kind)."""
+    import httpx
+
+    from hinddian import memory_mcp
+
+    seen = []
+
+    def handler(request):
+        seen.append((request.url.path, __import__("json").loads(request.content)))
+        return httpx.Response(200, json={"results": [
+            {"id": "1", "text": "a", "type": "world", "metadata": {"type": "lesson", "project": "P"}},
+            {"id": "2", "text": "b", "type": "world", "metadata": {"type": "lesson", "project": "Q"}},
+        ]})
+
+    real = httpx.Client
+    monkeypatch.setattr(memory_mcp.httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    memory_mcp._recall_path.clear()
+    r = client.post("/api/memory/recall", json={"query": "部署", "project": "P", "type": "lesson"}, headers=agent()).json()
+    assert r["via"] == "hindsight"
+    assert [x["id"] for x in r["results"]] == ["1"]
+    path, body = seen[0]
+    assert path == "/v1/default/banks/wanwan/memories/recall"
+    assert body == {"query": "部署", "budget": "mid", "tags": ["source:obsidian", "type:lesson", "project:P"], "tags_match": "all_strict"}
