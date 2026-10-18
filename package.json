@@ -1,6 +1,6 @@
 {
   "name": "hinddian-magpie",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Hindian memory for Magpie: install Library Hooks + hinddian-memory MCP (WebDAV does not sync Hooks).",
   "type": "module",
   "main": "./magpie-plugin/index.mjs",
