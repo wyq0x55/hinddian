@@ -210,6 +210,8 @@ def parse_hook_payload(stdin_text: str = "", env: dict | None = None) -> dict[st
         data.get("session_id")
         or data.get("sessionId")
         or data.get("conversation_id")
+        or data.get("conversationId")
+        or data.get("thread_id")
         or env.get("MAGPIE_SESSION_ID")
         or env.get("CLAUDE_SESSION_ID")
         or env.get("CODEX_SESSION_ID")
@@ -229,6 +231,38 @@ def parse_hook_payload(stdin_text: str = "", env: dict | None = None) -> dict[st
         or data.get("transcript")
         or ""
     )
+    # Claude Code / Codex Stop & SessionStart common fields
+    if not turn and data:
+        user = (
+            data.get("prompt")
+            or data.get("user_prompt")
+            or data.get("last_user_message")
+            or data.get("user_message")
+        )
+        asst = (
+            data.get("last_assistant_message")
+            or data.get("assistant_message")
+            or data.get("response")
+            or data.get("completion")
+            or data.get("output")
+        )
+        if user or asst:
+            pairs = []
+            if user:
+                pairs.append(("user", _clean_piece(str(user), role="user")))
+            if asst:
+                pairs.append(("assistant", _clean_piece(str(asst), role="assistant")))
+            turn = format_whitelist([(r, x) for r, x in pairs if x])
+        # Optional transcript file (Claude Stop often provides transcript_path)
+        tpath = data.get("transcript_path") or data.get("transcriptPath")
+        if not turn and tpath:
+            try:
+                from pathlib import Path as _P
+                tp = _P(str(tpath))
+                if tp.is_file() and tp.stat().st_size < 2_000_000:
+                    turn = extract_turn_text(tp.read_text(encoding="utf-8", errors="replace")[-80000:])
+            except Exception:
+                pass
     if not turn and data:
         # Build from last user+assistant in payload
         pairs = whitelist_pairs(messages=data.get("messages") if isinstance(data.get("messages"), list) else None)
@@ -239,6 +273,10 @@ def parse_hook_payload(stdin_text: str = "", env: dict | None = None) -> dict[st
         turn = extract_turn_text(raw)
     else:
         turn = extract_turn_text(turn) if turn else extract_turn_text(raw)
+
+    # Claude / Codex cwd aliases
+    if not cwd:
+        cwd = str(data.get("working_directory") or data.get("workdir") or "").strip()
 
     return {
         "session_id": str(session_id or "").strip() or None,
