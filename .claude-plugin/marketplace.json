@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "hinddian-plugins",
+  "version": "0.2.0",
+  "description": "Hindian memory plugins (MCP + lifecycle hooks)",
+  "owner": {
+    "name": "Wanwan",
+    "url": "https://github.com/wyq0x55"
+  },
+  "plugins": [
+    {
+      "name": "hinddian",
+      "description": "Obsidian + MCP memory with SessionStart/Stop draft hooks",
+      "version": "0.2.0",
+      "author": {
+        "name": "Wanwan",
+        "url": "https://github.com/wyq0x55"
+      },
+      "source": "./plugins/hinddian",
+      "category": "productivity"
+    }
+  ]
+}

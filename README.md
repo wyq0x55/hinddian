@@ -2,6 +2,47 @@
 
 Obsidian 原子笔记为唯一人读来源；**hinddian-memory MCP** 供 Agent 读写路由/召回/写入；Hindsight 仅作最后一层检索索引。
 
+## Agent plugin install (Claude Code / Codex) — primary
+
+Hindian ships as an **Agent Plugins** package under `plugins/hinddian/` with MCP + SessionStart/Stop hooks.
+
+| Market | MCP + Hooks in one plugin? | Install |
+|--------|----------------------------|---------|
+| **Claude Code** | **Yes** | marketplace add → install |
+| **Codex CLI / desktop** | **Yes** (hooks need user **trust**; public directory rejects hook plugins) | marketplace add → plugin add |
+| Magpie Library Hooks | WebDAV **does not** sync Hooks | separate Magpie skill / install.ps1 |
+
+### Claude Code
+
+```bash
+claude plugin marketplace add wyq0x55/hinddian
+# in session:
+# /plugin install hinddian@hinddian-plugins
+
+# or one-shot without marketplace:
+claude --plugin-dir ./plugins/hinddian
+claude plugin validate ./plugins/hinddian
+```
+
+### Codex
+
+```bash
+codex plugin marketplace add wyq0x55/hinddian
+codex plugin add hinddian@hinddian-plugins
+# then enable + review/trust plugin hooks
+```
+
+Private repo: sign in to GitHub for Claude/Codex git fetch, or clone and:
+
+```bash
+claude --plugin-dir /path/to/hinddian/plugins/hinddian
+codex plugin marketplace add /path/to/hinddian
+codex plugin add hinddian@hinddian-plugins
+```
+
+Details: [`plugins/INSTALL.md`](plugins/INSTALL.md).
+
+
 ## Quick start (Huawei)
 
 ```bash
