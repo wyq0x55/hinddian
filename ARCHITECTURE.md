@@ -20,11 +20,12 @@
 ```
 
 开局：SessionStart hook → routing_global →（匹配项目）routing_project → Jev should-recall 门 → 按需 MCP recall。  
-写入：禁止 Agent 调 Hindsight retain；显式 upsert_note 或 turn-end 草稿 → 批量/增量。
+写入：禁止 Agent 调 Hindsight retain；显式门控 upsert_note / suggest_correction 或 turn-end 草稿 → 批量/增量。
+门控：tip/preference 与 face_correction 可直写；decision 须 user_confirmed 或仪表盘「Agent 修正」队列；禁止硬删（supersede/obsolete）。
 
 ## MCP：hinddian-memory
 
-工具：`routing_global` · `routing_project` · `recall`（默认过滤非 active）· `get_note` · `list_notes` · `upsert_note`（四态 add/update/supersede/noop）· `push_draft`  
+工具：`routing_global` · `routing_project` · `recall`（默认过滤非 active）· `get_note` · `list_notes` · `upsert_note`（门控四态）· `suggest_correction` · `push_draft`  
 Magpie Library 只挂本 MCP，不再挂原生 Hindsight MCP。
 
 ## Jev（System One）门控
