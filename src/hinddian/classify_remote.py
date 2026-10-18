@@ -34,7 +34,7 @@ def _ssh(args: list[str], timeout: int = 25, binary: str = "hinddian-classify") 
     s = get_settings()
     cmd = [
         "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-        "-o", "ControlMaster=auto", "-o", "ControlPath=/run/hinddian-ssh-%C",
+        "-o", "ControlMaster=auto", "-o", f"ControlPath={s.ssh_control_path}",
         "-o", "ControlPersist=300",
         s.classify_ssh_host, binary, *args,
     ]

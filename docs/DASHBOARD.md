@@ -1,10 +1,10 @@
 # 仪表盘（hinddian）
 
-入口（手机 / 桌面，既有 mTLS 客户端证书（若仪表盘启用 mTLS））：
+入口（手机 / 桌面，既有 mTLS 客户端证书；Caddy 校验后代为提交 `AUTH_TOKEN`）：
 
 `https://124.70.90.224:8443/`
 
-本机调试：`http://127.0.0.1:8787/`（无公网证书）。
+本机调试：`scripts/run_dev.sh` 后开 `http://127.0.0.1:8787/`（未设 token 时为免鉴权开发模式）。
 
 ## 图谱（顶部流水线）
 
@@ -40,8 +40,9 @@
 
 政策摘要：
 
-- tip / preference / 当面纠错 → Agent 可直写，不一定出现在此队列
-- decision → 应出现在此或等你口头 `user_confirmed`
+- tip / preference / lesson → Agent 可直写，不出现在此队列
+- 凡涉及 decision 的写入（新增 / 修改 / 取代 / 作废）→ **一定**出现在此，只有这里能批准；Agent 声称的 `user_confirmed` / `face_correction` 仅作展示
+- 批准接口只在仪表盘通道（`AUTH_TOKEN`，经 :8443 mTLS 注入）；Agent 的 MCP token 调不到
 
 ## 其他卡片
 

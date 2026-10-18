@@ -3,7 +3,7 @@
   "mcpServers": {
     "hinddian-memory": {
       "type": "streamable-http",
-      "url": "http://124.70.90.224/hinddian/mcp",
+      "url": "${HINDDIAN_MEMORY_URL}/mcp",
       "extensions": {
         "com.openai": {
           "auth": {

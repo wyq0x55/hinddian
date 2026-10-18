@@ -2,11 +2,11 @@
 usage: consolidate.py <project> [--dry-run]"""
 import sys, json, itertools
 sys.path.insert(0, "/opt/hinddian-classify/src")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1] / "classify"))
 import hinddian_batch as h
 
 proj = sys.argv[1]; dry = "--dry-run" in sys.argv
-notes = h.load_notes()
-for n in notes.values(): h.resolve_ids(n, notes)
+notes = h.load_notes()  # links already resolved to ids
 pool = [n for n in notes.values() if n["project"] == proj and n["type"] in ("decision", "lesson") and n["status"] == "active"]
 G = {n["id"]: h._grams(n["title"] + n["scene"] + n["practice"]) for n in pool}
 pairs = sorted(((len(G[a["id"]] & G[b["id"]]) / (len(G[a["id"]] | G[b["id"]]) or 1), a["id"], b["id"]) for a, b in itertools.combinations(pool, 2)), reverse=True)
@@ -28,6 +28,8 @@ for _ in range(3):
     try: data = h.parse_json(h.chat(prompt)); break
     except Exception as e: err = e
 if data is None: sys.exit(f"model failed: {err}")
+lock = h.nf.vault_lock(timeout=300); lock.__enter__()  # re-read under the shared vault lock before merging
+notes = h.load_notes()
 out, used = [], set()
 for g in data.get("groups", [])[:15]:
     w = g.get("winner"); ms = [m for m in g.get("members", []) if m in notes and m != w and m not in used]
@@ -58,4 +60,5 @@ if not dry:
             new = h.render(n, notes)
             if new != n["text"]: h.write_file(n["path"], new)
     h.rebuild_hubs()
+lock.__exit__(None, None, None)
 print(json.dumps(out, ensure_ascii=False, indent=1))

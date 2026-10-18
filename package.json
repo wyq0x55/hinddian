@@ -13,7 +13,6 @@
   "files": [
     "adapters/magpie/plugin",
     "adapters/magpie/skills/hinddian-hooks",
-    "adapters/magpie/deploy/skill-hinddian-hooks",
     "adapters/magpie/README.md",
     "README.md"
   ],

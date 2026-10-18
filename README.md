@@ -79,13 +79,25 @@ codex plugin add hinddian@hinddian-plugins
 ## 华为 Quick start
 
 ```bash
-cp .env.example .env   # HINDSIGHT_API_KEY；Jev 用 JEV_BASE_URL（可选 TYPESAFE_API_KEY）
+cp .env.example .env   # HINDSIGHT_API_KEY、HINDDIAN_MCP_TOKEN、AUTH_TOKEN（两者不同）；Jev 用 JEV_BASE_URL
 pip install -e .
 uvicorn hinddian.api:app --host 127.0.0.1 --port 8787
 ```
 
-- MCP：`POST http://127.0.0.1:8787/mcp`（Bearer）
-- 公网：`http://<huawei>/hinddian/mcp`（Caddy）；对外基址 env：`HINDDIAN_MEMORY_URL`
+- MCP：`POST http://127.0.0.1:8787/mcp`（Bearer `HINDDIAN_MCP_TOKEN`）；本地开发用 `scripts/run_dev.sh`（未设 token 时自动 `HINDDIAN_ALLOW_NO_AUTH`）
+- 公网：`https://<huawei>:8444/hinddian/mcp`（Caddy TLS，只暴露 Agent 通道）；hooks 基址 env：`HINDDIAN_MEMORY_URL`
+- 仪表盘：`https://<huawei>:8443/`（mTLS；Caddy 注入 `AUTH_TOKEN`）
+
+## 开发
+
+```bash
+pip install -e '.[dev]'
+pytest                          # 门控 / 路径 / 笔记格式往返 / hooks / API 双通道
+python tools/sync_hooks.py      # 改了 hooks/ 或 src/hinddian/jev.py 后重新生成各副本（CI 用 --check 校验）
+```
+
+源码位置：hook 运行时 `hooks/`；Jev `src/hinddian/jev.py`；笔记文件格式 `src/hinddian/note_format.py`（MCP 与 DMIT batch 共用）。
+`plugins/hinddian/scripts/`、`skills/hinddian-hooks/`、`adapters/magpie/skills/hinddian-hooks/` 里的脚本是生成物，不要手改。
 
 完整部署：[`deploy/huawei/DEPLOY.md`](deploy/huawei/DEPLOY.md)。
 
@@ -95,9 +107,9 @@ uvicorn hinddian.api:app --host 127.0.0.1 --port 8787
 
 1. **turn-end**：只抽 **用户话 + 最终助手回复** → 本机会话缓冲（不按回合推草稿）。
 2. **session-start / 空闲约 30 分钟 / 换项目**：Jev keep → 一次 `push_draft`（`session-<id>`）。
-3. **Jev 写路径**：本机 System One（`JEV_BASE_URL`，默认 `127.0.0.1:3425/v1/systemone`）→ 可选云端 TypeSafe → 都失败则 **`source=none`、本轮不记**。
+3. **Jev 写路径**：本机 System One（`JEV_BASE_URL`，默认 `127.0.0.1:3425/v1/systemone`）→ 可选云端 TypeSafe → 都失败则**暂不记、退避重试**（不会用松弛 LLM 自动保留）。
 4. **批处理**：新项目草稿满阈值（默认 20 **会话草稿**）→ 仪表盘批准；已批准增量自动；技巧可自动。
-5. **Agent 修正（门控 upsert）**：`tip`/`preference`/当面纠错可直写；`decision` 须你确认或进仪表盘 **「Agent 修正」**；禁止硬删（`supersede`/`obsolete`）；禁止 Hindsight `retain`。
+5. **Agent 修正（门控 upsert）**：`tip`/`preference`/`lesson` 可直写；凡涉及 `decision` 的写入一律进仪表盘 **「Agent 修正」**，只有你能批准（Agent 的 token 调不到批准接口）；禁止硬删（`supersede`/`obsolete`）；禁止 Hindsight `retain`。
 
 仪表盘：[`docs/DASHBOARD.md`](docs/DASHBOARD.md)。
 

@@ -1,11 +1,29 @@
-# Add inside :80 { ... } on Huawei Caddyfile — exposes hinddian-memory MCP + REST for Magpie.
-# Magpie Library URL: http://124.70.90.224/hinddian/mcp
-# Auth: Bearer (same token as HINDSIGHT_API_KEY / HINDDIAN_MCP_TOKEN)
+# Agent channel over TLS: hinddian-memory MCP + hook REST only. Hooks/agents use
+#   HINDDIAN_MEMORY_URL=https://<huawei>:8444/hinddian   (MCP: …/hinddian/mcp)
+# with Bearer HINDDIAN_MCP_TOKEN (checked by hinddian, not by Caddy).
+#
+# Uses the same cert as the :8443 dashboard listener. If that cert is self-signed / private CA,
+# clients must trust it (SSL_CERT_FILE for python hooks, NODE_EXTRA_CA_CERTS for node hosts).
+# Dashboard routes and approvals are NOT exposed here — they live on :8443 behind mTLS.
 
-	handle_path /hinddian/* {
-		@ok header Authorization *Bearer*
-		handle @ok {
-			reverse_proxy 127.0.0.1:8787
+:8444 {
+	tls /etc/caddy/certs/fullchain.pem /etc/caddy/certs/privkey.pem
+	encode gzip
+
+	@agent path /hinddian/mcp /hinddian/mcp/ /hinddian/api/memory/*
+	handle @agent {
+		uri strip_prefix /hinddian
+		reverse_proxy 127.0.0.1:8787 {
+			# never let an agent-side request carry the dashboard credential
+			header_up -X-Hinddian-Dashboard
 		}
-		respond "unauthorized" 401
 	}
+	respond 404
+}
+
+# Inside the existing :80 { ... } block: the old plain-http path is closed — session text and
+# Bearer tokens must not cross the internet unencrypted.
+#
+#	handle_path /hinddian/* {
+#		respond "hinddian moved to https://<huawei>:8444/hinddian" 410
+#	}

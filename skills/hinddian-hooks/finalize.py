@@ -1,31 +1,25 @@
-"""Finalize a session buffer → Jev keep → one push_draft (or discard)."""
+"""Finalize a session buffer → Jev keep → one push_draft (or discard).
+
+Transient failures (Jev unreachable, server down) keep the buffer and retry with backoff —
+"no loose auto-keep" means *don't write yet*, not *throw the session away*.
+
+CLI (spawned detached by the hooks):  finalize.py [--current SID]
+"""
 from __future__ import annotations
 
 import json
-import os
+import sys
 import time
-import urllib.request
-from typing import Any
+from pathlib import Path
 
-import extract
-import jev
-import session_buf
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-URL = os.environ.get("HINDDIAN_MEMORY_URL", "http://124.70.90.224/hinddian").rstrip("/")
-TOKEN = os.environ.get("HINDDIAN_MCP_TOKEN") or os.environ.get("HINDSIGHT_API_KEY") or ""
+import extract  # noqa: E402
+import hookcfg  # noqa: E402
+import jev  # noqa: E402
+import session_buf  # noqa: E402
 
-
-def req(method: str, path: str, body: Any = None, timeout: float = 45) -> Any:
-    headers = {"Accept": "application/json"}
-    if TOKEN:
-        headers["Authorization"] = f"Bearer {TOKEN}"
-    data = None
-    if body is not None:
-        headers["Content-Type"] = "application/json"
-        data = json.dumps(body, ensure_ascii=False).encode()
-    r = urllib.request.Request(URL + path, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(r, timeout=timeout) as resp:
-        return json.loads(resp.read())
+req = hookcfg.req
 
 
 def projects_list() -> list[str]:
@@ -38,101 +32,78 @@ def projects_list() -> list[str]:
 
 def _norm_source(src: str | None) -> str:
     s = str(src or "")
-    if s.startswith("jev:local") or s in ("magpie", "local", "jev:local"):
+    if s.startswith("jev:local") or s in ("magpie", "local") or (s.startswith("jev:") and ("magpie" in s or "local" in s)):
         return "jev:local"
-    if s.startswith("jev:cloud") or s in ("cloud", "typesafe-cloud", "jev:typesafe-cloud"):
+    if s.startswith("jev:cloud") or s in ("cloud", "typesafe-cloud") or (s.startswith("jev:") and "cloud" in s):
         return "jev:cloud"
-    if s.startswith("jev:"):
-        # unknown jev label — keep prefix
-        return s if s in ("jev:local", "jev:cloud") else ("jev:local" if ("magpie" in s or "local" in s) else "jev:cloud" if "cloud" in s else s)
-    return "none"
+    return s if s.startswith("jev:") else "none"
+
+
+def _classify(corpus: str, projects: list[str]) -> dict:
+    """Local Jev first, then the server's gate. Raises if neither answers."""
+    try:
+        r = jev.classify_turn(corpus, projects)
+        return {"ok": r.ok, "value": r.value, "confidence": r.confidence, "source": r.source, "error": r.error}
+    except Exception as e:
+        try:
+            return req("POST", "/api/memory/gates/classify_turn", {"turn": corpus}, timeout=60)
+        except Exception as e2:
+            raise RuntimeError(f"{type(e).__name__}:{e}; remote:{e2}") from e2
+
+
+def _done(sid: str, reason: str, outcome: str, **extra) -> dict:
+    session_buf.mark_finalized(sid, outcome)
+    return {"ok": True, "skipped": outcome, "session_id": sid, "reason": reason, **extra}
+
+
+def _later(sid: str, reason: str, error: str, **extra) -> dict:
+    d = session_buf.defer(sid, error)
+    return {"ok": False, "deferred": not d["gave_up"], **d, "session_id": sid, "reason": reason, "error": error[:200], **extra}
+
+
+def _body(val: dict, title: str, typ: str) -> str:
+    decisions = val.get("decision") or []
+    lessons = val.get("lesson") or []
+    preferences = val.get("preference") or []
+    if decisions or lessons or preferences:
+        return extract.structured_body(decisions=decisions, lessons=lessons, preferences=preferences, title=title)
+    nl = "\n"
+    block = f"### {title}{nl}- 场景：{val.get('scene') or ''}{nl}- 做法：{val.get('practice') or ''}{nl}- 理由：{val.get('reason') or ''}{nl}"
+    if typ == "decision":
+        return f"## DECISIONS{nl}{block}{nl}## LESSONS{nl}{nl}## PREFERENCES{nl}"
+    if typ == "preference":
+        return f"## DECISIONS{nl}{nl}## LESSONS{nl}{nl}## PREFERENCES{nl}{block}"
+    return f"## DECISIONS{nl}{nl}## LESSONS{nl}{block}{nl}## PREFERENCES{nl}"
 
 
 def finalize_buffer(buf: dict, *, reason: str) -> dict:
     sid = buf.get("session_id") or ""
     corpus = session_buf.session_corpus(buf)
     if not corpus.strip():
-        session_buf.mark_finalized(sid)
-        return {"ok": True, "skipped": "empty", "session_id": sid, "reason": reason, "source": "none"}
+        return _done(sid, reason, "empty", source="none")
 
-    projects = projects_list()
     try:
-        klass_r = jev.classify_turn(corpus[:12000], projects)
-        klass = {
-            "ok": klass_r.ok,
-            "value": klass_r.value,
-            "confidence": klass_r.confidence,
-            "source": klass_r.source,
-            "error": klass_r.error,
-        }
-    except Exception as e:
-        try:
-            klass = req("POST", "/api/memory/gates/classify_turn", {"turn": corpus[:12000]}, timeout=60)
-        except Exception as e2:
-            session_buf.mark_finalized(sid)
-            return {
-                "ok": True,
-                "skipped": "jev_unavailable",
-                "source": "none",
-                "session_id": sid,
-                "reason": reason,
-                "error": f"{type(e).__name__}:{e}; remote:{e2}"[:200],
-            }
+        klass = _classify(session_buf.clip(corpus), projects_list())
+    except RuntimeError as e:
+        return _later(sid, reason, f"jev_unavailable: {e}", source="none")
 
-    src_raw = klass.get("source") or "none"
-    if src_raw == "llm" or str(src_raw).startswith("llm"):
-        session_buf.mark_finalized(sid)
-        return {"ok": True, "skipped": "llm_forbidden", "source": "none", "session_id": sid, "reason": reason}
+    src_raw = str(klass.get("source") or "none")
+    if src_raw.startswith("llm"):
+        return _done(sid, reason, "llm_forbidden", source="none")
+    src = _norm_source(src_raw)
+    if src == "none":
+        return _later(sid, reason, f"jev_unavailable: {klass.get('error')}", source="none")
 
     val = klass.get("value") or {}
     if not isinstance(val, dict) or not val.get("keep"):
-        session_buf.mark_finalized(sid)
-        return {
-            "ok": True,
-            "skipped": "keep_false",
-            "source": _norm_source(src_raw) if klass.get("ok") else "none",
-            "session_id": sid,
-            "reason": reason,
-            "confidence": klass.get("confidence"),
-            "error": klass.get("error"),
-        }
-
-    if not klass.get("ok") and _norm_source(src_raw) == "none":
-        session_buf.mark_finalized(sid)
-        return {"ok": True, "skipped": "jev_unavailable", "source": "none", "session_id": sid, "reason": reason}
+        return _done(sid, reason, "keep_false", source=src, confidence=klass.get("confidence"), error=klass.get("error"))
 
     title = val.get("title") or val.get("summary") or f"session-{sid[:12]}"
     typ = val.get("type") or "lesson"
-    project = val.get("project") or buf.get("project") or "通用-未定"
-    decisions = val.get("decision") or []
-    lessons = val.get("lesson") or []
-    preferences = val.get("preference") or []
-    if not decisions and not lessons and not preferences:
-        scene = val.get("scene") or ""
-        practice = val.get("practice") or ""
-        reason_s = val.get("reason") or ""
-        nl = "\n"
-        block = f"### {title}{nl}- 场景：{scene}{nl}- 做法：{practice}{nl}- 理由：{reason_s}{nl}"
-        if typ == "decision":
-            body = f"## DECISIONS{nl}{block}{nl}## LESSONS{nl}{nl}## PREFERENCES{nl}"
-        elif typ == "preference":
-            body = f"## DECISIONS{nl}{nl}## LESSONS{nl}{nl}## PREFERENCES{nl}{block}"
-        else:
-            body = f"## DECISIONS{nl}{nl}## LESSONS{nl}{block}{nl}## PREFERENCES{nl}"
-    else:
-        body = extract.structured_body(
-            decisions=decisions, lessons=lessons, preferences=preferences, title=title
-        )
-
-    src = _norm_source(src_raw)
-    if src == "none":
-        session_buf.mark_finalized(sid)
-        return {"ok": True, "skipped": "jev_unavailable", "source": "none", "session_id": sid, "reason": reason}
-
     payload = {
-        "project": project,
+        "project": val.get("project") or buf.get("project") or "通用-未定",
         "title": title,
-        "body": body,
+        "body": _body(val, title, typ),
         "type": typ,
         "confidence": klass.get("confidence"),
         "origin": f"session-finalize:{reason}:{src}",
@@ -143,32 +114,47 @@ def finalize_buffer(buf: dict, *, reason: str) -> dict:
     }
     try:
         out = req("POST", "/api/memory/push_draft", payload, timeout=30)
-        session_buf.mark_finalized(sid)
-        return {"ok": True, "pushed": out, "source": src, "session_id": sid, "reason": reason}
     except Exception as e:
-        return {"ok": False, "error": str(e)[:200], "session_id": sid, "source": src, "reason": reason}
+        return _later(sid, reason, f"push_failed: {e}", source=src)
+    session_buf.mark_finalized(sid, "pushed")
+    return {"ok": True, "pushed": out, "source": src, "session_id": sid, "reason": reason}
 
 
 def finalize_idle_and_others(*, current_sid: str | None = None, project: str | None = None) -> list[dict]:
     """Finalize open buffers that are not the active session, or idle, or project-switched."""
     results: list[dict] = []
     now = time.time()
-    idle_sec = session_buf.IDLE_SEC
     for buf in session_buf.list_open():
         sid = buf.get("session_id")
+        if not session_buf.due(buf, now):
+            continue
         is_current = bool(current_sid and sid == current_sid)
-        age = now - float(buf.get("updated_at") or 0)
-        idle = age >= idle_sec
+        idle = now - float(buf.get("updated_at") or 0) >= session_buf.IDLE_SEC
         switched = bool(is_current and project and session_buf.project_switched(buf, project))
         if is_current and not idle and not switched:
             continue
         if is_current and switched:
             reason = "project-switch"
-        elif is_current and idle:
-            reason = "idle"
         elif current_sid and not is_current:
             reason = "session-start"
         else:
             reason = "idle"
-        results.append(finalize_buffer(buf, reason=reason))
+        with session_buf.claim(sid) as mine:
+            if mine:
+                results.append(finalize_buffer(buf, reason=reason))
     return results
+
+
+def main(argv: list[str]) -> None:
+    current = argv[argv.index("--current") + 1] if "--current" in argv and argv.index("--current") + 1 < len(argv) else None
+    if hookcfg.transport_problem():
+        print(json.dumps({"skipped": hookcfg.transport_problem()}, ensure_ascii=False))
+        return
+    results = finalize_idle_and_others(current_sid=current)
+    pruned = session_buf.prune()
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+    print(json.dumps({"at": stamp, "finalized": results, "pruned": pruned}, ensure_ascii=False)[:4000])
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

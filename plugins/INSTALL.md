@@ -10,7 +10,16 @@
 | Lifecycle hooks SessionStart + Stop | 是 | 是，但须用户 **trust hooks**；带 hooks 的包不能上 Codex 公开目录 |
 | Skills（`setup`、`memory`） | 是 | 是 |
 
-默认 MCP URL：`http://124.70.90.224/hinddian/mcp`。需要 Bearer 时在客户端 MCP 配置里加 `Authorization`（勿把 token 写进仓库）。
+**没有内置服务器地址**。安装前设置环境变量（勿把 token 写进仓库）：
+
+| 变量 | 用途 |
+|------|------|
+| `HINDDIAN_MEMORY_URL` | https 基址，含 `/hinddian`，如 `https://<host>:8444/hinddian`；MCP 地址为 `${HINDDIAN_MEMORY_URL}/mcp` |
+| `HINDDIAN_MCP_TOKEN` | Agent 通道 Bearer（服务器 `HINDDIAN_MCP_TOKEN`） |
+| `HINDDIAN_CA_FILE` / `NODE_EXTRA_CA_CERTS` | 服务器是自签证书时，分别给 hooks（Python）与 MCP 客户端（Node） |
+
+hooks 拒绝向非本机地址发明文 http（会话正文 + token）；本机调试可用 `http://127.0.0.1:8787`。
+Claude Code 的 `.mcp.json` 会展开 `${VAR}`；Codex 的 `mcp.json` 若不展开环境变量，请在本机配置里把 URL 写成实际 https 地址。
 
 ## Claude Code
 

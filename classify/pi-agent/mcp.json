@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "hinddian-memory": {
-      "url": "http://124.70.90.224/hinddian/mcp",
+      "url": "${HINDDIAN_MCP_URL}",
       "headers": { "Authorization": "Bearer ${HINDDIAN_MCP_TOKEN}" },
       "description": "Wanwan atomic notes (Obsidian SoT). Use routing_*/recall/get_note/list_notes/upsert_note. Never raw Hindsight retain.",
       "timeout": 60,

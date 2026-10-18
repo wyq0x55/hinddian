@@ -1,6 +1,11 @@
-"""Atomic Obsidian notes: load / render / upsert (4-state) / routing export.
+"""Atomic Obsidian notes: load / upsert (4-state, gated) / routing export / correction queue / drafts.
 
-Works when VAULT_ROOT points at the vault (DMIT). Secrets are redacted on write.
+Runs where the vault is (DMIT, or any host with VAULT_ROOT). File format lives in note_format.py,
+shared with the batch engine. Secrets are redacted on write.
+
+Gate: callers on the agent channel (MCP / hooks) are untrusted — whatever flags they send,
+decision notes (and anything that retires a decision) go to the correction queue. Only
+decide_correction(), reached from the dashboard, writes with trusted=True.
 """
 from __future__ import annotations
 
@@ -9,176 +14,48 @@ import json
 import os
 import pathlib
 import re
-import shutil
 from typing import Any
+
+from . import note_format as nf
 
 VAULT = pathlib.Path(os.environ.get("VAULT_ROOT") or os.environ.get("HC_VAULT") or "/srv/obsidian/vault")
 DRAFTS = pathlib.Path(os.environ.get("HB_DRAFTS") or "/var/lib/hinddian/drafts")
 CORRECTIONS = pathlib.Path(os.environ.get("HB_CORRECTIONS") or "/var/lib/hinddian/agent_corrections")
 ROUTING_CACHE = pathlib.Path(os.environ.get("HINDDIAN_ROUTING") or "/var/lib/hinddian/routing")
 OWNER = os.environ.get("HC_OWNER", "obsidian")
-FOLDER = {"decision": "决策", "lesson": "经验"}
+UNKNOWN_PROJECT = "通用-未定"
 HARD_DELETE_ACTIONS = {"delete", "remove", "purge", "hard_delete", "forget", "erase"}
 SOFT_RETIRE_ACTIONS = {"obsolete", "retire", "archive"}
-AUTO_WRITE_TYPES = {"tip"}  # preference maps to tip+tag
-SECRET_RE = [
-    re.compile(r"(?i)(password|passwd|secret|token|api[_-]?key|bearer)\s*[:=]\s*['\"]?[A-Za-z0-9_\-\.]{12,}"),
-    re.compile(r"sk-[A-Za-z0-9]{16,}"),
-    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
-    re.compile(r"\b(ghp|gho|github_pat)_[A-Za-z0-9_]{20,}"),
-]
-WIKI = re.compile(r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]")
+SUGGEST_MODES = {"suggest", "suggestion", "queue"}
+_META_KEY = re.compile(r"^[a-z][a-z0-9_]{0,40}$")
+
+_cache = nf.NoteCache()
+
+# re-exported for callers / tests
+redact = nf.redact
+safe_title = nf.safe_title
+slugify = nf.slugify
+
+
+def configure(*, vault: str | os.PathLike | None = None) -> None:
+    global VAULT
+    if vault:
+        VAULT = pathlib.Path(vault)
 
 
 def today() -> str:
     return dt.date.today().isoformat()
 
 
-def redact(t: str) -> str:
-    for r in SECRET_RE:
-        t = r.sub("[REDACTED]", t)
-    return t
-
-
-def safe_title(t: str) -> str:
-    return re.sub(r'[\\/:*?"<>|#\[\]^]', "-", t).strip()[:80]
-
-
-def slugify(s: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", (s or "").lower()).strip("-")[:60] or "note"
-
-
-def parse_note(p: pathlib.Path) -> dict | None:
-    t = p.read_text(errors="ignore")
-    if not t.startswith("---\n"):
-        return None
-    end = t.find("\n---\n", 4)
-    if end < 0:
-        return None
-    fm: dict[str, str] = {}
-    for line in t[4:end].splitlines():
-        if ":" in line:
-            k, v = line.split(":", 1)
-            fm[k.strip()] = v.strip()
-    if "id" not in fm:
-        return None
-    body = t[end + 5 :]
-    sec = dict(re.findall(r"^## (.+?)\n(.*?)(?=^## |\Z)", body, re.M | re.S))
-    title_m = re.search(r"^# (.+)$", body, re.M)
-    title = title_m.group(1) if title_m else p.stem
-
-    def lst(v: str | None) -> list[str]:
-        v = (v or "").strip()
-        links = re.findall(r"\[\[[^\]]+\]\]", v)
-        if links:
-            return links
-        return [x.strip().strip('"') for x in v.strip("[]").split(",") if x.strip().strip('"')]
-
-    try:
-        rel = str(p.relative_to(VAULT))[:-3]
-    except ValueError:
-        rel = str(p)
-    return {
-        "path": rel,
-        "id": fm["id"],
-        "type": fm.get("type", ""),
-        "project": fm.get("project", ""),
-        "tags": lst(fm.get("tags")),
-        "status": fm.get("status", "active"),
-        "sources": lst(fm.get("sources")),
-        "related_raw": lst(fm.get("related")),
-        "supersedes_raw": lst(fm.get("supersedes")),
-        "legacy_code": fm.get("legacy_code", ""),
-        "origin": fm.get("origin", ""),
-        "updated": fm.get("updated", ""),
-        "title": title,
-        "scene": sec.get("场景", "").strip(),
-        "practice": sec.get("做法", "").strip(),
-        "reason": sec.get("理由", "").strip(),
-        "text": t,
-    }
-
-
 def load_notes(*, include_inactive: bool = True) -> dict[str, dict]:
-    out: dict[str, dict] = {}
-    if not VAULT.is_dir():
-        return out
-    for p in VAULT.rglob("*.md"):
-        if any(x in p.parts for x in (".obsidian", "_归档", ".git", ".trash", "_模板")):
-            continue
-        n = parse_note(p)
-        if not n:
-            continue
-        if not include_inactive and n["status"] != "active":
-            continue
-        out[n["id"]] = n
-    return out
+    notes = _cache.load(VAULT)
+    if not include_inactive:
+        notes = {k: n for k, n in notes.items() if n["status"] == "active"}
+    return notes
 
 
-def link_of(n: dict) -> str:
-    return f"[[{n['path']}|{n['title']}]]"
-
-
-def unwiki(t: str) -> str:
-    return WIKI.sub(lambda m: f"`{m.group(2) or m.group(1)}`", t or "")
-
-
-def render(n: dict, notes: dict[str, dict]) -> str:
-    def links(ids: list[str]) -> list[str]:
-        return [link_of(notes[i]) for i in ids if i in notes]
-
-    fm = [
-        "---",
-        f"id: {n['id']}",
-        f"type: {n['type']}",
-        f"project: {n['project'] or 'global'}",
-        "tags: [" + ", ".join(n.get("tags") or []) + "]",
-        f"status: {n.get('status', 'active')}",
-        "supersedes: [" + ", ".join(f'"{l}"' for l in links(n.get("supersedes") or [])) + "]",
-        "related: [" + ", ".join(f'"{l}"' for l in links(n.get("related") or [])) + "]",
-        "sources: [" + ", ".join(n.get("sources") or []) + "]",
-        f"updated: {n.get('updated') or today()}",
-    ]
-    if n.get("legacy_code"):
-        fm.append(f"legacy_code: {n['legacy_code']}")
-    if n.get("origin"):
-        fm.append(f"origin: {n['origin']}")
-    fm.append("---")
-    hub = f"[[项目/{n['project']}/README|{n['project']}]]" if n.get("type") != "tip" else "[[技巧/技巧|agent使用技巧]]"
-    b = [f"# {n['title']}", "", f"> 所属：{hub}" + (f" · 归纳自 {len(n.get('sources') or [])} 个会话" if n.get("sources") else "")]
-    if n.get("status") == "superseded" and n.get("superseded_by") in notes:
-        b.append(f"> ⚠️ 已被 {link_of(notes[n['superseded_by']])} 取代")
-    b += [
-        "",
-        "## 场景",
-        unwiki(n.get("scene") or "") or "（待补）",
-        "",
-        "## 做法",
-        unwiki(n.get("practice") or "") or "（待补）",
-        "",
-        "## 理由",
-        unwiki(n.get("reason") or "") or "（待补）",
-        "",
-    ]
-    if n.get("supersedes"):
-        b += ["## 取代", *[f"- {l}" for l in links(n["supersedes"])], ""]
-    if n.get("related"):
-        b += ["## 相关", *[f"- {l}" for l in links(n["related"])], ""]
-    return redact("\n".join(fm + b))
-
-
-def write_file(rel: str, text: str) -> pathlib.Path:
-    p = VAULT / (rel + ".md")
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".md.tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, p)
-    try:
-        shutil.chown(p, OWNER, OWNER)
-        os.chmod(p, 0o664)
-    except Exception:
-        pass
-    return p
+def _write(n: dict, notes: dict[str, dict]) -> None:
+    nf.write_note_file(VAULT, n["path"], nf.render(n, notes, today=today()), owner=OWNER)
 
 
 def list_projects() -> list[str]:
@@ -188,14 +65,21 @@ def list_projects() -> list[str]:
     return sorted(p.name for p in root.iterdir() if p.is_dir() and not p.name.startswith(("_", ".")))
 
 
+def _readme(name: str) -> str:
+    try:
+        p = nf.within(VAULT, f"项目/{nf.safe_project(name)}/README")
+    except nf.UnsafePath:
+        return ""
+    return p.read_text(encoding="utf-8", errors="ignore") if p.is_file() else ""
+
+
 def routing_global() -> dict:
     notes = load_notes(include_inactive=False)
     projects = []
     for name in list_projects():
-        readme = VAULT / "项目" / name / "README.md"
         blurb = ""
-        if readme.exists():
-            t = readme.read_text(errors="ignore")
+        t = _readme(name)
+        if t:
             m = re.search(r"^# .+\n+(?:> .+\n+)?([^#\n][^\n]{0,120})", t, re.M)
             if m:
                 blurb = m.group(1).strip()
@@ -224,30 +108,22 @@ def routing_global() -> dict:
             "稳定前缀：本路由表。易变 recall 结果放对话后部。"
             "先 match 项目；再看项目路由的 when_to_recall；不需要就跳过。"
             "写入：禁止 Hindsight retain。优先 hooks→草稿。"
-            "门控 upsert：tip/preference 与用户当面纠错(face_correction)可直接 upsert_note；"
-            "decision/架构定论须 user_confirmed=true 或走 suggest_correction（仪表盘确认）；"
+            "门控 upsert：tip/preference/lesson 可直接 upsert_note；"
+            "decision/架构定论一律进仪表盘「Agent 修正」由用户批准（Agent 侧无法绕过）；"
             "禁止硬删，只用 supersede/obsolete。"
         ),
     }
 
 
 def routing_project(name: str) -> dict:
+    name = nf.safe_project(name, "")
     notes = load_notes(include_inactive=False)
-    readme = VAULT / "项目" / name / "README.md"
     state = ""
-    if readme.exists():
-        t = readme.read_text(errors="ignore")
-        m = re.search(r"## 当前状态\n(.*?)(?=\n## |\Z)", t, re.S)
-        if m:
-            state = m.group(1).strip()[:800]
-    dec = sorted(
-        [n for n in notes.values() if n["project"] == name and n["type"] == "decision"],
-        key=lambda n: n["title"],
-    )
-    les = sorted(
-        [n for n in notes.values() if n["project"] == name and n["type"] == "lesson"],
-        key=lambda n: n["title"],
-    )
+    m = re.search(r"## 当前状态\n(.*?)(?=\n## |\Z)", _readme(name), re.S) if name else None
+    if m:
+        state = m.group(1).strip()[:800]
+    dec = sorted([n for n in notes.values() if n["project"] == name and n["type"] == "decision"], key=lambda n: n["title"])
+    les = sorted([n for n in notes.values() if n["project"] == name and n["type"] == "lesson"], key=lambda n: n["title"])
     return {
         "project": name,
         "readme_id": f"proj/{name}/readme",
@@ -282,10 +158,6 @@ def get_note(note_id: str) -> dict | None:
     n = notes.get(note_id)
     if not n:
         return None
-    related = []
-    for raw in n.get("related_raw") or []:
-        m = re.match(r"\[\[([^\]|]+)", raw)
-        related.append(m.group(1) if m else raw)
     return {
         "id": n["id"],
         "path": n["path"],
@@ -296,115 +168,126 @@ def get_note(note_id: str) -> dict | None:
         "scene": n["scene"],
         "practice": n["practice"],
         "reason": n["reason"],
-        "related": related,
+        "related": [r for r in n["related"] if r in notes],
+        "supersedes": [r for r in n["supersedes"] if r in notes],
+        "superseded_by": n["superseded_by"] if n["superseded_by"] in notes else "",
         "tags": n["tags"],
         "updated": n["updated"],
         "text": n["text"],
     }
 
 
+def _summary(n: dict) -> dict:
+    return {"id": n["id"], "title": n["title"], "type": n["type"], "project": n["project"], "status": n["status"], "path": n["path"]}
+
+
+def _match(n: dict, project: str | None, type_: str | None, status: str) -> bool:
+    if status != "all" and n["status"] != status:
+        return False
+    if project and n["project"] != project and not (project == "global" and n["type"] == "tip"):
+        return False
+    return not (type_ and n["type"] != type_)
+
+
 def list_notes(*, project: str | None = None, type_: str | None = None, status: str = "active", limit: int = 50) -> list[dict]:
     notes = load_notes(include_inactive=(status != "active"))
-    out = []
+    out = sorted((_summary(n) for n in notes.values() if _match(n, project, type_, status)), key=lambda x: x["title"])
+    return out[: max(0, int(limit))]
+
+
+def search_notes(query: str, *, project: str | None = None, type_: str | None = None, limit: int = 12) -> list[dict]:
+    """Local recall fallback: bigram score over title + body (Chinese-safe)."""
+    notes = load_notes(include_inactive=False)
+    scored = []
     for n in notes.values():
-        if status != "all" and n["status"] != status:
+        if not _match(n, project, type_, "active"):
             continue
-        if project and n["project"] != project and not (project == "global" and n["type"] == "tip"):
-            continue
-        if type_ and n["type"] != type_:
-            continue
-        out.append({"id": n["id"], "title": n["title"], "type": n["type"], "project": n["project"], "status": n["status"], "path": n["path"]})
-        if len(out) >= limit:
-            break
-    return sorted(out, key=lambda x: x["title"])
+        s = nf.score(query, n)
+        if s > 0:
+            scored.append({**_summary(n), "score": round(s, 3), "scene": n["scene"][:300], "practice": n["practice"][:600]})
+    scored.sort(key=lambda x: -x["score"])
+    return scored[: max(0, int(limit))]
 
 
+# ------------------------------------------------------------------ gate
 def _norm_type(raw: str | None) -> tuple[str, list[str]]:
     """Map preference→tip+tag; unknown→lesson."""
     t = (raw or "lesson").strip().lower()
-    extra: list[str] = []
     if t in ("preference", "pref", "prefs"):
         return "tip", ["preference"]
-    if t not in ("decision", "lesson", "tip"):
+    if t not in nf.NOTE_TYPES:
         return "lesson", []
-    return t, extra
+    return t, []
 
 
-def _gate_flags(payload: dict) -> dict:
-    return {
-        "face_correction": bool(
-            payload.get("face_correction")
-            or payload.get("user_face_correction")
-            or payload.get("face_correct")
-        ),
-        "user_confirmed": bool(
-            payload.get("user_confirmed")
-            or payload.get("confirmed")
-            or payload.get("_from_dashboard")
-        ),
-        "mode": str(payload.get("mode") or "").strip().lower(),
-    }
-
-
-def _write_allowed(typ: str, tags: list[str], flags: dict, *, action: str, notes: dict, supersedes: list[str]) -> bool:
-    """Gated upsert policy: tip/preference & face-correction auto; decision needs confirm."""
-    if flags["user_confirmed"] or flags["face_correction"]:
+def _needs_review(typ: str, *, target: str, supersedes: list[str], notes: dict, mode: str) -> bool:
+    """Untrusted (agent) writes that must wait for a human in the dashboard."""
+    if mode in SUGGEST_MODES or typ == "decision":
         return True
-    if typ in AUTO_WRITE_TYPES or "preference" in (tags or []):
+    if target in notes and notes[target]["type"] == "decision":
         return True
-    if flags["mode"] in ("suggest", "suggestion", "queue"):
-        return False
-    if typ == "decision":
-        return False
-    # lesson: allow add/update; superseding a decision still gated
-    if action == "supersede":
-        for old in supersedes:
-            if old in notes and notes[old].get("type") == "decision":
-                return False
-    return True
+    return any(notes.get(o, {}).get("type") == "decision" for o in supersedes)
+
+
+def _untrusted(payload: dict) -> dict:
+    """Agent payloads can't carry server-side flags (e.g. `_from_dashboard`)."""
+    return {k: v for k, v in (payload or {}).items() if not str(k).startswith("_")}
+
+
+def _str_list(v: Any) -> list[str]:
+    if v is None:
+        return []
+    v = v if isinstance(v, list) else [v]
+    return [str(x) for x in v if str(x).strip()]
 
 
 def enqueue_correction(payload: dict) -> dict:
-    """Queue Agent correction for dashboard approval (Obsidian SoT; no silent decision write)."""
+    """Queue an Agent correction for dashboard approval (no silent decision write)."""
+    payload = _untrusted(payload)
     CORRECTIONS.mkdir(parents=True, exist_ok=True)
-    ts = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    now = dt.datetime.now()
     title = safe_title(payload.get("title") or payload.get("id") or "correction")
-    cid = f"ac-{ts}-{slugify(title)[:24]}"
+    cid = f"ac-{now.strftime('%Y%m%d-%H%M%S')}-{now.microsecond:06d}-{slugify(title)[:24]}"
     clean = {
         k: payload[k]
         for k in (
             "action", "verdict", "id", "target_id", "type", "project", "title", "slug",
             "scene", "practice", "reason", "supersedes", "tags", "sources", "related",
-            "origin", "face_correction", "correction_reason",
+            "origin", "correction_reason",
         )
         if k in payload and payload[k] is not None
     }
-    clean["action"] = (clean.get("action") or clean.get("verdict") or "update").lower()
+    clean["action"] = str(clean.get("action") or clean.get("verdict") or "update").lower()
     doc = {
         "id": cid,
         "status": "pending",
-        "created_at": dt.datetime.now().isoformat(timespec="seconds"),
+        "created_at": now.isoformat(timespec="seconds"),
         "kind": "agent_correction",
         "summary": title,
         "type": clean.get("type") or "",
         "project": clean.get("project") or "",
-        "action": clean.get("action"),
+        "action": clean["action"],
         "target_id": clean.get("id") or clean.get("target_id") or "",
         "reason": str(payload.get("correction_reason") or payload.get("reason") or "")[:500],
+        # What the agent claimed — shown to the human, never trusted.
+        "agent_claims": {
+            "user_confirmed": bool(payload.get("user_confirmed")),
+            "face_correction": bool(payload.get("face_correction")),
+        },
         "payload": clean,
     }
     path = CORRECTIONS / f"{cid}.json"
     path.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
     try:
         os.chmod(path, 0o664)
-    except Exception:
+    except OSError:
         pass
     return {
         "ok": True,
         "action": "suggested",
         "queued": True,
         "suggestion_id": cid,
-        "hint": "decision/架构类已入仪表盘「Agent 修正」队列；确认后才写 Obsidian。或请用户一句话确认后带 user_confirmed=true 再 upsert。",
+        "hint": "decision/架构类已入仪表盘「Agent 修正」队列；用户在仪表盘批准后才写 Obsidian。",
     }
 
 
@@ -415,7 +298,7 @@ def list_corrections(*, status: str = "pending", limit: int = 50) -> list[dict]:
     for p in sorted(CORRECTIONS.glob("ac-*.json"), reverse=True):
         try:
             doc = json.loads(p.read_text(encoding="utf-8"))
-        except Exception:
+        except (OSError, ValueError):
             continue
         if status != "all" and doc.get("status") != status:
             continue
@@ -426,35 +309,58 @@ def list_corrections(*, status: str = "pending", limit: int = 50) -> list[dict]:
 
 
 def decide_correction(cid: str, *, approve: bool, reason: str = "") -> dict:
+    """Dashboard-only: the one trusted write path."""
     cid = "".join(c for c in (cid or "") if c.isalnum() or c in "-_")
     path = CORRECTIONS / f"{cid}.json"
-    if not path.is_file():
-        return {"ok": False, "error": "not_found", "id": cid}
-    doc = json.loads(path.read_text(encoding="utf-8"))
-    if doc.get("status") != "pending":
-        return {"ok": False, "error": "not_pending", "status": doc.get("status"), "id": cid}
-    if approve:
-        pl = dict(doc.get("payload") or {})
-        pl["user_confirmed"] = True
-        pl["_from_dashboard"] = True
-        result = upsert_note(pl)
-        doc["status"] = "applied" if result.get("ok") else "failed"
-        doc["applied_at"] = dt.datetime.now().isoformat(timespec="seconds")
-        doc["apply_result"] = result
+    with nf.vault_lock():
+        if not path.is_file():
+            return {"ok": False, "error": "not_found", "id": cid}
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        if doc.get("status") != "pending":
+            return {"ok": False, "error": "not_pending", "status": doc.get("status"), "id": cid}
+        stamp = dt.datetime.now().isoformat(timespec="seconds")
+        if approve:
+            result = upsert_note(dict(doc.get("payload") or {}), trusted=True)
+            doc["status"] = "applied" if result.get("ok") else "failed"
+            doc["applied_at"] = stamp
+            doc["apply_result"] = result
+        else:
+            result = None
+            doc["status"] = "rejected"
+            doc["rejected_at"] = stamp
+            doc["reject_reason"] = (reason or "")[:300]
         path.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+    if approve:
         return {"ok": bool(result.get("ok")), "id": cid, "status": doc["status"], "result": result}
-    doc["status"] = "rejected"
-    doc["rejected_at"] = dt.datetime.now().isoformat(timespec="seconds")
-    doc["reject_reason"] = (reason or "")[:300]
-    path.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
     return {"ok": True, "id": cid, "status": "rejected"}
 
 
-def upsert_note(payload: dict) -> dict:
-    """Gated 4-state write. tip/preference & face_correction auto; decision needs confirm or suggest queue.
-    No hard delete — supersede/obsolete only. Obsidian SoT; sync layer follows notes.
+def _new_id(base: str, notes: dict) -> str:
+    nid, k = base, 2
+    while nid in notes:
+        nid = f"{base}-{k}"
+        k += 1
+    return nid
+
+
+def _new_path(base: str, notes: dict) -> str:
+    taken = {n["path"] for n in notes.values()}
+    path, k = base, 2
+    while path in taken or nf.within(VAULT, path).exists():
+        path = f"{base}-{k}"
+        k += 1
+    return path
+
+
+def upsert_note(payload: dict, *, trusted: bool = False) -> dict:
+    """Gated 4-state write: add | update | supersede | obsolete | noop.  No hard delete.
+
+    trusted=False (agent channel): tip / preference / lesson write directly; anything that
+    creates, changes or retires a decision is queued for the dashboard.
     """
-    action = (payload.get("action") or payload.get("verdict") or "add").lower()
+    if not trusted:
+        payload = _untrusted(payload)
+    action = str(payload.get("action") or payload.get("verdict") or "add").lower()
     if action in HARD_DELETE_ACTIONS:
         return {
             "ok": False,
@@ -463,145 +369,127 @@ def upsert_note(payload: dict) -> dict:
         }
     if action in ("noop", "ignore"):
         return {"ok": True, "action": "noop", "reason": payload.get("reason", "noop")}
-
-    notes = load_notes(include_inactive=True)
-    typ, extra_tags = _norm_type(payload.get("type"))
-    tags = list(dict.fromkeys(list(payload.get("tags") or []) + extra_tags))
-    project = (payload.get("project") or "").strip()
-    if typ != "tip" and not project:
-        project = "通用-未定"
-    title = safe_title(payload.get("title") or "未命名")
-    slug = slugify(payload.get("slug") or title)
-    target_id = payload.get("id") or payload.get("target_id") or ""
-    supersedes = list(payload.get("supersedes") or [])
-    flags = _gate_flags(payload)
-
-    # Soft retire
+    if action == "create":
+        action = "add"
     if action in SOFT_RETIRE_ACTIONS:
-        if not target_id or target_id not in notes:
+        action = "obsolete"
+    if action not in ("add", "update", "supersede", "obsolete"):
+        return {"ok": False, "error": f"unknown action {action}"}
+
+    with nf.vault_lock():
+        notes = load_notes(include_inactive=True)
+        typ, extra_tags = _norm_type(payload.get("type"))
+        target_id = str(payload.get("id") or payload.get("target_id") or "")
+        target = notes.get(target_id)
+        if action in ("update", "obsolete") and target:
+            typ = target["type"] or typ  # a note's type can't be changed by relabeling the payload
+        tags = list(dict.fromkeys(_str_list(payload.get("tags")) + extra_tags))
+        project = "" if typ == "tip" else nf.safe_project(payload.get("project") or (target or {}).get("project"))
+        title = safe_title(payload.get("title") or (target or {}).get("title") or "未命名")
+        supersedes = [s for s in _str_list(payload.get("supersedes")) if s in notes]
+        fields = {k: nf.guard_field(nf.unwiki(str(payload.get(k) or ""))) for k in ("scene", "practice", "reason")}
+        mode = str(payload.get("mode") or "").strip().lower()
+
+        if action == "obsolete" and not target:
             return {"ok": False, "error": "obsolete_needs_id", "hint": "Pass id of note to mark obsolete"}
-        if not _write_allowed(notes[target_id].get("type") or typ, tags, flags, action="obsolete", notes=notes, supersedes=[]):
-            pl = dict(payload)
-            pl["action"] = "obsolete"
-            pl["id"] = target_id
-            pl["title"] = notes[target_id].get("title") or title
-            pl["type"] = notes[target_id].get("type") or typ
+        if not trusted and _needs_review(typ, target=target_id, supersedes=supersedes, notes=notes, mode=mode):
+            pl = dict(payload, type=typ, tags=tags, project=project, title=title, action=action, supersedes=supersedes)
+            if target_id:
+                pl["id"] = target_id
             return enqueue_correction(pl)
-        n = notes[target_id]
-        n["status"] = "obsolete"
-        n["updated"] = today()
-        write_file(n["path"], render(n, notes))
-        return {"ok": True, "action": "obsolete", "id": target_id, "path": n["path"]}
 
-    # Gate before write
-    if not _write_allowed(typ, tags, flags, action=action, notes=notes, supersedes=supersedes):
-        pl = dict(payload)
-        pl["type"] = typ
-        pl["tags"] = tags
-        pl["project"] = project
-        pl["title"] = title
-        pl["action"] = action
-        return enqueue_correction(pl)
+        origin = str(payload.get("origin") or "upsert")[:80]
+        gated = "dashboard" if trusted else "auto"
 
-    if action == "update":
-        if target_id not in notes:
+        if action == "obsolete":
+            target["status"] = "obsolete"
+            target["updated"] = today()
+            _write(target, notes)
+            return {"ok": True, "action": "obsolete", "id": target_id, "path": target["path"], "gated": gated}
+
+        if action == "update" and not target:
             action = "add"
-        else:
-            n = notes[target_id]
-            n.update(
-                scene=payload.get("scene") or n["scene"],
-                practice=payload.get("practice") or n["practice"],
-                reason=payload.get("reason") or n["reason"],
-                updated=today(),
-                origin=payload.get("origin") or n.get("origin") or "upsert",
-            )
-            if tags:
-                n["tags"] = list(dict.fromkeys((n.get("tags") or []) + tags))
-            if payload.get("sources"):
-                n["sources"] = list(dict.fromkeys((n.get("sources") or []) + list(payload["sources"])))
-            n["related"] = n.get("related") or []
-            n["supersedes"] = n.get("supersedes") or []
-            write_file(n["path"], render(n, notes))
-            return {"ok": True, "action": "update", "id": target_id, "path": n["path"], "gated": "auto"}
 
-    if action in ("add", "create", "supersede"):
-        nid = target_id if target_id and action != "supersede" else (
-            f"tip/{slug}" if typ == "tip" else f"proj/{project}/{typ}/{slug}"
+        related = [r for r in _str_list(payload.get("related")) if r in notes]
+        sources = _str_list(payload.get("sources"))
+
+        if action == "update":
+            n = target
+            for k, v in fields.items():
+                if v:
+                    n[k] = v
+            n["updated"] = today()
+            n["origin"] = str(payload.get("origin") or n.get("origin") or "upsert")[:80]
+            n["tags"] = list(dict.fromkeys(n["tags"] + tags))
+            n["sources"] = list(dict.fromkeys(n["sources"] + sources))
+            n["related"] = list(dict.fromkeys(n["related"] + [r for r in related if r != n["id"]]))
+            _write(n, notes)
+            return {"ok": True, "action": "update", "id": n["id"], "path": n["path"], "gated": gated}
+
+        slug = slugify(payload.get("slug") or title)
+        base_id = f"tip/{slug}" if typ == "tip" else f"proj/{project}/{typ}/{slug}"
+        if action == "add" and target_id and target_id not in notes and trusted:
+            base_id = target_id
+        nid = _new_id(base_id, notes)
+        base_path = f"技巧/{title}" if typ == "tip" else f"项目/{project}/{nf.FOLDER[typ]}/{title}"
+        try:
+            path = _new_path(base_path, notes)
+        except nf.UnsafePath as e:
+            return {"ok": False, "error": "unsafe_path", "detail": str(e)}
+        n = nf.new_note(
+            id=nid, path=path, type=typ, project=project, tags=tags, sources=sources,
+            related=[r for r in related if r != nid], title=title, updated=today(), origin=origin, **fields,
         )
-        if action == "supersede" or nid in notes:
-            if action == "supersede" or nid in notes:
-                nid = f"tip/{slug}" if typ == "tip" else f"proj/{project}/{typ}/{slug}"
-                if nid in notes:
-                    nid = nid + "-" + today().replace("-", "")[4:]
-        path = f"技巧/{title}" if typ == "tip" else f"项目/{project}/{FOLDER[typ]}/{title}"
-        if any(x["path"] == path for x in notes.values()):
-            path += f"-{nid.rsplit('/', 1)[-1][:12]}"
-        n = {
-            "id": nid,
-            "path": path,
-            "type": typ,
-            "project": "" if typ == "tip" else project,
-            "tags": tags,
-            "status": "active",
-            "sources": list(payload.get("sources") or []),
-            "related": list(payload.get("related") or []),
-            "supersedes": [],
-            "title": title,
-            "scene": payload.get("scene") or "",
-            "practice": payload.get("practice") or "",
-            "reason": payload.get("reason") or "",
-            "updated": today(),
-            "origin": payload.get("origin") or "upsert",
-        }
         notes[nid] = n
         if action == "supersede":
             for old in supersedes:
-                if old in notes and old != nid:
-                    notes[old]["status"] = "superseded"
-                    notes[old]["superseded_by"] = nid
-                    if old not in n["supersedes"]:
-                        n["supersedes"].append(old)
-                    write_file(notes[old]["path"], render(notes[old], notes))
-        write_file(path, render(n, notes))
-        return {"ok": True, "action": action if action != "create" else "add", "id": nid, "path": path, "gated": "auto"}
+                if old == nid:
+                    continue
+                notes[old]["status"] = "superseded"
+                notes[old]["superseded_by"] = nid
+                notes[old]["updated"] = today()
+                n["supersedes"].append(old)
+        _write(n, notes)
+        for old in n["supersedes"]:
+            _write(notes[old], notes)
+        return {"ok": True, "action": action, "id": nid, "path": path, "gated": gated}
 
-    return {"ok": False, "error": f"unknown action {action}"}
 
-
+# ------------------------------------------------------------------ drafts
 def push_draft(*, project: str, title: str, body: str, meta: dict | None = None) -> dict:
     """Write one draft file. With meta.session_id, upsert the same session draft (threshold counts sessions)."""
-    project = (project or "通用-未定").strip() or "通用-未定"
-    # never write into holdout from hooks
-    if project == "holdout":
-        project = "通用-未定"
+    project = nf.safe_project(project)
+    if project == "holdout":  # never write into holdout from hooks
+        project = UNKNOWN_PROJECT
     d = DRAFTS / project
-    d.mkdir(parents=True, exist_ok=True)
     meta = dict(meta or {})
     sid = str(meta.get("session_id") or "").strip()
     ts = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     slug = slugify(title)[:40] or "session"
     if sid:
         safe_sid = "".join(c if c.isalnum() or c in "-_" else "_" for c in sid)[:80]
-        path = d / f"session-{safe_sid}.md"
+        name = f"session-{safe_sid}"
     else:
-        path = d / f"{ts}-{slug}.md"
+        name = f"{ts}-{slug}"
+    path = nf.within(DRAFTS, f"{project}/{name}")
+    d.mkdir(parents=True, exist_ok=True)
     origin = meta.get("origin") or ("session-finalize" if sid else "turn-end")
-    fm = [
-        "---",
-        f"title: {safe_title(title)}",
-        f"project: {project}",
-        f"origin: {origin}",
-        f"created: {today()}",
-        f"updated: {today()}",
+    items: list[tuple[str, Any]] = [
+        ("title", safe_title(title)),
+        ("project", project),
+        ("origin", str(origin)[:120]),
+        ("created", today()),
+        ("updated", today()),
     ]
     for k, v in meta.items():
-        if k in ("title", "project", "body", "origin"):
+        if k in ("title", "project", "body", "origin", "created", "updated") or not _META_KEY.match(str(k)):
             continue
         if isinstance(v, (str, int, float, bool)):
-            fm.append(f"{k}: {v}")
-    fm.append("---")
-    text = redact("\n".join(fm) + "\n\n# " + safe_title(title) + "\n\n" + (body or "").strip() + "\n")
-    path.write_text(text, encoding="utf-8")
+            items.append((k, str(v)[:200]))
+    text = redact(nf.dump_frontmatter(items) + "\n\n# " + safe_title(title) + "\n\n" + (body or "").strip() + "\n")
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
     return {
         "ok": True,
         "path": str(path),

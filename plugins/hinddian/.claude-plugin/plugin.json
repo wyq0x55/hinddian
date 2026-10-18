@@ -1,6 +1,6 @@
 {
   "name": "hinddian",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Hindian memory: hinddian-memory MCP + SessionStart/Stop hooks for session drafts into Obsidian.",
   "author": {
     "name": "Wanwan",
@@ -9,20 +9,24 @@
   "homepage": "https://github.com/wyq0x55/hinddian",
   "repository": "https://github.com/wyq0x55/hinddian",
   "license": "MIT",
-  "keywords": ["memory", "mcp", "hooks", "obsidian"],
+  "keywords": [
+    "memory",
+    "mcp",
+    "hooks",
+    "obsidian"
+  ],
   "hooks": "./hooks/hooks.json",
   "mcpServers": "./.mcp.json",
   "userConfig": {
     "HINDDIAN_MEMORY_URL": {
       "type": "string",
-      "title": "Hindian base URL",
-      "description": "HTTP base for memory API (default Huawei).",
-      "default": "http://124.70.90.224/hinddian"
+      "title": "hinddian base URL",
+      "description": "https base of your hinddian server, e.g. https://memory.example.com/hinddian (plain http only for localhost)."
     },
     "HINDDIAN_MCP_TOKEN": {
       "type": "string",
-      "title": "MCP Bearer token (optional)",
-      "description": "If your hinddian MCP requires Authorization: Bearer …",
+      "title": "MCP Bearer token",
+      "description": "HINDDIAN_MCP_TOKEN of your server (agent channel).",
       "sensitive": true
     }
   }

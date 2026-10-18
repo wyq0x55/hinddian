@@ -1,34 +1,20 @@
-"""SessionStart: finalize previous session buffer; inject routing; Jev should-recall."""
+"""SessionStart: finalize previous session buffers (detached); inject routing; Jev should-recall."""
 from __future__ import annotations
 
-import json
 import os
 import sys
 import urllib.parse
-import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import extract
-import finalize
-import session_buf
-
-url = os.environ.get("HINDDIAN_MEMORY_URL", "http://124.70.90.224/hinddian").rstrip("/")
-token = os.environ.get("HINDDIAN_MCP_TOKEN") or os.environ.get("HINDSIGHT_API_KEY") or ""
+import extract  # noqa: E402
+import hookcfg  # noqa: E402
+import session_buf  # noqa: E402
 
 
 def req(method, path, body=None, timeout=12):
-    headers = {"Accept": "application/json"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    data = None
-    if body is not None:
-        headers["Content-Type"] = "application/json"
-        data = json.dumps(body, ensure_ascii=False).encode()
-    r = urllib.request.Request(url + path, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(r, timeout=timeout) as resp:
-        return json.loads(resp.read())
+    return hookcfg.req(method, path, body, timeout=timeout)
 
 
 def should_recall_local(cwd_: str, message: str, projects: list):
@@ -49,6 +35,10 @@ def should_recall_local(cwd_: str, message: str, projects: list):
 
 
 def main():
+    why = hookcfg.transport_problem()
+    if why:
+        print(f"hinddian-memory: hooks disabled — {why}.")
+        return
     stdin = ""
     if not sys.stdin.isatty():
         stdin = sys.stdin.read(50000)
@@ -57,11 +47,13 @@ def main():
     msg = payload.get("first_message") or os.environ.get("MAGPIE_FIRST_MESSAGE") or os.environ.get("MAGPIE_PROMPT") or ""
     new_sid = session_buf.stable_session_id(payload.get("session_id"), cwd, msg[:80] if msg else "new")
 
-    # Flush previous session drafts (hosts without portable session-end)
-    flushed = finalize.finalize_idle_and_others(current_sid=new_sid)
-    for fr in flushed:
-        src = fr.get("source") or fr.get("skipped")
-        print(f"hinddian finalize session={fr.get('session_id')} source={src} reason={fr.get('reason')}")
+    # Flush previous session drafts (hosts without portable session-end) without blocking start-up
+    if not hookcfg.spawn_finalize("--current", new_sid, log=session_buf.hook_dir() / "finalize.log"):
+        import finalize
+
+        for fr in finalize.finalize_idle_and_others(current_sid=new_sid):
+            src = fr.get("source") or fr.get("skipped")
+            print(f"hinddian finalize session={fr.get('session_id')} source={src} reason={fr.get('reason')}")
 
     try:
         global_rt = req("GET", "/api/memory/routing/global")
@@ -103,8 +95,8 @@ def main():
         print(
             f"Gate should_recall=YES (source={src}). If task needs memory: MCP routing_project then "
             "recall(project=…). Put recall AFTER this prefix. Never Hindsight retain. "
-            "Gated write: tip/preference or face_correction → upsert_note; decision → "
-            "user_confirmed or suggest_correction (dashboard). No hard delete (supersede/obsolete). No secrets."
+            "Gated write: tip/preference/lesson → upsert_note; decision → queued for the user's "
+            "dashboard approval (suggest_correction). No hard delete (supersede/obsolete). No secrets."
         )
     else:
         print(

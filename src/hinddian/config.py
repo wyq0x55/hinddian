@@ -8,13 +8,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    """Single source of server configuration (env / .env). Read via get_settings()."""
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
 
-    # Optional on Huawei (vault lives on DMIT). Empty / missing = skip vault scan.
+    # Optional on Huawei (vault lives on DMIT). Empty / missing = vault ops go over SSH.
     vault_root: Path | None = None
     inbox_dir: Path = Path("/opt/session-distill/inbox")
     processed_dir: Path = Path("/opt/session-distill/processed")
@@ -22,23 +24,27 @@ class Settings(BaseSettings):
     failed_dir: Path = Path("/opt/session-distill/failed")
 
     hindsight_base_url: str = "http://127.0.0.1:8888"
-    hindsight_mcp_url: str = "http://127.0.0.1:8888/mcp/wanwan/"
     hindsight_api_key: str | None = None
     hindsight_bank: str = "wanwan"
     # Does the distill worker retain filtered sessions into Hindsight? (branch c)
     hindsight_retain_enabled: bool = False
 
-    # DMIT classify stage (pi). Reached via root SSH alias, same as session-distill.
+    # DMIT vault + classify stage, reached via root SSH alias.
     classify_ssh_host: str = "dmit-vps"
     classify_enabled: bool = True
+    ssh_control_path: str = "/run/hinddian-ssh-%C"
 
     hinddian_host: str = "127.0.0.1"
     hinddian_port: int = 8787
+    # Agent channel (MCP + /api/memory/*): hooks and agents hold this token.
+    hinddian_mcp_token: str | None = None
+    # Human channel (dashboard + approvals). Must differ from the MCP token, or an agent could
+    # approve its own suggestions.
     auth_token: str | None = None
+    # Local development only: run without tokens.
+    hinddian_allow_no_auth: bool = False
 
     status_db: Path = Path("./data/hinddian.db")
-    # Production default: real inbox only. Demo when paths missing AND this is true.
-    use_demo_data: bool = False
 
     agent_tips_relpath: str = "00-系统/agent使用技巧.md"
     projects_dirname: str = "项目"
@@ -49,6 +55,10 @@ class Settings(BaseSettings):
         if v is None or v == "" or v == "None":
             return None
         return v
+
+    @property
+    def vault_local(self) -> bool:
+        return bool(self.vault_root and self.vault_root.is_dir())
 
 
 @lru_cache

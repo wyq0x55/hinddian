@@ -12,6 +12,11 @@ Commands: run | approve <project> [--now] | gate --json | process <project> [--d
 from __future__ import annotations
 import argparse, datetime as dt, fcntl, hashlib, json, os, pathlib, re, shutil, subprocess, sys, urllib.request
 
+for _root in (pathlib.Path(__file__).resolve().parents[1] / "src", pathlib.Path("/opt/hinddian/src"), pathlib.Path("/opt/hinddian-classify/src")):
+    if (_root / "hinddian" / "note_format.py").is_file():
+        sys.path.insert(0, str(_root)); break
+from hinddian import note_format as nf  # noqa: E402
+
 VAULT = pathlib.Path(os.environ.get("HC_VAULT", "/srv/obsidian/vault"))
 BASE = pathlib.Path(os.environ.get("HB_BASE", "/var/lib/hinddian"))
 DRAFTS, PROCESSED, GATE, LOG = BASE / "drafts", BASE / "processed", BASE / "gate.json", BASE / "batch-ledger.jsonl"
@@ -25,99 +30,22 @@ UNKNOWN = "通用-未定"
 DEDUPE = float(os.environ.get("HB_DEDUPE", "0.40"))
 FULL_TOP = int(os.environ.get("HB_FULL_TOP", "25"))
 SPECIAL = {"holdout", UNKNOWN}
-FOLDER = {"decision": "决策", "lesson": "经验"}
+FOLDER = nf.FOLDER
 OWNER = os.environ.get("HC_OWNER", "obsidian")
-SECRET_RE = [re.compile(r"(?i)(password|passwd|secret|token|api[_-]?key|bearer)\s*[:=]\s*['\"]?[A-Za-z0-9_\-\.]{12,}"),
-             re.compile(r"sk-[A-Za-z0-9]{16,}"), re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
-             re.compile(r"\b(ghp|gho|github_pat)_[A-Za-z0-9_]{20,}")]
 
 def today(): return dt.date.today().isoformat()
 def now(): return dt.datetime.now().astimezone().isoformat(timespec="seconds")
-def log(ev): BASE.mkdir(parents=True, exist_ok=True); open(LOG, "a").write(json.dumps({"at": now(), **ev}, ensure_ascii=False) + "\n")
-def redact(t): 
-    for r in SECRET_RE: t = r.sub("[REDACTED]", t)
-    return t
-def safe(t): return re.sub(r'[\\/:*?"<>|#\[\]^]', "-", t).strip()[:80]
-def slugify(s): return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:60] or "note"
+def log(ev):
+    BASE.mkdir(parents=True, exist_ok=True)
+    with open(LOG, "a") as f: f.write(json.dumps({"at": now(), **ev}, ensure_ascii=False) + "\n")
+redact, safe, slugify, link_of = nf.redact, nf.safe_title, nf.slugify, nf.link_of
 
-# ------------------------------------------------------------------ notes
-def parse_note(p: pathlib.Path):
-    t = p.read_text(errors="ignore")
-    if not t.startswith("---\n"): return None
-    end = t.find("\n---\n", 4)
-    if end < 0: return None
-    fm = {}
-    for line in t[4:end].splitlines():
-        if ":" in line:
-            k, v = line.split(":", 1); fm[k.strip()] = v.strip()
-    if "id" not in fm: return None
-    body = t[end + 5:]
-    sec = dict(re.findall(r"^## (.+?)\n(.*?)(?=^## |\Z)", body, re.M | re.S))
-    title = (re.search(r"^# (.+)$", body, re.M) or [None, p.stem])[1]
-    def lst(v):
-        v = (v or "").strip()
-        links = re.findall(r"\[\[[^\]]+\]\]", v)
-        if links: return links
-        return [x.strip().strip('"') for x in v.strip("[]").split(",") if x.strip().strip('"')]
-    return dict(path=str(p.relative_to(VAULT))[:-3], id=fm["id"], type=fm.get("type", ""), project=fm.get("project", ""),
-                tags=lst(fm.get("tags")), status=fm.get("status", "active"), sources=lst(fm.get("sources")),
-                related_raw=lst(fm.get("related")), supersedes_raw=lst(fm.get("supersedes")), legacy_code=fm.get("legacy_code", ""),
-                origin=fm.get("origin", ""), updated=fm.get("updated", ""), title=title,
-                scene=sec.get("场景", "").strip(), practice=sec.get("做法", "").strip(), reason=sec.get("理由", "").strip(),
-                extra=sec.get("影响 / 推广", "").strip(), text=t)
-
-def load_notes():
-    out = {}
-    for p in VAULT.rglob("*.md"):
-        if any(x in p.parts for x in (".obsidian", "_归档", ".git", ".trash")): continue
-        n = parse_note(p)
-        if n: out[n["id"]] = n
-    return out
-
-def link_of(n): return f"[[{n['path']}|{n['title']}]]"
-def link_target(l): m = re.match(r"\[\[([^\]|]+)", l); return m.group(1) if m else l
-
-WIKI = re.compile(r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]")
-def unwiki(t): return WIKI.sub(lambda m: f"`{m.group(2) or m.group(1)}`", t or "")
-
-def render(n, notes):
-    bypath = {x["path"]: x for x in notes.values()}
-    def links(ids): return [link_of(notes[i]) for i in ids if i in notes]
-    fm = ["---", f"id: {n['id']}", f"type: {n['type']}", f"project: {n['project'] or 'global'}",
-          "tags: [" + ", ".join(n["tags"]) + "]", f"status: {n['status']}",
-          "supersedes: [" + ", ".join(f'"{l}"' for l in links(n["supersedes"])) + "]",
-          "related: [" + ", ".join(f'"{l}"' for l in links(n["related"])) + "]",
-          "sources: [" + ", ".join(n["sources"]) + "]", f"updated: {n['updated']}"]
-    if n.get("legacy_code"): fm.append(f"legacy_code: {n['legacy_code']}")
-    if n.get("origin"): fm.append(f"origin: {n['origin']}")
-    fm.append("---")
-    hub = f"[[项目/{n['project']}/README|{n['project']}]]" if n["type"] != "tip" else "[[技巧/技巧|agent使用技巧]]"
-    b = [f"# {n['title']}", "", f"> 所属：{hub}" + (f" · 归纳自 {len(n['sources'])} 个会话" if n["sources"] else "")]
-    if n["status"] == "superseded" and n.get("superseded_by") in notes:
-        b.append(f"> ⚠️ 已被 {link_of(notes[n['superseded_by']])} 取代")
-    b += ["", "## 场景", unwiki(n["scene"]) or "（待补）", "", "## 做法", unwiki(n["practice"]) or "（待补）", "", "## 理由", unwiki(n["reason"]) or "（待补）", ""]
-    if n.get("extra"): b += ["## 影响 / 推广", n["extra"], ""]
-    if n["supersedes"]: b += ["## 取代", *[f"- {l}" for l in links(n["supersedes"])], ""]
-    if n["related"]: b += ["## 相关", *[f"- {l}" for l in links(n["related"])], ""]
-    return redact("\n".join(fm + b))
-
-def resolve_ids(n, notes):
-    bypath = {x["path"]: x["id"] for x in notes.values()}
-    n["related"] = [bypath.get(link_target(l), l) for l in n.get("related_raw", [])]
-    n["supersedes"] = [bypath.get(link_target(l), l) for l in n.get("supersedes_raw", [])]
-    m = re.search(r"已被 \[\[([^\]|]+)", n.get("text", ""))
-    if m: n["superseded_by"] = bypath.get(m.group(1))
-
-def write_file(rel, text):
-    p = VAULT / (rel + ".md"); p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".md.tmp"); tmp.write_text(text); os.replace(tmp, p)
-    try: shutil.chown(p, OWNER, OWNER); os.chmod(p, 0o664)
-    except Exception: pass
-    d = p.parent
-    while d != VAULT:
-        try: shutil.chown(d, OWNER, OWNER)
-        except Exception: pass
-        d = d.parent
+# ------------------------------------------------------------------ notes (format shared with hinddian.notes)
+_cache = nf.NoteCache()
+def load_notes(): return _cache.load(VAULT)
+def render(n, notes): return nf.render(n, notes, today=today())
+def write_file(rel, text): return nf.write_note_file(VAULT, rel, text, owner=OWNER)
+def clean_field(t): return nf.guard_field(nf.unwiki(t or ""))
 
 # ------------------------------------------------------------------ hubs
 def _grams(t):
@@ -138,8 +66,10 @@ def suggest_related(notes, k=3, thr=0.12):
 
 def repair_notes():
     """Re-render notes whose related/supersedes point at missing notes (or contain stray wikilinks in body)."""
+    with nf.vault_lock(): return _repair_notes()
+
+def _repair_notes():
     notes = load_notes(); fixed = 0
-    for n in notes.values(): resolve_ids(n, notes)
     for n in notes.values():
         if n["type"] not in ("tip", "decision", "lesson"): continue
         n["related"] = [r for r in n["related"] if r in notes and r != n["id"]]
@@ -152,7 +82,10 @@ def repair_notes():
     return fixed
 
 def rebuild_hubs():
-    repair_notes()
+    with nf.vault_lock(): _rebuild_hubs()
+
+def _rebuild_hubs():
+    _repair_notes()
     try:
         import graph_colors; graph_colors.main()
     except Exception as e: log({"event": "graph_colors_error", "error": str(e)[:200]})
@@ -241,8 +174,7 @@ def note_digest(n, full=True):
     return s
 
 def process(project: str, files: list[pathlib.Path], dry=False):
-    notes = load_notes()
-    for n in notes.values(): resolve_ids(n, notes)
+    notes = load_notes()  # snapshot for the prompt; the LLM call can take minutes, so no lock yet
     tips_only = project == UNKNOWN
     pool = [n for n in notes.values() if n["status"] == "active" and (n["type"] == "tip" or (not tips_only and n["project"] == project))]
     idx, chunks = {}, []
@@ -261,12 +193,22 @@ def process(project: str, files: list[pathlib.Path], dry=False):
         try: data = parse_json(chat(prompt)); break
         except (ValueError, KeyError) as e:
             if attempt == 2: raise RuntimeError(f"model output unparseable after 3 tries: {e}")
+    with nf.vault_lock(timeout=300):
+        return _apply(project, files, data, idx, dry)
+
+def _apply(project, files, data, idx, dry):
+    """Apply the model's ops against a fresh read of the vault (MCP upserts may have landed meanwhile)."""
+    notes = load_notes()
+    tips_only = project == UNKNOWN
+    pool = [n for n in notes.values() if n["status"] == "active" and (n["type"] == "tip" or (not tips_only and n["project"] == project))]
     plan, newids = [], {}
     def norm(op):
         for k in ("scene", "practice", "reason", "title", "slug", "id"):
             v = op.get(k)
             if isinstance(v, list): op[k] = "\n".join(f"- {x}" for x in v) if k == "practice" else "；".join(map(str, v))
             elif v is not None and not isinstance(v, str): op[k] = str(v)
+        for k in ("scene", "practice", "reason"):
+            if op.get(k): op[k] = clean_field(op[k])
         for k in ("tags", "related", "supersedes", "sources"):
             v = op.get(k) or []
             v = v if isinstance(v, list) else [v]
@@ -308,13 +250,13 @@ def process(project: str, files: list[pathlib.Path], dry=False):
             title = safe(op.get("title") or nid.rsplit("/", 1)[-1])
             path = f"技巧/{title}" if typ == "tip" else f"项目/{project}/{FOLDER[typ]}/{title}"
             if any(x["path"] == path for x in notes.values()): path += f"-{nid.rsplit('/', 1)[-1][:12]}"
-            n = dict(id=nid, path=path, type=typ, project="" if typ == "tip" else project, tags=op.get("tags", []), status="active",
-                     sources=srcs, related=[r for r in rel if r != nid], supersedes=[], title=title, scene=op.get("scene", ""),
-                     practice=op.get("practice", ""), reason=op.get("reason", ""), extra="", updated=today(), origin="batch-distill")
+            n = nf.new_note(id=nid, path=path, type=typ, project="" if typ == "tip" else project, tags=op.get("tags", []),
+                            sources=srcs, related=[r for r in rel if r != nid], title=title, scene=op.get("scene", ""),
+                            practice=op.get("practice", ""), reason=op.get("reason", ""), updated=today(), origin="batch-distill")
             notes[nid] = n
         for old in op.get("supersedes", []):
             if old in notes and old != nid:
-                notes[old]["status"] = "superseded"; notes[old]["superseded_by"] = nid
+                notes[old]["status"] = "superseded"; notes[old]["superseded_by"] = nid; notes[old]["updated"] = today()
                 if old not in n["supersedes"]: n["supersedes"].append(old)
         if op.get("merged_by_dedupe"): action = "update(dedupe)"
         result.append({"action": action, "id": nid, "title": n["title"], "sources": len(srcs), "supersedes": n["supersedes"]})
@@ -359,7 +301,8 @@ class Lock:
     def __enter__(self):
         BASE.mkdir(parents=True, exist_ok=True); self.f = open(BASE / "batch.lock", "w")
         try: fcntl.flock(self.f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError: print("busy"); sys.exit(0)
+        except BlockingIOError:
+            print("busy: another batch run holds batch.lock", file=sys.stderr); sys.exit(75)  # EX_TEMPFAIL
     def __exit__(self, *a): self.f.close()
 
 def run_project(project, max_batches=None):

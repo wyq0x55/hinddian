@@ -1,7 +1,14 @@
-"""FastAPI: health + pipeline observability endpoints + static dashboard."""
+"""FastAPI app. Two channels with separate credentials:
+
+  agent channel     /mcp, /api/memory/*  — Bearer HINDDIAN_MCP_TOKEN (memory_mcp.py)
+  dashboard channel /, /api/*            — AUTH_TOKEN, as Bearer or as the X-Hinddian-Dashboard
+                                           header a TLS/mTLS proxy injects. Approvals live here only.
+"""
 
 from __future__ import annotations
 
+import hmac
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException
@@ -10,24 +17,20 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from . import classify_remote
-from .config import Settings, get_settings
-from .models import DistillJob, FilterResult, InboxItem, MergeEvent, PipelineStats, TopicDocStatus
 from . import memory_mcp
-from .store import (
-    StatusStore,
-    build_topic_statuses,
-    collect_filters,
-    compute_stats,
-    demo_inbox,
-    demo_stats,
-    demo_topics,
-    scan_inbox,
-    seed_demo_if_empty,
-)
+from .config import Settings, get_settings
+from .models import FilterResult, InboxItem, PipelineStats, TopicDocStatus
+from .store import build_topic_statuses, collect_filters, compute_stats, scan_inbox
 
 WEB_DIR = Path(__file__).resolve().parents[2] / "web"
 
-app = FastAPI(title="hinddian", version=__version__, description="Topic memory pipeline dashboard")
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    get_settings().status_db.parent.mkdir(parents=True, exist_ok=True)
+    yield
+
+
+app = FastAPI(title="hinddian", version=__version__, description="Topic memory pipeline dashboard", lifespan=_lifespan)
 app.include_router(memory_mcp.router)
 
 
@@ -35,112 +38,23 @@ def _settings() -> Settings:
     return get_settings()
 
 
-def require_auth(
+def require_dashboard(
     authorization: str | None = Header(default=None),
+    x_hinddian_dashboard: str | None = Header(default=None),
     settings: Settings = Depends(_settings),
 ) -> None:
     token = settings.auth_token
     if not token:
-        return
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="Bearer token required")
-    got = authorization.split(" ", 1)[1].strip()
-    if got != token:
-        raise HTTPException(status_code=403, detail="Invalid token")
-
-
-def _paths_missing(settings: Settings) -> bool:
-    return not settings.inbox_dir.is_dir()
-
-
-@app.on_event("startup")
-def _startup() -> None:
-    settings = get_settings()
-    settings.status_db.parent.mkdir(parents=True, exist_ok=True)
-    # Never seed demo when USE_DEMO_DATA=false (production).
-    if settings.use_demo_data and _paths_missing(settings):
-        seed_demo_if_empty(settings)
-
-
-@app.get("/api/health")
-def health(settings: Settings = Depends(_settings)) -> dict:
-    return {
-        "ok": True,
-        "service": "hinddian",
-        "version": __version__,
-        "demo": settings.use_demo_data and _paths_missing(settings),
-        "use_demo_data": settings.use_demo_data,
-        "vault_root": str(settings.vault_root) if settings.vault_root else None,
-        "vault_mounted": bool(settings.vault_root and settings.vault_root.is_dir()),
-        "inbox_dir": str(settings.inbox_dir),
-        "inbox_exists": settings.inbox_dir.is_dir(),
-    }
-
-
-@app.get("/api/stats", response_model=PipelineStats, dependencies=[Depends(require_auth)])
-def stats(settings: Settings = Depends(_settings)) -> PipelineStats:
-    if settings.use_demo_data and _paths_missing(settings):
-        seed_demo_if_empty(settings)
-        real = compute_stats(settings)
-        d = demo_stats()
-        d.jobs_pending = real.jobs_pending or d.jobs_pending
-        d.jobs_running = real.jobs_running or d.jobs_running
-        d.jobs_done = real.jobs_done or d.jobs_done
-        d.jobs_failed = real.jobs_failed or d.jobs_failed
-        d.pending_ingests = real.pending_ingests or d.pending_ingests
-        d.topics_tracked = max(real.topics_tracked, d.topics_tracked)
-        return d
-    return compute_stats(settings)
-
-
-@app.get("/api/inbox", response_model=list[InboxItem], dependencies=[Depends(require_auth)])
-def inbox(settings: Settings = Depends(_settings)) -> list[InboxItem]:
-    items = scan_inbox(settings)
-    if not items and settings.use_demo_data and _paths_missing(settings):
-        return demo_inbox()
-    return items
-
-
-@app.get("/api/jobs", response_model=list[DistillJob], dependencies=[Depends(require_auth)])
-def jobs(settings: Settings = Depends(_settings)) -> list[DistillJob]:
-    if settings.use_demo_data and _paths_missing(settings):
-        seed_demo_if_empty(settings)
-    return StatusStore(settings.status_db).list_jobs()
-
-
-@app.get("/api/filters", response_model=list[FilterResult], dependencies=[Depends(require_auth)])
-def filters(settings: Settings = Depends(_settings)) -> list[FilterResult]:
-    live = collect_filters(settings)
-    if live:
-        return live
-    if settings.use_demo_data and _paths_missing(settings):
-        seed_demo_if_empty(settings)
-        return StatusStore(settings.status_db).filter_results()
-    return []
-
-
-@app.get("/api/topics", response_model=list[TopicDocStatus], dependencies=[Depends(require_auth)])
-def topics(settings: Settings = Depends(_settings)) -> list[TopicDocStatus]:
-    if settings.use_demo_data and _paths_missing(settings):
-        seed_demo_if_empty(settings)
-        real = build_topic_statuses(settings)
-        if len(real) <= 1 and not (settings.vault_root and settings.vault_root.is_dir()):
-            return demo_topics()
-        return real
-    # Production: real topics only (agent tips always present; vault optional).
-    return build_topic_statuses(settings)
-
-
-@app.get("/api/merges", response_model=list[MergeEvent], dependencies=[Depends(require_auth)])
-def merges(settings: Settings = Depends(_settings)) -> list[MergeEvent]:
-    if settings.use_demo_data and _paths_missing(settings):
-        seed_demo_if_empty(settings)
-    return StatusStore(settings.status_db).list_merges()
-
-
-def _classify_guard(settings: Settings) -> None:
-    if not settings.classify_enabled:
-        raise HTTPException(503, "classify stage disabled")
+        if settings.hinddian_allow_no_auth:
+            return
+        raise HTTPException(503, "dashboard disabled: set AUTH_TOKEN (distinct from HINDDIAN_MCP_TOKEN)")
+    if settings.hinddian_mcp_token and hmac.compare_digest(token.encode(), settings.hinddian_mcp_token.encode()):
+        raise HTTPException(503, "AUTH_TOKEN must differ from HINDDIAN_MCP_TOKEN")
+    got = memory_mcp.bearer(authorization) or (x_hinddian_dashboard or "").strip()
+    if not got:
+        raise HTTPException(401, "dashboard token required")
+    if not hmac.compare_digest(got.encode(), token.encode()):
+        raise HTTPException(403, "invalid token")
 
 
 def require_csrf(x_hinddian: str | None = Header(default=None)) -> None:
@@ -149,7 +63,41 @@ def require_csrf(x_hinddian: str | None = Header(default=None)) -> None:
         raise HTTPException(403, "missing X-Hinddian header")
 
 
-@app.get("/api/classify/stats", dependencies=[Depends(require_auth)])
+dash = [Depends(require_dashboard)]
+dash_write = [Depends(require_dashboard), Depends(require_csrf)]
+
+
+@app.get("/api/health")
+def health() -> dict:
+    return {"ok": True, "service": "hinddian", "version": __version__}
+
+
+@app.get("/api/stats", response_model=PipelineStats, dependencies=dash)
+def stats(settings: Settings = Depends(_settings)) -> PipelineStats:
+    return compute_stats(settings)
+
+
+@app.get("/api/inbox", response_model=list[InboxItem], dependencies=dash)
+def inbox(settings: Settings = Depends(_settings)) -> list[InboxItem]:
+    return scan_inbox(settings)
+
+
+@app.get("/api/filters", response_model=list[FilterResult], dependencies=dash)
+def filters(settings: Settings = Depends(_settings)) -> list[FilterResult]:
+    return collect_filters(settings)
+
+
+@app.get("/api/topics", response_model=list[TopicDocStatus], dependencies=dash)
+def topics(settings: Settings = Depends(_settings)) -> list[TopicDocStatus]:
+    return build_topic_statuses(settings)
+
+
+def _classify_guard(settings: Settings) -> None:
+    if not settings.classify_enabled:
+        raise HTTPException(503, "classify stage disabled")
+
+
+@app.get("/api/classify/stats", dependencies=dash)
 def classify_stats(settings: Settings = Depends(_settings)) -> dict:
     _classify_guard(settings)
     try:
@@ -164,7 +112,7 @@ def classify_stats(settings: Settings = Depends(_settings)) -> dict:
     return data
 
 
-@app.get("/api/gate", dependencies=[Depends(require_auth)])
+@app.get("/api/gate", dependencies=dash)
 def batch_gate(settings: Settings = Depends(_settings)) -> dict:
     _classify_guard(settings)
     try:
@@ -173,7 +121,7 @@ def batch_gate(settings: Settings = Depends(_settings)) -> dict:
         raise HTTPException(502, str(e)) from e
 
 
-@app.post("/api/gate/{project}/approve", dependencies=[Depends(require_auth), Depends(require_csrf)])
+@app.post("/api/gate/{project}/approve", dependencies=dash_write)
 def batch_approve(project: str, settings: Settings = Depends(_settings)) -> dict:
     _classify_guard(settings)
     try:
@@ -182,7 +130,7 @@ def batch_approve(project: str, settings: Settings = Depends(_settings)) -> dict
         raise HTTPException(400, str(e)) from e
 
 
-@app.get("/api/classify/proposals", dependencies=[Depends(require_auth)])
+@app.get("/api/classify/proposals", dependencies=dash)
 def classify_proposals(status: str = "pending", settings: Settings = Depends(_settings)) -> list[dict]:
     _classify_guard(settings)
     try:
@@ -191,7 +139,7 @@ def classify_proposals(status: str = "pending", settings: Settings = Depends(_se
         raise HTTPException(502, str(e)) from e
 
 
-@app.get("/api/classify/recent", dependencies=[Depends(require_auth)])
+@app.get("/api/classify/recent", dependencies=dash)
 def classify_recent(limit: int = 30, settings: Settings = Depends(_settings)) -> list[dict]:
     _classify_guard(settings)
     try:
@@ -200,7 +148,7 @@ def classify_recent(limit: int = 30, settings: Settings = Depends(_settings)) ->
         raise HTTPException(502, str(e)) from e
 
 
-@app.post("/api/classify/proposals/{pid}/approve", dependencies=[Depends(require_auth), Depends(require_csrf)])
+@app.post("/api/classify/proposals/{pid}/approve", dependencies=dash_write)
 def classify_approve(pid: str, settings: Settings = Depends(_settings)) -> dict:
     _classify_guard(settings)
     try:
@@ -209,7 +157,7 @@ def classify_approve(pid: str, settings: Settings = Depends(_settings)) -> dict:
         raise HTTPException(502, str(e)) from e
 
 
-@app.post("/api/classify/proposals/{pid}/reject", dependencies=[Depends(require_auth), Depends(require_csrf)])
+@app.post("/api/classify/proposals/{pid}/reject", dependencies=dash_write)
 def classify_reject(pid: str, payload: dict = Body(default={}), settings: Settings = Depends(_settings)) -> dict:
     _classify_guard(settings)
     try:
@@ -218,7 +166,7 @@ def classify_reject(pid: str, payload: dict = Body(default={}), settings: Settin
         raise HTTPException(502, str(e)) from e
 
 
-@app.post("/api/classify/proposals/batch", dependencies=[Depends(require_auth), Depends(require_csrf)])
+@app.post("/api/classify/proposals/batch", dependencies=dash_write)
 def classify_batch(payload: dict = Body(...), settings: Settings = Depends(_settings)) -> dict:
     """{ids: [...], action: approve|reject, reason?} — DMIT applies sequentially under one lock,
     re-reading the target before each write and renumbering D-/L- ids."""
@@ -232,7 +180,7 @@ def classify_batch(payload: dict = Body(...), settings: Settings = Depends(_sett
         raise HTTPException(502, str(e)) from e
 
 
-@app.post("/api/classify/proposals/{pid}/restore", dependencies=[Depends(require_auth), Depends(require_csrf)])
+@app.post("/api/classify/proposals/{pid}/restore", dependencies=dash_write)
 def classify_restore(pid: str, settings: Settings = Depends(_settings)) -> dict:
     _classify_guard(settings)
     try:
@@ -241,42 +189,33 @@ def classify_restore(pid: str, settings: Settings = Depends(_settings)) -> dict:
         raise HTTPException(502, str(e)) from e
 
 
-
-@app.get("/api/corrections", dependencies=[Depends(require_auth)])
+@app.get("/api/corrections", dependencies=dash)
 def list_agent_corrections(status: str = "pending") -> list[dict]:
     """Agent gated-upsert suggestions queued on DMIT (alongside distill proposals)."""
     try:
-        if memory_mcp._vault_local():
-            return memory_mcp._notes_mod().list_corrections(status=status)
-        return memory_mcp._ssh_cli(["list_corrections", f"--status={status}", "--limit", "100"])
+        return memory_mcp.vault("list_corrections", status=status, limit=100)
     except Exception as e:
         raise HTTPException(502, str(e)[:300]) from e
 
 
-@app.post("/api/corrections/{cid}/approve", dependencies=[Depends(require_auth), Depends(require_csrf)])
+@app.post("/api/corrections/{cid}/approve", dependencies=dash_write)
 def approve_agent_correction(cid: str) -> dict:
     try:
-        if memory_mcp._vault_local():
-            return memory_mcp._notes_mod().decide_correction(cid, approve=True)
-        return memory_mcp._ssh_cli(["decide_correction", "--id", cid, "--approve"])
+        return memory_mcp.vault("decide_correction", id=cid, approve=True)
     except Exception as e:
         raise HTTPException(502, str(e)[:300]) from e
 
 
-@app.post("/api/corrections/{cid}/reject", dependencies=[Depends(require_auth), Depends(require_csrf)])
+@app.post("/api/corrections/{cid}/reject", dependencies=dash_write)
 def reject_agent_correction(cid: str, payload: dict = Body(default={})) -> dict:
     reason = str((payload or {}).get("reason") or "")
     try:
-        if memory_mcp._vault_local():
-            return memory_mcp._notes_mod().decide_correction(cid, approve=False, reason=reason)
-        return memory_mcp._ssh_cli(
-            ["decide_correction", "--id", cid, "--reject", "--reason", reason]
-        )
+        return memory_mcp.vault("decide_correction", id=cid, approve=False, reason=reason)
     except Exception as e:
         raise HTTPException(502, str(e)[:300]) from e
 
 
-@app.get("/")
+@app.get("/", dependencies=dash)
 def index() -> FileResponse:
     index_path = WEB_DIR / "index.html"
     if not index_path.is_file():

@@ -2,7 +2,10 @@
   "mcpServers": {
     "hinddian-memory": {
       "type": "http",
-      "url": "http://124.70.90.224/hinddian/mcp"
+      "url": "${HINDDIAN_MEMORY_URL}/mcp",
+      "headers": {
+        "Authorization": "Bearer ${HINDDIAN_MCP_TOKEN}"
+      }
     }
   }
 }

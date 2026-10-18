@@ -14,19 +14,18 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))
-from embed_hooks import hook_defs, hooks_version  # noqa: E402
 
 LIB = Path(os.environ.get("MAGPIE_LIBRARY") or (Path.home() / ".config/magpie/library.json"))
-MCP_URL = os.environ.get("HINDDIAN_MCP_URL", "http://124.70.90.224/hinddian/mcp")
+MCP_URL = (os.environ.get("HINDDIAN_MCP_URL") or (
+    (os.environ.get("HINDDIAN_MEMORY_URL") or "").rstrip("/") + "/mcp" if os.environ.get("HINDDIAN_MEMORY_URL") else ""
+)).strip()
+if not MCP_URL:
+    raise SystemExit("set HINDDIAN_MCP_URL (or HINDDIAN_MEMORY_URL), e.g. https://<host>/hinddian/mcp")
 def _skill_src() -> Path:
-    """Resolve skill pack whether this file lives in deploy/magpie or adapters/magpie/deploy."""
+    """Skill pack next to this adapter (adapters/magpie/skills), else the repo-root mirror."""
     candidates = [
-        HERE / "skill-hinddian-hooks",
-        HERE.parents[1] / "skills" / "hinddian-hooks",  # deploy/magpie → repo/skills
-        HERE.parents[2] / "skills" / "hinddian-hooks",  # adapters/magpie/deploy → repo/skills
-        HERE.parents[2] / "adapters" / "magpie" / "skills" / "hinddian-hooks",
-        HERE.parents[1] / "skills" / "hinddian-hooks",  # adapters/magpie → …/skills (unlikely)
+        HERE.parent / "skills" / "hinddian-hooks",
+        HERE.parents[2] / "skills" / "hinddian-hooks",
     ]
     for c in candidates:
         if (c / "SKILL.md").is_file():
@@ -35,6 +34,8 @@ def _skill_src() -> Path:
 
 SKILL_SRC = _skill_src()
 SKILL_NAME = "hinddian-hooks"
+sys.path.insert(0, str(SKILL_SRC))  # embed_hooks ships with the skill pack
+from embed_hooks import hook_defs, hooks_version  # noqa: E402
 
 
 def install_skill(magpie_cfg: Path) -> dict:
