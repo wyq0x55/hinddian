@@ -1,0 +1,39 @@
+{
+  "name": "hinddian-magpie",
+  "version": "0.2.0",
+  "description": "Hindian memory for Magpie: install Library Hooks + hinddian-memory MCP (WebDAV does not sync Hooks).",
+  "type": "module",
+  "main": "./magpie-plugin/index.mjs",
+  "files": [
+    "magpie-plugin",
+    "skills/hinddian-hooks",
+    "deploy/magpie/skill-hinddian-hooks",
+    "README.md"
+  ],
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "magpie",
+    "magpie-plugin",
+    "hinddian",
+    "memory",
+    "mcp"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wyq0x55/hinddian.git"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.1.0"
+  },
+  "magpie": {
+    "icon": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23111827'/%3E%3Cpath d='M18 40V24h6l8 12 8-12h6v16h-5V31l-7 10h-4l-7-10v9H18z' fill='%2360a5fa'/%3E%3C/svg%3E",
+    "page": {
+      "title": "Hindian",
+      "titles": { "zh": "Hindian 记忆", "zh-TW": "Hindian 記憶" },
+      "file": "magpie-plugin/page/index.html",
+      "icon": "magpie-plugin/page/icon.svg"
+    }
+  }
+}

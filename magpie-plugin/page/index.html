@@ -1,0 +1,36 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Hindian</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 16px; max-width: 42rem; }
+  h1 { font-size: 1.15rem; margin: 0 0 8px; }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+  pre { background: var(--magpie-bg, #111); border: 1px solid color-mix(in srgb, var(--magpie-fg, #fff) 15%, transparent); padding: 10px; border-radius: 8px; overflow: auto; }
+  .warn { color: #f59e0b; }
+  li { margin: 4px 0; }
+</style>
+<script src="_magpie/bridge.js"></script>
+<script defer>
+  magpie.ready.then(() => {})
+</script>
+<h1>Hindian 记忆</h1>
+<p>把 <strong>hinddian-memory MCP</strong> 和 Magpie <strong>Library Hooks</strong>（session-start / turn-end）装到本机。</p>
+<p class="warn">硬限制：Magpie WebDAV / 备份 <strong>不同步 Hooks</strong>；插件启用也不会自动写入 Hooks。每台电脑装一次。</p>
+<h2>推荐（像市场一样）</h2>
+<ol>
+  <li>Magpie → <b>Library → Skills</b> → 粘贴 <code>wyq0x55/hinddian</code> → 安装 <code>hinddian-hooks</code></li>
+  <li>Windows PowerShell 执行：</li>
+</ol>
+<pre>magpie webdav now
+&amp; "$env:USERPROFILE\.config\magpie\library\skills\hinddian-hooks\install.ps1"</pre>
+<p>或对任意 Agent 说：<b>安装 hinddian</b>（若已启用本插件工具）。</p>
+<h2>插件安装</h2>
+<pre>magpie plugin add github:wyq0x55/hinddian
+# 然后让 Agent 调用 hinddian_install，或手动跑上面的 install.ps1</pre>
+<p>私有仓库需在 Magpie Settings 填 GitHub token。</p>
+<h2>装好后检查</h2>
+<ul>
+  <li>Library → Hooks：<code>hinddian-session-start</code>、<code>hinddian-turn-end</code></li>
+  <li>Library → MCP：<code>hinddian-memory</code></li>
+</ul>
+<p>不要在其他电脑跑 <code>apply_library.py</code>（SoT 在 DMIT）。</p>
