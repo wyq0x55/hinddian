@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session_start_entry.py\"",
+            "statusMessage": "hinddian: session start / finalize prior buffer"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/turn_end_entry.py\"",
+            "statusMessage": "hinddian: buffer turn into session draft"
+          }
+        ]
+      }
+    ]
+  }
+}
