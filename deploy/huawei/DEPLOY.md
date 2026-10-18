@@ -1,6 +1,6 @@
 # hinddian · 华为部署
 
-目标：仪表盘与 hinddian-memory API 在华为（与 `/opt/session-distill` 同机）；手机用 **与 Magpie 同一套客户端证书** 访问 `https://124.70.90.224:8443/`。
+目标：仪表盘与 hinddian-memory API 在华为（与 `/opt/session-distill` 同机）；手机用 **既有 mTLS 客户端证书** 访问 `https://124.70.90.224:8443/`。
 
 ## 现行组件一览
 
@@ -9,7 +9,7 @@
 | `hinddian.service` | FastAPI：仪表盘 + MCP `POST /mcp` + `/api/memory/*` |
 | Caddy `:80` `/hinddian/*` | 公网 hinddian-memory（Bearer）；hooks 用 `HINDDIAN_MEMORY_URL` |
 | Caddy `:8443` mTLS | 仪表盘（图谱 / 批准项目 / Agent 修正） |
-| `magpie-tunnel.service` | 本机 `127.0.0.1:3425` → DMIT Magpie（Jev + LLM） |
+| `magpie-tunnel.service`（可选 infra 名） | 本机 `127.0.0.1:3425` → 远端 System One / chat 网关（Jev） |
 | Hindsight `:8888` | bank `wanwan`；**仅同步层写入**，不对 Agent 暴露 retain |
 | `hinddian-hindsight-sync.timer` | Obsidian active 笔记 → Hindsight 索引对齐 |
 | 会话草稿 | hooks → `push_draft` → DMIT `/var/lib/hinddian/drafts`（经 MCP/SSH） |
@@ -20,8 +20,8 @@ Vault / batch / pi 在 **DMIT**；华为通过已有 root SSH（`CLASSIFY_SSH_HO
 ## 前置
 
 - 华为 SSH：`huawei-vps`（`124.70.90.224`）
-- DMIT Magpie mTLS CA 公钥：`/etc/caddy/mtls/ca.pem`（只拷公钥）
-- 手机已装 `wanwan-iphone` 客户端证书（Magpie 同款）
+- mTLS CA 公钥：`/etc/caddy/mtls/ca.pem`（只拷公钥；可来自既有证书基建）
+- 手机已装 `wanwan-iphone` 客户端证书
 
 ## 1. 同步代码
 
@@ -60,7 +60,7 @@ ENV
 chmod 600 /opt/hinddian/.env
 # 另从 secrets 注入 HINDSIGHT_API_KEY / HINDDIAN_MCP_TOKEN（勿提交）
 # 不要设 VAULT_ROOT（vault 在 DMIT）；AUTH_TOKEN 留空（mTLS 守门）
-# Jev：经 magpie-tunnel 本机 :3425；可选 TYPESAFE_API_KEY 云端兜底（写失败仍可不记）
+# Jev：JEV_BASE_URL → 本机 :3425（可经 SSH 隧道）；可选 TYPESAFE_API_KEY 云端兜底（写失败仍可不记）
 ```
 
 完整变量说明见仓库根 `.env.example`。
@@ -74,7 +74,7 @@ systemctl enable --now hinddian.service
 curl -s http://127.0.0.1:8787/api/health
 ```
 
-确保 `magpie-tunnel.service` 与 `hinddian-hindsight-sync.timer` 已 enable。
+若用本机 :3425 闸门，确保隧道服务与 `hinddian-hindsight-sync.timer` 已 enable。
 
 ## 5. mTLS CA（仅公钥）
 
@@ -138,7 +138,7 @@ curl -sk --cert /tmp/iphone.pem --key /tmp/iphone.key \
 rm -f /tmp/iphone.pem /tmp/iphone.key
 ```
 
-手机：`https://124.70.90.224:8443/`，选用 Magpie 客户端证书。
+手机：`https://124.70.90.224:8443/`，选用已导入的 mTLS 客户端证书。
 
 ## 10. DMIT 归类 / 修正
 

@@ -57,7 +57,7 @@ def main():
     msg = payload.get("first_message") or os.environ.get("MAGPIE_FIRST_MESSAGE") or os.environ.get("MAGPIE_PROMPT") or ""
     new_sid = session_buf.stable_session_id(payload.get("session_id"), cwd, msg[:80] if msg else "new")
 
-    # Flush previous session drafts (Magpie has no portable session-end)
+    # Flush previous session drafts (hosts without portable session-end)
     flushed = finalize.finalize_idle_and_others(current_sid=new_sid)
     for fr in flushed:
         src = fr.get("source") or fr.get("skipped")
