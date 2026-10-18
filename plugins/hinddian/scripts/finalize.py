@@ -38,13 +38,13 @@ def projects_list() -> list[str]:
 
 def _norm_source(src: str | None) -> str:
     s = str(src or "")
-    if s.startswith("jev:magpie") or s == "magpie":
-        return "jev:magpie"
+    if s.startswith("jev:local") or s in ("magpie", "local", "jev:local"):
+        return "jev:local"
     if s.startswith("jev:cloud") or s in ("cloud", "typesafe-cloud", "jev:typesafe-cloud"):
         return "jev:cloud"
     if s.startswith("jev:"):
         # unknown jev label — keep prefix
-        return s if s in ("jev:magpie", "jev:cloud") else ("jev:magpie" if "magpie" in s else "jev:cloud" if "cloud" in s else s)
+        return s if s in ("jev:local", "jev:cloud") else ("jev:local" if ("magpie" in s or "local" in s) else "jev:cloud" if "cloud" in s else s)
     return "none"
 
 

@@ -1,4 +1,4 @@
-"""Whitelist extraction for Magpie turn/session text.
+"""Whitelist extraction for host turn/session text.
 
 Keep only user messages + final assistant replies.
 Strip: system/persona, routing tables, MCP/tool schemas, skills catalog,
@@ -11,7 +11,7 @@ import os
 import re
 from typing import Any
 
-# Role markers common across agents / Magpie dumps
+# Role markers common across agents / host dumps
 _ROLE_RE = re.compile(
     r"(?im)^(?:#{1,3}\s*)?(?:\[)?(system|developer|user|human|assistant|model|tool|function)"
     r"(?:\s*(?:message|role))?(?:\])?\s*[:：]\s*"
@@ -194,7 +194,7 @@ def structured_body(*, decisions: list[str], lessons: list[str], preferences: li
 
 
 def parse_hook_payload(stdin_text: str = "", env: dict | None = None) -> dict[str, Any]:
-    """Best-effort Magpie / agent hook payload → session_id, cwd, turn text, project hint."""
+    """Best-effort host / agent hook payload → session_id, cwd, turn text, project hint."""
     env = env or dict(os.environ)
     raw = (stdin_text or "").strip()
     data: dict[str, Any] = {}

@@ -1,6 +1,6 @@
-"""Local session draft buffer (one Magpie session → one push_draft).
+"""Local session draft buffer (one host session → one push_draft).
 
-Magpie portable hooks have session-start + turn-end (no portable session-end).
+Many hosts expose session-start + turn-end only (no portable session-end).
 Strategy:
   - turn-end: append whitelisted turn into buffer for session_id (no remote write)
   - session-start: finalize any *other* open session buffer → Jev keep → push_draft
