@@ -1,9 +1,11 @@
 ---
 name: hinddian-hooks
-description: Install hinddian Magpie MCP + session-start/turn-end Library Hooks on this computer. WebDAV does not sync Hooks. Marketplace-style install via Magpie Library Skills (GitHub) or plugin tools.
+description: Optional Magpie adapter — install hinddian-memory MCP + local Library Hooks. hinddian core is host-agnostic (Claude/Codex first). WebDAV does not sync Hooks.
 ---
 
-# hinddian（Magpie 安装）
+# hinddian Magpie adapter（可选）
+
+> **hinddian 产品本身与 Magpie 无关。** 本 skill 仅给仍使用 Magpie 的机器装 hooks。首选安装见仓库 `plugins/hinddian/`（Claude/Codex）。
 
 ## 硬限制（上游）
 
