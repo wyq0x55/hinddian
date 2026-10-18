@@ -61,3 +61,10 @@ Magpie settings `otel.enabled=false`（WebDAV 同步到各机）；`/etc/magpie.
 - **不能**靠 WebDAV 或 `magpie plugin add` 单独自动写入 Library Hooks（上游 Bundle 无 Hooks；plugin 市场装的是网关/工具）。
 - 产品路径：`skills/hinddian-hooks`（Library → Skills 从 GitHub 装）+ 本机 `install.ps1` / 插件工具 `hinddian_install`。
 - 仓库根 `package.json` 供 `magpie plugin add github:wyq0x55/hinddian`；侧边栏 Hinddian 页说明安装。
+
+
+## Agent plugins (Claude / Codex)
+
+- Package: `plugins/hinddian/` — `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, portable `plugin.json`, `.mcp.json` / `mcp.json`, `hooks/hooks.json` (SessionStart + Stop), skills.
+- Marketplaces: `.claude-plugin/marketplace.json`, `.agents/plugins/marketplace.json`.
+- Codex public directory does **not** accept lifecycle-hook plugins; use CLI/desktop marketplace + trust hooks.
