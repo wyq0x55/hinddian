@@ -168,7 +168,7 @@ def classify_reject(pid: str, payload: dict = Body(default={}), settings: Settin
 
 @app.post("/api/classify/proposals/batch", dependencies=dash_write)
 def classify_batch(payload: dict = Body(...), settings: Settings = Depends(_settings)) -> dict:
-    """{ids: [...], action: approve|reject, reason?} — DMIT applies sequentially under one lock,
+    """{ids: [...], action: approve|reject, reason?} — vault host applies sequentially under one lock,
     re-reading the target before each write and renumbering D-/L- ids."""
     _classify_guard(settings)
     action = payload.get("action")
@@ -191,7 +191,7 @@ def classify_restore(pid: str, settings: Settings = Depends(_settings)) -> dict:
 
 @app.get("/api/corrections", dependencies=dash)
 def list_agent_corrections(status: str = "pending") -> list[dict]:
-    """Agent gated-upsert suggestions queued on DMIT (alongside distill proposals)."""
+    """Agent gated-upsert suggestions queued on the vault host (alongside distill proposals)."""
     try:
         return memory_mcp.vault("list_corrections", status=status, limit=100)
     except Exception as e:

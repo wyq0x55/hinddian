@@ -54,7 +54,7 @@ Agent 会话
 **读/UX 路径（should-recall 等）**：本机失败时可用 chat completions soft fallback，只影响是否提示 recall，不自动写草稿。
 
 - 任意暴露 System One 的本机网关均可；与 Magpie 产品身份无关
-- 华为 API 可选经 SSH LocalForward 使用远端 `:3425`（infra，非产品品牌）
+- API 主机 API 可选经 SSH LocalForward 使用远端 `:3425`（infra，非产品品牌）
 - 仪表盘 / 日志：`source=jev:local|cloud|none`（`jev:magpie` 旧标签归一为 `jev:local`）
 
 用于：should-recall、项目匹配、本会话是否值得记、类型/项目分类、写入四态辅助。
@@ -92,9 +92,9 @@ Agent 会话
 | 删除 | **禁止硬删**；用 `supersede` / `obsolete` |
 | Hindsight | **禁止** Agent `retain` |
 
-修正队列落盘：DMIT `/var/lib/hinddian/agent_corrections/`（`HB_CORRECTIONS`）。
+修正队列落盘：vault 主机 `/var/lib/hinddian/agent_corrections/`（`HB_CORRECTIONS`）。
 
-并发：MCP 门控写与 DMIT batch 共用 `$HB_BASE/vault.lock`（`HINDDIAN_VAULT_LOCK` 可改）。batch 的 LLM 调用在锁外，落盘前在锁内重读 vault 再应用；batch 互斥锁被占时以退出码 75 报 busy，不再静默成功。
+并发：MCP 门控写与 vault 主机 batch 共用 `$HB_BASE/vault.lock`（`HINDDIAN_VAULT_LOCK` 可改）。batch 的 LLM 调用在锁外，落盘前在锁内重读 vault 再应用；batch 互斥锁被占时以退出码 75 报 busy，不再静默成功。
 
 格式：重渲染只改受管字段与段落；人在 Obsidian 里加的 frontmatter 键、段落、引用行、悬空链接原样保留。
 
@@ -113,9 +113,9 @@ Agent 会话
 | `hooks/` | hook 运行时源码；`tools/sync_hooks.py` 生成 plugin / skill 副本 |
 | `src/hinddian/jev.py` | System One 闸门（核心，宿主无关） |
 | `plugins/hinddian/` | Claude / Codex 插件包（**首选安装**） |
-| `classify/hinddian_batch.py` | 草稿批量/增量（DMIT） |
-| `deploy/huawei/obsidian_hindsight_sync.py` | Obsidian → Hindsight；timer `hinddian-hindsight-sync` |
-| `adapters/magpie/` | **可选** Magpie skill / install / DMIT apply_library |
+| `classify/hinddian_batch.py` | 草稿批量/增量（vault 主机） |
+| `deploy/api-host/obsidian_hindsight_sync.py` | Obsidian → Hindsight；timer `hinddian-hindsight-sync` |
+| `adapters/magpie/` | **可选** Magpie skill / install / vault 主机 apply_library |
 | `web/` | 仪表盘（图谱、批准、Agent 修正） |
 
 ## Agent plugins (Claude / Codex)
@@ -126,4 +126,4 @@ Agent 会话
 
 ## Magpie adapter（可选）
 
-见 [`adapters/magpie/README.md`](adapters/magpie/README.md)。hook 脚本源码在 `hooks/`，安装器在 `adapters/magpie/skills/hinddian-hooks/`；改完跑 `python tools/sync_hooks.py` 生成各副本；仅 DMIT 跑 `apply_library.py`。
+见 [`adapters/magpie/README.md`](adapters/magpie/README.md)。hook 脚本源码在 `hooks/`，安装器在 `adapters/magpie/skills/hinddian-hooks/`；改完跑 `python tools/sync_hooks.py` 生成各副本；仅 vault 主机 跑 `apply_library.py`。

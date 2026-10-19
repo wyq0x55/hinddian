@@ -114,7 +114,7 @@ def test_routing_project_rejects_traversal(vault, tmp_path):
 
 # ------------------------------------------------------------------ search
 def test_search_notes_chinese(vault):
-    N.upsert_note({"action": "add", "type": "lesson", "project": "P", "title": "部署门禁", "scene": "华为部署"})
+    N.upsert_note({"action": "add", "type": "lesson", "project": "P", "title": "部署门禁", "scene": "API 主机 部署"})
     _lesson("无关")
     hits = N.search_notes("部署时注意什么")
     assert hits and hits[0]["title"] == "部署门禁"

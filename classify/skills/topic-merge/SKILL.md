@@ -42,7 +42,7 @@ description: 把一份「待入库」会话提炼草稿归类并合并进 Obsidi
 → tip，action create，target_path `技巧/子 Agent 委派省 token.md`，id 由 runner 写成 `tip/subagent-fork-context-false`。
 
 **例 3 · update（已有决策需补充）**
-→ action update，target_id 填已有 `proj/ut-agent/decision/...`。
+→ action update，target_id 填已有 `proj/my-app/decision/...`。
 
 **例 4 · supersede（新结论取代旧）**
 → action supersede，supersedes 填旧 id 列表。

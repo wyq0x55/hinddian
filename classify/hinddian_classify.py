@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """hinddian-classify: 待入库 → pi 归类 → Obsidian 主题笔记 / 待确认建议.
 
-Runs on DMIT (vault host). stdlib only.
+Runs on the vault host (vault host). stdlib only.
 
   hinddian-classify run [--limit 5] [--item <vault relpath>] [--dry-run]
   hinddian-classify stats --json
@@ -484,7 +484,7 @@ def build_prompt(item_rel: str, item_text: str, meta: dict) -> str:
         f"/skill:topic-merge 归类这份待入库草稿：`{item_rel}`，只输出 JSON。",
         "",
         "# 提醒\n- frontmatter 的 project 常不准，按正文判断真实项目。",
-        "- 真实项目不在「已有项目」里时，直接用新项目名（如 ut-agent）写 `项目/<新名>/DECISIONS.md` 等；"
+        "- 真实项目不在「已有项目」里时，直接用新项目名（如 my-app）写 `项目/<新名>/DECISIONS.md` 等；"
         "项目类一律生成待确认建议，人确认后才会建目录。不要因为项目不存在就 ignore 有价值的决策/经验。",
         f"\n# 已有项目\n" + "\n".join(f"- {p}" for p in projects),
     ]

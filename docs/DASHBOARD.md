@@ -2,7 +2,7 @@
 
 入口（手机 / 桌面，既有 mTLS 客户端证书；Caddy 校验后代为提交 `AUTH_TOKEN`）：
 
-`https://124.70.90.224:8443/`
+`https://<api-host>:8443/`
 
 本机调试：`scripts/run_dev.sh` 后开 `http://127.0.0.1:8787/`（未设 token 时为免鉴权开发模式）。
 
@@ -14,10 +14,10 @@
 
 | 节点 | 含义 |
 |------|------|
-| 收件箱 | 华为原始会话（历史 OTLP/inbox；现行主写入是 hooks 草稿） |
+| 收件箱 | API 主机 原始会话（历史 OTLP/inbox；现行主写入是 hooks 草稿） |
 | 隔离 | 过滤掉的会话及原因 |
 | 草稿·按项目 | `/var/lib/hinddian/drafts` 按项目计数（会话桶草稿） |
-| 分析 | DMIT batch：批量（需批准）/ 增量（自动）/ 技巧（自动） |
+| 分析 | vault 主机 batch：批量（需批准）/ 增量（自动）/ 技巧（自动） |
 | Obsidian | 原子笔记总数（真相源） |
 | Hindsight | 已同步索引数；状态来自 sync timer |
 
@@ -36,7 +36,7 @@
 - **确认**：按建议写入 Obsidian（upsert/supersede）
 - **拒绝**：记录原因，不写笔记
 
-队列文件：DMIT `/var/lib/hinddian/agent_corrections/ac-*.json`。
+队列文件：vault 主机 `/var/lib/hinddian/agent_corrections/ac-*.json`。
 
 政策摘要：
 

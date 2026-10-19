@@ -1,6 +1,6 @@
-# classify · 会话草稿 → 原子笔记（DMIT）
+# classify · 会话草稿 → 原子笔记（vault 主机）
 
-跑在 **DMIT**（vault 所在机）。hooks / MCP `push_draft` 产生的**会话桶草稿**落在 `/var/lib/hinddian/drafts/<项目>/`，由 **`hinddian_batch.py`**（及可选 pi 归类）合并进 Obsidian **原子笔记**——**永不一会话一笔记**，也不再写 `DECISIONS.md` / `LESSONS.md` 大文件。
+跑在 **vault 主机**（vault 所在机）。hooks / MCP `push_draft` 产生的**会话桶草稿**落在 `/var/lib/hinddian/drafts/<项目>/`，由 **`hinddian_batch.py`**（及可选 pi 归类）合并进 Obsidian **原子笔记**——**永不一会话一笔记**，也不再写 `DECISIONS.md` / `LESSONS.md` 大文件。
 
 ## 现行主路径（v0.5+）
 
@@ -18,7 +18,7 @@ hinddian-batch（timer）
        ↓
 原子笔记（项目/*/决策|经验|…、技巧/*.md）
        ↓
-华为 hinddian-hindsight-sync → Hindsight 索引
+API 主机 hinddian-hindsight-sync → Hindsight 索引
 ```
 
 Agent 查重 / 召回只用 **`mcp__hinddian-memory__recall`**（及 `list_notes` / `get_note`），**不要** `mcp__hindsight__recall`，**不要**写旧三件套路径。
@@ -45,9 +45,9 @@ hinddian-classify run|stats|proposals|approve|reject|…   # 若仍启用 pi 路
 
 定时：`hinddian-classify.timer` / batch service（见 deploy）；日志 `/var/log/hinddian-classify.log`。
 
-## 与华为仪表盘
+## 与 API 主机 仪表盘
 
-华为 hinddian 经 SSH `dmit-vps` 调 CLI：统计、批准项目、**Agent 修正**（`list_corrections` / `decide_correction`）。  
+API 主机 hinddian 经 SSH `vault-host` 调 CLI：统计、批准项目、**Agent 修正**（`list_corrections` / `decide_correction`）。  
 前端写操作带 `X-Hinddian: 1`；公网 mTLS。
 
 ## 状态目录
@@ -57,12 +57,12 @@ hinddian-classify run|stats|proposals|approve|reject|…   # 若仍启用 pi 路
 | `/var/lib/hinddian/drafts/` | 会话草稿 |
 | `/var/lib/hinddian/agent_corrections/` | Agent 修正队列 |
 | `/var/lib/hinddian-classify/` | proposals / ledger / archive / backups |
-| `/var/lib/hinddian/hindsight-sync*.json` | 同步状态（华为侧为主） |
+| `/var/lib/hinddian/hindsight-sync*.json` | 同步状态（API 主机 侧为主） |
 
-## 安装（DMIT）
+## 安装（vault 主机）
 
 ```bash
-tar … → /opt/hinddian-classify/src && bash /opt/hinddian-classify/src/deploy/install-dmit.sh
+tar … → /opt/hinddian-classify/src && bash /opt/hinddian-classify/src/deploy/install-vault-host.sh
 systemctl enable --now hinddian-classify.timer
 ```
 

@@ -8,7 +8,7 @@ User=root
 WorkingDirectory=/opt/hinddian
 EnvironmentFile=-/opt/hinddian/.env
 Environment=PYTHONPATH=/opt/hinddian/src
-# Single worker — Huawei RAM ~1.7Gi
+# Single worker — small API host (~2 GiB RAM)
 ExecStart=/opt/hinddian/.venv/bin/uvicorn hinddian.api:app --host 127.0.0.1 --port 8787 --workers 1
 Restart=on-failure
 RestartSec=5

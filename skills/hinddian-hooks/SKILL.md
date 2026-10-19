@@ -72,5 +72,5 @@ magpie webdav now
 
 ## 不要
 
-- 不要在非 DMIT 机器跑 `apply_library.py`
+- 不要在非 vault 主机器跑 `apply_library.py`
 - 不要指望只跑 `magpie webdav now` 就填满 Hooks 面板

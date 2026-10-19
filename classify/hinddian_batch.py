@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""hinddian batch engine (DMIT): drafts outside the vault -> batch / incremental distill -> atomic notes.
+"""hinddian batch engine (vault host): drafts outside the vault -> batch / incremental distill -> atomic notes.
 
 Drafts:   /var/lib/hinddian/drafts/<project>/*.md   (holdout/ is never touched by `run`)
 Gate:     /var/lib/hinddian/gate.json  {project: {"approved": bool, "approved_at": iso}}
@@ -147,7 +147,7 @@ def session_of(name, text):
     m = re.search(r"ingested_from: (\S+)", text)
     return (m.group(1) if m else name).removesuffix(".json").removesuffix("-otlp").removesuffix(".md")
 
-PROMPT = """你是 Wanwan 的笔记库维护员。任务：把一批会话提炼草稿合并进**已有**原子笔记库。{mode}
+PROMPT = """你是用户的笔记库维护员。任务：把一批会话提炼草稿合并进**已有**原子笔记库。{mode}
 
 规则：
 - 只保留可长期复用的知识（工程约定=decision、踩坑经验=lesson、跨项目通用的 agent 使用技巧=tip）。一次性排障、某个 issue 的进度、文件行号、寒暄、子 agent 执行流水一律丢弃。

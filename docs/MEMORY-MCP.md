@@ -6,7 +6,7 @@
 
 | 名 | URL | 用途 |
 |----|-----|------|
-| **`hinddian-memory`** | `https://<huawei>:8444/hinddian/mcp`（Bearer `HINDDIAN_MCP_TOKEN`） | Agent **唯一**记忆入口：路由 / recall / 门控写入 / push_draft |
+| **`hinddian-memory`** | `https://<api-host>:8444/hinddian/mcp`（Bearer `HINDDIAN_MCP_TOKEN`） | Agent **唯一**记忆入口：路由 / recall / 门控写入 / push_draft |
 
 Header：`Authorization: Bearer <HINDDIAN_MCP_TOKEN>`（常与 Hindsight tenant key 同源；只放 secrets，勿进笔记）。
 
@@ -18,7 +18,7 @@ Header：`Authorization: Bearer <HINDDIAN_MCP_TOKEN>`（常与 Hindsight tenant 
 | 旧 vault 直写 MCP | 人读用 Obsidian App / LiveSync |
 | 把 Magpie 当作记忆产品 | Magpie 只是可选宿主；记忆系统是 hinddian |
 
-Hindsight bank `wanwan` 仍由华为 **`hinddian-hindsight-sync.timer`** 从 Obsidian active 笔记同步索引；Agent 只经 hinddian-memory 的 `recall`。
+Hindsight bank（`HINDSIGHT_BANK`，默认 `hinddian`） 仍由 API 主机 **`hinddian-hindsight-sync.timer`** 从 Obsidian active 笔记同步索引；Agent 只经 hinddian-memory 的 `recall`。
 
 ## Host hooks
 

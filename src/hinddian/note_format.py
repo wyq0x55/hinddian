@@ -1,10 +1,10 @@
-"""Atomic-note file format shared by the MCP vault ops (notes.py) and the DMIT batch engine.
+"""Atomic-note file format shared by the MCP vault ops (notes.py) and the vault host batch engine.
 
 One implementation of: frontmatter parse/dump (unknown keys and unchanged values round-trip
 verbatim), body sections (sections we don't manage survive a re-render), link resolution,
 path safety, the vault write lock and an mtime-keyed parse cache.
 
-Stdlib only — the batch engine runs under the system python on DMIT.
+Stdlib only — the batch engine runs under the system python on the vault host.
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from typing import Any, Iterator
 
 try:
     import fcntl
-except ImportError:  # pragma: no cover — Windows dev boxes; vault writes only run on DMIT
+except ImportError:  # pragma: no cover — Windows dev boxes; vault writes only run on the vault host
     fcntl = None  # type: ignore[assignment]
 
 SKIP_DIRS = (".obsidian", "_归档", ".git", ".trash", "_模板")

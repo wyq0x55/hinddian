@@ -17,10 +17,10 @@
    - Jev：本机 System One（`JEV_BASE_URL`）→ 云端 TypeSafe → 失败则 `source=none` **不记**
 
 4. **草稿**
-   - 华为/DMIT：`/var/lib/hinddian/drafts/<项目>/…`
+   - API 主机/vault 主机：`/var/lib/hinddian/drafts/<项目>/…`
    - 脱敏；尚不是笔记
 
-5. **蒸馏 / 批处理（DMIT）**
+5. **蒸馏 / 批处理（vault 主机）**
    - 新项目：满阈值（默认 20 会话草稿）+ 仪表盘批准
    - 已批准：增量自动；技巧可自动
    - 产出原子笔记（add/update/supersede）

@@ -4,7 +4,7 @@
 WebDAV does NOT sync Hooks (upstream). After pulling the skill via WebDAV
 (or GitHub skill install), run this once on each computer.
 
-DMIT remains library SoT via apply_library.py — do NOT run apply_library here.
+vault host remains library SoT via apply_library.py — do NOT run apply_library here.
 """
 from __future__ import annotations
 
@@ -140,7 +140,7 @@ def main() -> int:
     print()
     print("Next: Magpie → Library → Hooks should list hinddian-session-start / hinddian-turn-end.")
     print("Then: magpie library sync")
-    print("Do not run apply_library.py on this PC (DMIT is SoT).")
+    print("Do not run apply_library.py on this PC (vault host is SoT).")
     return 0
 
 

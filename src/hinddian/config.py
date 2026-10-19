@@ -16,7 +16,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Optional on Huawei (vault lives on DMIT). Empty / missing = vault ops go over SSH.
+    # Optional on the API host (vault lives on the vault host). Empty / missing = vault ops go over SSH.
     vault_root: Path | None = None
     inbox_dir: Path = Path("/opt/session-distill/inbox")
     processed_dir: Path = Path("/opt/session-distill/processed")
@@ -25,12 +25,12 @@ class Settings(BaseSettings):
 
     hindsight_base_url: str = "http://127.0.0.1:8888"
     hindsight_api_key: str | None = None
-    hindsight_bank: str = "wanwan"
+    hindsight_bank: str = "hinddian"
     # Does the distill worker retain filtered sessions into Hindsight? (branch c)
     hindsight_retain_enabled: bool = False
 
-    # DMIT vault + classify stage, reached via root SSH alias.
-    classify_ssh_host: str = "dmit-vps"
+    # Vault host (vault + classify stage), reached via a root SSH alias.
+    classify_ssh_host: str = "vault-host"
     classify_enabled: bool = True
     ssh_control_path: str = "/run/hinddian-ssh-%C"
 

@@ -3,7 +3,7 @@
     "hinddian-memory": {
       "url": "${HINDDIAN_MCP_URL}",
       "headers": { "Authorization": "Bearer ${HINDDIAN_MCP_TOKEN}" },
-      "description": "Wanwan atomic notes (Obsidian SoT). Use routing_*/recall/get_note/list_notes/upsert_note. Never raw Hindsight retain.",
+      "description": "User's atomic notes (Obsidian SoT). Use routing_*/recall/get_note/list_notes/upsert_note. Never raw Hindsight retain.",
       "timeout": 60,
       "exposure": "hidden",
       "toolExposure": {
