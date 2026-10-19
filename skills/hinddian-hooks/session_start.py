@@ -23,7 +23,8 @@ RULES = """\
 - 自动召回：用户消息若命中相关笔记，会以 <hinddian_recall> 附在该消息后。可能不相关，自行判断；不必向用户复述。
 - 需要更多：recall(query, project) 搜索；get_note(id) 看全文；routing_project(project) 看项目现状与决策/经验列表。
 - 工具可能是延迟加载的：首次调用找不到时，先用 ToolSearch 搜 "hinddian" 加载，不要因此当作没有记忆。
-- 写入：会话内容会自动整理成草稿，平时不用手动写。用户明确要求记住或纠正时：tip/preference/lesson 用 upsert_note；涉及 decision 一律 suggest_correction（用户在仪表盘批准）。不硬删（用 supersede/obsolete），不写密钥。"""
+- 写入：会话内容会自动整理成草稿，平时不用手动写。用户明确要求记住或纠正时：tip/preference/lesson 用 upsert_note；涉及 decision 一律 suggest_correction（用户在仪表盘批准）。不硬删（用 supersede/obsolete），不写密钥。
+- 长期记忆以 hinddian 为准：要记住的内容按上面写入，不要另写进 Agent 自带的记忆（Claude 的 MEMORY.md、Codex memories）。"""
 
 
 def routing_block(projects: list[str], current: str | None) -> str:
