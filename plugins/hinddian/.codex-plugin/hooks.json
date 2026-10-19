@@ -21,6 +21,17 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/hooks/prompt_recall_entry.py\"",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

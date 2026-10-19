@@ -58,7 +58,7 @@ magpie webdav now
 
 ## 装好后的行为
 
-- **session-start**：结束上一会话缓冲（Jev keep → 一次 `push_draft`）；注入路由；should-recall
+- **session-start**：结束上一会话缓冲（Jev keep → 一次 `push_draft`）；注入固定的记忆路由块
 - **turn-end**：白名单抽取（用户话 + 最终回复）→ 会话缓冲（不按回合推草稿）
 - **Jev**：本机 Magpie `127.0.0.1:3425/v1/systemone` → 可选云端 → 都失败则不写（`source=none`）
 

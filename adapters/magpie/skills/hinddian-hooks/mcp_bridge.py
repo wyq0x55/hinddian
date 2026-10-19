@@ -4,9 +4,13 @@ Hosts launch it as a local command (`python3 scripts/mcp_bridge.py`), so the plu
 URL in its MCP config — the URL and token come from hookcfg (env / plugin options /
 ~/.config/hinddian/config.json), the same place the hooks read. Before setup it still starts
 and answers, telling the agent which command the user should run.
+
+Adds one local tool, `doctor` (runs setup.py --check here), to the server's tool list.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import sys
 import urllib.error
@@ -18,6 +22,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import hookcfg  # noqa: E402
 
 SETUP = hookcfg.HERE / "setup.py"
+DOCTOR = {
+    "name": "doctor",
+    "description": "Diagnose hinddian on this machine: config, TLS, auth, server MCP tools. Show the output to the user as-is.",
+    "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+}
+
+
+def _doctor() -> dict:
+    import setup
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        ok = setup.check()
+    return {"content": [{"type": "text", "text": buf.getvalue()}], "isError": not ok}
+
+
+def _with_doctor(out: dict) -> dict:
+    tools = (out.get("result") or {}).get("tools")
+    if isinstance(tools, list) and not any(t.get("name") == "doctor" for t in tools if isinstance(t, dict)):
+        tools.append(DOCTOR)
+    return out
 
 
 def _hint() -> str:
@@ -40,7 +65,7 @@ def _local(msg: dict) -> dict | None:
     if method == "ping":
         return {"jsonrpc": "2.0", "id": mid, "result": {}}
     if method == "tools/list":
-        return {"jsonrpc": "2.0", "id": mid, "result": {"tools": []}}
+        return {"jsonrpc": "2.0", "id": mid, "result": {"tools": [DOCTOR]}}
     if method == "tools/call":
         return {"jsonrpc": "2.0", "id": mid, "result": {"content": [{"type": "text", "text": _hint()}], "isError": True}}
     return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": _hint()}}
@@ -61,9 +86,13 @@ def handle(line: str) -> str | None:
         msg = json.loads(line)
     except ValueError:
         return json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}})
+    if isinstance(msg, dict) and msg.get("method") == "tools/call" and (msg.get("params") or {}).get("name") == "doctor":
+        return json.dumps({"jsonrpc": "2.0", "id": msg.get("id"), "result": _doctor()}, ensure_ascii=False)
     if hookcfg.transport_problem() is None:
         try:
             out = _forward(line.encode())
+            if out and isinstance(msg, dict) and msg.get("method") == "tools/list":
+                return json.dumps(_with_doctor(json.loads(out)), ensure_ascii=False)
             return out.decode() if out else None
         except urllib.error.HTTPError as e:
             reason = f"HTTP {e.code} from server" + (" (check token: run setup.py --check)" if e.code in (401, 403) else "")
