@@ -51,9 +51,12 @@ API 直接跑在 vault 主机上（设 `VAULT_ROOT`）时全部本地执行。�
 
 ## 安装（vault 主机）
 
+`classify/hinddian_batch.py` 与 `deploy/vault-host/hinddian-memory-cli` 在仓库里是 **100755**。`/usr/local/bin/hinddian-batch`（及 `hinddian-memory-cli`）由安装脚本写成 **755 的 python3 包装**（不再依赖软链目标的 +x）。`git pull` / `rsync` 之后若未重跑安装脚本，会出现 `Permission denied`（rc=126）或旧包装指向过期路径。
+
 ```bash
-git clone https://github.com/wyq0x55/hinddian /opt/hinddian   # 之后用 git pull 更新
-bash /opt/hinddian/classify/deploy/install-vault-host.sh       # 软链 hinddian-batch / hinddian-memory-cli，装 timer
+git clone https://github.com/wyq0x55/hinddian /opt/hinddian   # 之后用 git pull / rsync 更新
+# 每次同步代码后必须重跑（chmod 目标文件 + 刷新 /usr/local/bin 包装与 timer）：
+bash /opt/hinddian/classify/deploy/install-vault-host.sh
 
 # 从旧版升级：旧的 pi 归类（Mode B）已删除，如还装着可清理：
 rm -f /usr/local/bin/hinddian-classify; rm -rf /opt/hinddian-classify/pi-agent /opt/hinddian-classify/skills
