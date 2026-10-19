@@ -14,6 +14,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import shutil
 import time
 from pathlib import Path
@@ -87,6 +88,14 @@ def save(buf: dict[str, Any]) -> Path:
     return p
 
 
+PRIVATE = re.compile(r"<private>.*?(?:</private>|\Z)", re.S | re.I)
+
+
+def strip_private(text: str) -> str:
+    """<private>…</private> is never buffered, recalled on, or sent anywhere. Unclosed → to the end."""
+    return PRIVATE.sub("[private]", text or "")
+
+
 def append_turn(
     *,
     session_id: str,
@@ -94,7 +103,7 @@ def append_turn(
     cwd: str = "",
     project_hint: str | None = None,
 ) -> dict[str, Any]:
-    text = (turn_text or "").strip()
+    text = strip_private(turn_text).strip()
     now = time.time()
     buf = load(session_id) or {
         "session_id": session_id,

@@ -39,14 +39,49 @@ def _norm_source(src: str | None) -> str:
     return s if s.startswith("jev:") else "none"
 
 
-def _classify(corpus: str, projects: list[str]) -> dict:
+UNKNOWN_PROJECT = "通用-未定"
+
+
+def repo_root(cwd: str) -> Path | None:
+    """Nearest enclosing git work tree of cwd (the session's directory on this machine)."""
+    try:
+        p = Path(cwd).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    home = Path.home()
+    for d in (p, *p.parents):
+        if d == home or d == d.parent:
+            return None
+        if (d / ".git").exists():
+            return d
+    return None
+
+
+def pick_project(cwd: str, jev_project: str | None, projects: list[str]) -> str:
+    """Where the session's draft goes. The directory beats the text: an existing project named
+    in the path, else the enclosing git repo (a new project accumulates drafts and waits for
+    approval in the dashboard), else what Jev read from the text, else 通用-未定 (tips only)."""
+    low = (cwd or "").lower()
+    hits = [p for p in projects if p and p.lower() in low]
+    if hits:
+        return max(hits, key=len)
+    root = repo_root(cwd) if cwd else None
+    if root:
+        same = [p for p in projects if p.lower() == root.name.lower()]
+        return same[0] if same else root.name
+    if jev_project and jev_project != UNKNOWN_PROJECT:
+        return jev_project
+    return UNKNOWN_PROJECT
+
+
+def _classify(corpus: str, projects: list[str], cwd: str = "") -> dict:
     """Local Jev first, then the server's gate. Raises if neither answers."""
     try:
-        r = jev.classify_turn(corpus, projects)
+        r = jev.classify_turn(corpus, projects, cwd)
         return {"ok": r.ok, "value": r.value, "confidence": r.confidence, "source": r.source, "error": r.error}
     except Exception as e:
         try:
-            return req("POST", "/api/memory/gates/classify_turn", {"turn": corpus}, timeout=60)
+            return req("POST", "/api/memory/gates/classify_turn", {"turn": corpus, "cwd": cwd}, timeout=60)
         except Exception as e2:
             raise RuntimeError(f"{type(e).__name__}:{e}; remote:{e2}") from e2
 
@@ -83,8 +118,9 @@ def finalize_buffer(buf: dict, *, reason: str) -> dict:
     if not corpus.strip():
         return _done(sid, reason, "empty", source="none")
 
+    projects = projects_list()
     try:
-        klass = _classify(session_buf.clip(corpus), projects_list())
+        klass = _classify(session_buf.clip(corpus), projects, buf.get("cwd") or "")
     except RuntimeError as e:
         return _later(sid, reason, f"jev_unavailable: {e}", source="none")
 
@@ -102,7 +138,7 @@ def finalize_buffer(buf: dict, *, reason: str) -> dict:
     title = val.get("title") or val.get("summary") or f"session-{sid[:12]}"
     typ = val.get("type") or "lesson"
     payload = {
-        "project": val.get("project") or buf.get("project") or "通用-未定",
+        "project": buf.get("project") or pick_project(buf.get("cwd") or "", val.get("project"), projects),
         "title": title,
         "body": _body(val, title, typ),
         "type": typ,
