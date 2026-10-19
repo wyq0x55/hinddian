@@ -1,6 +1,6 @@
 # classify · 会话草稿 → 原子笔记（vault 主机）
 
-跑在 **vault 主机**（vault 所在机）。hooks / MCP `push_draft` 产生的**会话桶草稿**落在 `/var/lib/hinddian/drafts/<项目>/`，由 **`hinddian_batch.py`**（及可选 pi 归类）合并进 Obsidian **原子笔记**——**永不一会话一笔记**，也不再写 `DECISIONS.md` / `LESSONS.md` 大文件。
+跑在 **vault 主机**（vault 所在机）。hooks / MCP `push_draft` 产生的**会话桶草稿**落在 `/var/lib/hinddian/drafts/<项目>/`，由 **`hinddian_batch.py`** 合并进 Obsidian **原子笔记**——**永不一会话一笔记**，也不再写 `DECISIONS.md` / `LESSONS.md` 大文件。
 
 ## 现行主路径（v0.5+）
 
@@ -23,32 +23,21 @@ API 主机 hinddian-hindsight-sync → Hindsight 索引
 
 Agent 查重 / 召回只用 **`mcp__hinddian-memory__recall`**（及 `list_notes` / `get_note`），**不要** `mcp__hindsight__recall`，**不要**写旧三件套路径。
 
-## 历史 Mode B（pi 逐条 · 仍可用）
-
-早期「待入库 md + pi JSON 建议」路径仍留在本目录工具中，但产品主叙事是上面的 **session drafts + batch**。若跑 pi：
-
-- `PI_CODING_AGENT_DIR=/opt/hinddian-classify/pi-agent`
-- `mcp.json`：**仅** `hinddian-memory` → `${HINDDIAN_MCP_URL}`（在 `/etc/hinddian-classify/secrets.env` 里设 https 地址与 `HINDDIAN_MCP_TOKEN`）
-- 已移除原生 Hindsight MCP；AGENTS 铁律见 `classify/AGENTS.md`
-
-### 过滤要点
-
-默认 **ignore**。预过滤空/流水账；置信度门槛；本地 bigram 去重；`approve` / `reject` / `approve-batch`。
-
-### 命令
+## 命令
 
 ```bash
 hinddian-batch run [--limit N] [--dry-run]
 hinddian-batch run-force   # 已批准项目草稿不足阈值也分析
-hinddian-classify run|stats|proposals|approve|reject|…   # 若仍启用 pi 路径
+hinddian-batch gate --json            # 各项目草稿数 / 状态（仪表盘用）
+hinddian-batch approve <project>      # 等同仪表盘「开始批量分析」
 ```
 
-定时：`hinddian-classify.timer` / batch service（见 deploy）；日志 `/var/log/hinddian-classify.log`。
+定时：`hinddian-classify.timer`（每 15 分钟 `hinddian-batch run`；单元名沿用旧名）与 `hinddian-batch-force.timer`（每日 `run-force`）；日志 `/var/log/hinddian-classify.log`。
 
 ## 与 API 主机 仪表盘
 
-API 主机 hinddian 经 SSH `vault-host` 调 CLI：统计、批准项目、**Agent 修正**（`list_corrections` / `decide_correction`）。  
-前端写操作带 `X-Hinddian: 1`；公网 mTLS。
+API 主机经 SSH（`CLASSIFY_SSH_HOST`）调 `hinddian-batch`（闸门 / 批准项目）与 `hinddian-memory-cli`（笔记、Agent 修正）。
+API 直接跑在 vault 主机上（设 `VAULT_ROOT`）时全部本地执行。界面说明见 [`docs/DASHBOARD.md`](../docs/DASHBOARD.md)。
 
 ## 状态目录
 
@@ -56,14 +45,18 @@ API 主机 hinddian 经 SSH `vault-host` 调 CLI：统计、批准项目、**Age
 |------|------|
 | `/var/lib/hinddian/drafts/` | 会话草稿 |
 | `/var/lib/hinddian/agent_corrections/` | Agent 修正队列 |
-| `/var/lib/hinddian-classify/` | proposals / ledger / archive / backups |
+| `/var/lib/hinddian/processed/` | 已合并的草稿 |
+| `/var/lib/hinddian/gate.json` · `batch-ledger.jsonl` | 项目批准状态 · 批处理记录 |
 | `/var/lib/hinddian/hindsight-sync*.json` | 同步状态（API 主机 侧为主） |
 
 ## 安装（vault 主机）
 
 ```bash
-tar … → /opt/hinddian-classify/src && bash /opt/hinddian-classify/src/deploy/install-vault-host.sh
-systemctl enable --now hinddian-classify.timer
+git clone https://github.com/wyq0x55/hinddian /opt/hinddian   # 之后用 git pull 更新
+bash /opt/hinddian/classify/deploy/install-vault-host.sh       # 软链 hinddian-batch / hinddian-memory-cli，装 timer
+
+# 从旧版升级：旧的 pi 归类（Mode B）已删除，如还装着可清理：
+rm -f /usr/local/bin/hinddian-classify; rm -rf /opt/hinddian-classify/pi-agent /opt/hinddian-classify/skills
 ```
 
 ## 版本摘要

@@ -1,16 +1,21 @@
 #!/bin/bash
-# Run on the vault host as root from the repo's classify/ dir (rsynced to /opt/hinddian-classify/src).
-# Prereq: /usr/local/bin/pi (pi 1.x on private node22) and
-#         /etc/hinddian-classify/secrets.env (600) with HINDSIGHT_API_KEY=...
+# Install the vault-host side of hinddian. Run as root from a checkout of the repo on the vault host
+# (e.g. /opt/hinddian; update with git pull / rsync, then re-run).
+#
+#   hinddian-batch        drafts → atomic notes (systemd timers below)
+#   hinddian-memory-cli   vault ops the API host calls over SSH
+#
+# Both are symlinks into the checkout, so they import the checkout's src/hinddian (note_format etc.).
+# Prereq: an OpenAI-compatible gateway for the batch LLM at HB_GATEWAY (default 127.0.0.1:3425).
 set -euo pipefail
-SRC="$(cd "$(dirname "$0")/.." && pwd)"
-H=/opt/hinddian-classify
-install -d -m 700 "$H" "$H/pi-agent" "$H/skills" "$H/work"
-install -m 755 "$SRC/hinddian_classify.py" /usr/local/bin/hinddian-classify
-install -m 600 "$SRC/pi-agent/models.json" "$SRC/pi-agent/mcp.json" "$SRC/pi-agent/settings.json" "$H/pi-agent/"
-install -m 600 "$SRC/AGENTS.md" "$H/pi-agent/AGENTS.md"
-rm -rf "$H/skills/topic-merge"; cp -r "$SRC/skills/topic-merge" "$H/skills/"
-install -m 644 "$SRC/deploy/hinddian-classify.service" "$SRC/deploy/hinddian-classify.timer" /etc/systemd/system/
-install -d -m 700 /var/lib/hinddian-classify
+REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+chmod 755 "$REPO/classify/hinddian_batch.py" "$REPO/deploy/vault-host/hinddian-memory-cli"
+ln -sf "$REPO/classify/hinddian_batch.py" /usr/local/bin/hinddian-batch
+ln -sf "$REPO/deploy/vault-host/hinddian-memory-cli" /usr/local/bin/hinddian-memory-cli
+install -d -m 755 /var/lib/hinddian /var/lib/hinddian/drafts /var/lib/hinddian/agent_corrections
+install -m 644 "$REPO"/classify/deploy/hinddian-classify.{service,timer} \
+               "$REPO"/classify/deploy/hinddian-batch-force.{service,timer} /etc/systemd/system/
+install -m 644 "$REPO/classify/deploy/logrotate.conf" /etc/logrotate.d/hinddian
 systemctl daemon-reload
-echo "installed. enable with: systemctl enable --now hinddian-classify.timer"
+systemctl enable --now hinddian-classify.timer hinddian-batch-force.timer
+echo "ok: $(hinddian-batch gate --json | head -c 120)…"

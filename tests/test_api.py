@@ -15,7 +15,6 @@ def client(vault, monkeypatch, tmp_path):
     monkeypatch.setenv("VAULT_ROOT", str(vault))
     monkeypatch.setenv("HINDDIAN_MCP_TOKEN", MCP)
     monkeypatch.setenv("AUTH_TOKEN", DASH)
-    monkeypatch.setenv("STATUS_DB", str(tmp_path / "db" / "s.db"))
     monkeypatch.setenv("HINDSIGHT_BASE_URL", "http://127.0.0.1:9")  # unreachable → local fallback
     monkeypatch.delenv("HINDDIAN_ALLOW_NO_AUTH", raising=False)
     get_settings.cache_clear()
@@ -127,3 +126,54 @@ def test_recall_hindsight_contract(client, monkeypatch):
     path, body = seen[0]
     assert path == "/v1/default/banks/hinddian/memories/recall"
     assert body == {"query": "部署", "budget": "mid", "tags": ["source:obsidian", "type:lesson", "project:P"], "tags_match": "all_strict"}
+
+
+# ------------------------------------------------------------------ dashboard v2
+@pytest.fixture
+def dash_client(client, monkeypatch, tmp_path, vault):
+    base = tmp_path / "base"
+    (base / "drafts" / "my-app").mkdir(parents=True)
+    for i in range(3):
+        (base / "drafts" / "my-app" / f"session-{i}.md").write_text("---\ntitle: s\n---\n", encoding="utf-8")
+    monkeypatch.setenv("HB_BASE", str(base))
+    monkeypatch.setenv("HC_VAULT", str(vault))
+    from hinddian import classify_remote
+
+    classify_remote.invalidate()
+    (vault / "项目" / "my-app").mkdir(parents=True)
+    (vault / "项目" / "my-app" / "README.md").write_text("---\nid: proj/my-app/readme\ntype: state\n---\n# my-app\n", encoding="utf-8")
+    N.upsert_note({"action": "add", "type": "lesson", "project": "my-app", "title": "部署前先跑门禁", "practice": "gate.sh"})
+    N.upsert_note({"action": "add", "type": "decision", "project": "my-app", "title": "只走 HTTPS"})  # → queued
+    return client
+
+
+def test_overview_counts(dash_client):
+    o = dash_client.get("/api/overview", headers=dash()).json()
+    assert o["vault"] == {"ok": True, "error": None, "projects": 1, "decisions": 0, "lessons": 1, "tips": 0}
+    assert o["corrections"]["pending"] == 1
+    assert o["drafts"]["ok"] and o["drafts"]["total"] == 3 and o["drafts"]["ready"] == 0
+
+
+def test_notes_list_hides_hub_pages_and_searches(dash_client):
+    rows = dash_client.get("/api/notes", headers=dash()).json()
+    assert [r["type"] for r in rows] == ["lesson"]
+    hits = dash_client.get("/api/notes", params={"q": "门禁"}, headers=dash()).json()
+    assert hits and hits[0]["title"] == "部署前先跑门禁"
+    assert dash_client.get("/api/note", params={"id": "nope"}, headers=dash()).status_code == 404
+    nid = rows[0]["id"]
+    assert dash_client.get("/api/note", params={"id": nid}, headers=dash()).json()["practice"] == "gate.sh"
+
+
+def test_dashboard_recall_and_gate(dash_client):
+    r = dash_client.post("/api/recall", json={"query": "部署门禁"}, headers=dash()).json()
+    assert r["via"] == "local-fallback" and r["results"]
+    g = dash_client.get("/api/gate", headers=dash()).json()
+    assert g["projects"][0]["project"] == "my-app" and g["projects"][0]["state"] == "accumulating"
+    assert dash_client.post("/api/gate/..%2Fx/approve", headers={**dash()}).status_code in (400, 404)
+
+
+def test_dashboard_needs_auth_but_static_does_not(dash_client):
+    assert dash_client.get("/api/overview").status_code == 401
+    assert dash_client.get("/api/notes", headers=agent()).status_code == 403
+    assert dash_client.get("/static/manifest.webmanifest").status_code == 200
+    assert dash_client.get("/", headers=dash()).status_code == 200
