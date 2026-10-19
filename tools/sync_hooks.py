@@ -37,10 +37,15 @@ MAGPIE_SKILL = ROOT / "adapters/magpie/skills/hinddian-hooks"
 MAGPIE_EXTRA = ("SKILL.md", "embed_hooks.py", "install.py", "install.ps1")
 
 
+def _lf(data: bytes) -> bytes:
+    # Compare/hash as committed (LF), so a core.autocrlf=true checkout agrees with CI.
+    return data.replace(b"\r\n", b"\n")
+
+
 def hooks_version() -> str:
     h = hashlib.sha256()
     for name in sorted(CORE):
-        h.update(name.encode() + b"\0" + CORE[name].read_bytes())
+        h.update(name.encode() + b"\0" + _lf(CORE[name].read_bytes()))
     return "h-" + h.hexdigest()[:12]
 
 
@@ -69,7 +74,7 @@ def strays(want: dict[Path, bytes]) -> list[Path]:
 def main(argv: list[str]) -> int:
     check = "--check" in argv
     want = plan()
-    stale = [p for p, data in want.items() if not p.is_file() or p.read_bytes() != data]
+    stale = [p for p, data in want.items() if not p.is_file() or _lf(p.read_bytes()) != _lf(data)]
     extra = strays(want)
     if check:
         for p in stale:
