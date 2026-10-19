@@ -62,8 +62,26 @@ def _snippet(text: str, limit: int = 110) -> str:
     return t[:limit] + ("…" if len(t) > limit else "")
 
 
+def note_id(r: dict) -> str:
+    """The note id this row can be reopened with, "" when the row has no note behind it.
+
+    Hindsight rows carry a fact `id` and, for vault-backed facts, a `document_id`; the
+    local-fallback rows from `search_notes` carry the note id in `id` (plus `score`/`practice`).
+    A Hindsight row without `document_id` is fact-level: `get_note(<fact id>)` answers
+    not_found, so it must not be advertised as resolvable.
+    """
+    if r.get("document_id"):
+        return str(r["document_id"])
+    if "scores" in r or "chunk_id" in r:  # Hindsight row: its `id` is a fact id, not a note id
+        return ""
+    return str(r.get("id") or "")  # local-fallback note row (search_notes)
+
+
 def normalize(results: list) -> list[dict]:
-    """Hindsight results and the local-fallback rows → [{id, title, snippet}], relevance-filtered."""
+    """Hindsight results and the local-fallback rows → [{key, id, title, snippet}], relevance-filtered.
+
+    `key` identifies the row for the this-session de-dupe (fact id or note id); `id` is the note
+    id, or "" for fact-level rows the agent cannot fetch."""
     out = []
     for r in results or []:
         if not isinstance(r, dict):
@@ -75,12 +93,14 @@ def normalize(results: list) -> list[dict]:
         rel = scores.get("reranker", scores.get("final"))
         if rel is not None and float(rel) < MIN_SCORE:
             continue
-        if "score" in r and float(r["score"]) < LOCAL_MIN_SCORE:
+        score = r.get("score")  # local-fallback rows only; Hindsight rows may send a null one
+        if isinstance(score, (int, float)) and not isinstance(score, bool) and float(score) < LOCAL_MIN_SCORE:
             continue
-        nid = r.get("document_id") or r.get("id")
+        nid = note_id(r)
         title = meta.get("title") or r.get("title") or r.get("context") or _snippet(r.get("text", ""), 30)
         body = r.get("text") or (r.get("practice") or "") + " " + (r.get("scene") or "")
-        out.append({"id": str(nid or ""), "title": str(title), "snippet": _snippet(body)})
+        key = nid or str(r.get("id") or "")
+        out.append({"key": key, "id": nid, "title": str(title), "snippet": _snippet(body)})
     return out
 
 
@@ -100,19 +120,26 @@ def pick_new(sid: str, items: list[dict]) -> list[dict]:
         seen = set()
     fresh, ids = [], set()
     for i in items:  # one line per note, even if the server sent several facts of it
-        if i["id"] and i["id"] not in seen and i["id"] not in ids:
+        if i["key"] and i["key"] not in seen and i["key"] not in ids:
             fresh.append(i)
-            ids.add(i["id"])
+            ids.add(i["key"])
     fresh = fresh[:MAX_ITEMS]
     if fresh:
-        p.write_text(json.dumps(sorted(seen | {i["id"] for i in fresh}), ensure_ascii=False), encoding="utf-8")
+        p.write_text(json.dumps(sorted(seen | {i["key"] for i in fresh}), ensure_ascii=False), encoding="utf-8")
     return fresh
 
 
 def render(items: list[dict]) -> str:
     lines = ["<hinddian_recall>", "可能相关的长期记忆（按本条消息自动检索，可能不相关）："]
-    lines += [f"- [{i['id']}] {i['title']}" + (f" — {i['snippet']}" if i["snippet"] else "") for i in items]
-    lines += ["需要全文用 get_note(id)。", "</hinddian_recall>"]
+    for i in items:
+        # Only rows backed by a note carry a fetchable id; fact-level rows say so instead of
+        # printing an id that get_note would answer with not_found.
+        head = f"[{i['id']}] " if i["id"] else ""
+        tail = "" if i["id"] else "（Hindsight 事实条目，无笔记全文）"
+        lines.append(f"- {head}{i['title']}{tail}" + (f" — {i['snippet']}" if i["snippet"] else ""))
+    if any(i["id"] for i in items):
+        lines.append("需要全文用 get_note(id)。")
+    lines.append("</hinddian_recall>")
     return "\n".join(lines)
 
 
