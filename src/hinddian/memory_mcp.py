@@ -385,28 +385,71 @@ def _recall(args: dict) -> dict:
     return {"ok": True, "via": "local-fallback", "error": err, "query": query, "results": results}
 
 
+def _row_text(it: dict) -> str:
+    """Best-effort content field from a Hindsight recall row (fact or note-backed)."""
+    for k in ("text", "content", "fact"):
+        v = it.get(k)
+        if isinstance(v, str) and v.strip():
+            return v
+    return ""
+
+
+def _norm_text(s: str) -> str:
+    return " ".join(s.split())
+
+
 def _by_note(items: Any) -> Any:
     """Hindsight returns facts, several per note. Keep one row per note (document_id): the
-    first, i.e. best-ranked, fact, with the best score of its siblings and how many matched."""
+    first, i.e. best-ranked, fact, with the best score of its siblings and how many matched.
+
+    Fact-layer rows without document_id cannot be opened via get_note. Drop those whose text
+    duplicates a note already in this result set; keep remaining orphans annotated
+    resolvable=false / note_id=null so consumers do not treat their id as a note id.
+    """
     if not isinstance(items, list):
         return items
-    out: list = []
+
+    # Pass 1: merge notes by document_id; park fact-only rows. Slots keep ranking order.
     seen: dict[str, dict] = {}
+    facts: list[dict] = []
+    slots: list[tuple[str, Any]] = []  # ("note", doc_id) | ("fact", idx) | ("raw", value)
+
     for it in items:
-        key = it.get("document_id") if isinstance(it, dict) else None
+        if not isinstance(it, dict):
+            slots.append(("raw", it))
+            continue
+        key = it.get("document_id") or None
         if not key:
-            out.append(it)
+            facts.append(it)
+            slots.append(("fact", len(facts) - 1))
             continue
         first = seen.get(key)
         if first is None:
             seen[key] = dict(it, facts=1, scores=dict(it.get("scores") or {}))
-            out.append(seen[key])
+            slots.append(("note", key))
             continue
         first["facts"] += 1
         for k, v in (it.get("scores") or {}).items():
             old = first["scores"].get(k)
             if isinstance(v, (int, float)) and (not isinstance(old, (int, float)) or v > old):
                 first["scores"][k] = v
+
+    note_texts = {_norm_text(_row_text(r)) for r in seen.values()}
+    note_texts.discard("")
+
+    out: list = []
+    for kind, payload in slots:
+        if kind == "raw":
+            out.append(payload)
+            continue
+        if kind == "note":
+            out.append(seen[payload])
+            continue
+        fact = facts[payload]
+        nt = _norm_text(_row_text(fact))
+        if nt and nt in note_texts:
+            continue  # duplicate of a returned note → drop, free the recall slot
+        out.append(dict(fact, note_id=None, resolvable=False))
     return out
 
 
