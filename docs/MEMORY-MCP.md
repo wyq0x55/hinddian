@@ -20,6 +20,12 @@ Header：`Authorization: Bearer <HINDDIAN_MCP_TOKEN>`（常与 Hindsight tenant 
 
 Hindsight bank（`HINDSIGHT_BANK`，默认 `hinddian`） 仍由 API 主机 **`hinddian-hindsight-sync.timer`** 从 Obsidian active 笔记同步索引；Agent 只经 hinddian-memory 的 `recall`。
 
+`recall` 的行为：
+
+- 每条笔记只返回一行（Hindsight 按事实召回，同一笔记的多条事实合并，`facts` 为命中数，分数取最高）。
+- 带 `project` 不带 `type`：返回该项目笔记 **+ 全局技巧**（`tags_match: any_strict`）；带 `type` 时按类型严格过滤。
+- 插件的自动召回会带上会话开始时从 cwd 匹配到的项目。
+
 ## Host hooks
 
 - **首选**：Claude / Codex 插件（`plugins/hinddian/`）自带 lifecycle hooks。

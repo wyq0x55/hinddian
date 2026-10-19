@@ -132,8 +132,17 @@ def test_setup_writes_config_and_strips_mcp_suffix(hooks, monkeypatch, capsys):
     import setup
 
     monkeypatch.setattr(setup, "check", lambda: True)
+    monkeypatch.delenv("HINDDIAN_MEMORY_URL")  # the fixture's env URL would override the written config
     assert setup.main(["--url", "https://h:8444/hinddian/mcp", "--token", "t"]) == 0
     assert hooks["hookcfg"].load_config() == {"url": "https://h:8444/hinddian", "token": "t"}
+
+
+def test_setup_fails_when_env_overrides_written_url(hooks, monkeypatch, capsys):
+    import setup
+
+    monkeypatch.setattr(setup, "check", lambda: True)
+    assert setup.main(["--url", "https://h:8444/hinddian", "--token", "t"]) == 1
+    assert "HINDDIAN_MEMORY_URL" in capsys.readouterr().out
 
 
 def test_bridge_answers_when_unconfigured(hooks, monkeypatch):
@@ -197,6 +206,37 @@ def test_recall_filters_and_dedupes(hooks):
     assert [i["id"] for i in pr.pick_new("s1", items)] == ["a", "c"]
     assert pr.pick_new("s1", items) == []          # already injected this session
     assert [i["id"] for i in pr.pick_new("s2", items)] == ["a", "c"]
+
+
+def test_recall_scopes_to_session_project_and_dedupes(hooks, monkeypatch, capsys):
+    import io
+    import json
+
+    pr, sb = hooks["prompt_recall"], hooks["session_buf"]
+    sb.side_file("s9", "project").write_text("my-app", encoding="utf-8")
+    sent = []
+
+    def req(method, path, body=None, **kw):
+        sent.append(body)
+        return {"results": [{"document_id": "a", "text": "x", "metadata": {"title": "A"}}] * 3}
+
+    monkeypatch.setattr(pr.hookcfg, "req", req)
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"session_id": "s9", "prompt": "上次部署门禁怎么定的"})))
+    pr.main()
+    assert sent[0]["project"] == "my-app"
+    assert capsys.readouterr().out.count("[a]") == 1
+
+
+def test_prune_handles_side_files(hooks):
+    sb = hooks["session_buf"]
+    seen = sb.side_file("old", "recalled.json")
+    seen.write_text('["a"]', encoding="utf-8")
+    sb.side_file("new", "project").write_text("p", encoding="utf-8")
+    import os
+
+    os.utime(seen, (1, 1))
+    assert sb.prune() == 1
+    assert not seen.exists() and sb.side_file("new", "project").exists()
 
 
 def test_recall_emits_structured_context(hooks, monkeypatch, capsys):

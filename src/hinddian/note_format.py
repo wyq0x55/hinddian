@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import hashlib
 import json
 import os
 import pathlib
@@ -79,7 +80,14 @@ def safe_project(p: Any, fallback: str = "通用-未定") -> str:
 
 
 def slugify(s: Any) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", str(s or "").lower()).strip("-")[:60] or "note"
+    """ASCII slug for ids / file names. Text with non-ASCII letters (Chinese titles) gets a short
+    content hash, so different titles never collapse to the same id ("note", "https", …)."""
+    s = str(s or "").strip()
+    ascii_part = re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:52]
+    if not re.search(r"[^\x00-\x7f]", s):
+        return ascii_part or "note"
+    h = hashlib.sha1(s.encode("utf-8")).hexdigest()[:6]
+    return f"{ascii_part}-{h}" if ascii_part else f"n-{h}"
 
 
 def unwiki(t: str) -> str:
@@ -502,6 +510,17 @@ def vault_lock(path: pathlib.Path | None = None, timeout: float = 60.0) -> Itera
 def grams(t: str) -> set[str]:
     t = re.sub(r"\s+", "", (t or "").lower())
     return {t[i : i + 2] for i in range(len(t) - 1)} or ({t} if t else set())
+
+
+def jaccard(a: set, b: set) -> float:
+    return len(a & b) / (len(a | b) or 1)
+
+
+def similarity(title: str, practice: str, n: dict) -> float:
+    """How likely a new (title, practice) is the same topic as note n: title Jaccard + title/practice
+    Jaccard, 0..2. Shared by the batch engine's dedupe and the agent upsert check."""
+    return jaccard(grams(title), grams(n.get("title") or "")) + jaccard(
+        grams((title or "") + (practice or "")), grams((n.get("title") or "") + (n.get("practice") or "")))
 
 
 def score(query: str, n: dict) -> float:

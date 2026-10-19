@@ -173,7 +173,7 @@ def note_digest(n, full=True):
     if full: s += f"\n场景：{n['scene'][:300]}\n做法：{n['practice'][:700]}\n理由：{n['reason'][:300]}"
     return s
 
-def process(project: str, files: list[pathlib.Path], dry=False):
+def process(project: str, files: list[pathlib.Path], dry=False, review_decisions=False):
     notes = load_notes()  # snapshot for the prompt; the LLM call can take minutes, so no lock yet
     tips_only = project == UNKNOWN
     pool = [n for n in notes.values() if n["status"] == "active" and (n["type"] == "tip" or (not tips_only and n["project"] == project))]
@@ -194,10 +194,26 @@ def process(project: str, files: list[pathlib.Path], dry=False):
         except (ValueError, KeyError) as e:
             if attempt == 2: raise RuntimeError(f"model output unparseable after 3 tries: {e}")
     with nf.vault_lock(timeout=300):
-        return _apply(project, files, data, idx, dry)
+        return _apply(project, files, data, idx, dry, review_decisions)
 
-def _apply(project, files, data, idx, dry):
-    """Apply the model's ops against a fresh read of the vault (MCP upserts may have landed meanwhile)."""
+def _queue_decision(project, nid, typ, op, srcs, rel, olds, notes, ndrafts, dry):
+    """Hand one decision op to the dashboard's Agent-correction queue instead of writing it."""
+    from hinddian import notes as N
+    payload = {k: op[k] for k in ("title", "slug", "scene", "practice", "reason", "tags") if op.get(k)}
+    payload.update(type=typ, project=project, sources=srcs, related=[r for r in rel if r in notes], origin="batch-distill",
+                   correction_reason=f"批处理增量（{ndrafts} 份会话草稿）提出的决策改动")
+    if nid in notes:
+        payload.update(action="update", id=nid)
+    elif olds:
+        payload.update(action="supersede", supersedes=olds)
+    else:
+        payload.update(action="add")
+    if dry: return None
+    return N.enqueue_correction(payload)["suggestion_id"]
+
+def _apply(project, files, data, idx, dry, review_decisions=False):
+    """Apply the model's ops against a fresh read of the vault (MCP upserts may have landed meanwhile).
+    review_decisions: queue decision creates/updates/supersedes for the dashboard instead of writing them."""
     notes = load_notes()
     tips_only = project == UNKNOWN
     pool = [n for n in notes.values() if n["status"] == "active" and (n["type"] == "tip" or (not tips_only and n["project"] == project))]
@@ -221,24 +237,32 @@ def _apply(project, files, data, idx, dry):
         if tips_only and typ != "tip": continue
         dup = None
         if op.get("op") != "update":  # local dedupe: model only sees titles when the pool is large
-            tg = _grams(op.get("title", "")); bg = _grams(op.get("title", "") + op.get("practice", ""))
-            best = max(((len(tg & _grams(m["title"])) / (len(tg | _grams(m["title"])) or 1)
-                         + len(bg & _grams(m["title"] + m["practice"])) / (len(bg | _grams(m["title"] + m["practice"])) or 1), m["id"])
-                        for m in pool if m["type"] == typ), default=(0, None))
+            best = max(((nf.similarity(op.get("title", ""), op.get("practice", ""), m), m["id"]) for m in pool if m["type"] == typ), default=(0, None))
             if best[0] >= DEDUPE: dup = best[1]
         if op.get("op") == "update" and op.get("id") in notes:
             nid = op["id"]
         elif dup:
             nid = dup; op["merged_by_dedupe"] = True
-        else:
+        else:  # a create never lands on an existing note: a taken id gets a suffix
             slug = slugify(op.get("slug") or op.get("title", ""))
-            nid = f"tip/{slug}" if typ == "tip" else f"proj/{project}/{typ}/{slug}"
+            base = f"tip/{slug}" if typ == "tip" else f"proj/{project}/{typ}/{slug}"
+            nid, k = base, 2
+            while nid in notes or any(nid == p[0] for p in plan):
+                nid, k = f"{base}-{k}", k + 1
         newids["new:" + (op.get("slug") or "")] = nid
         plan.append((nid, typ, op))
-    result = []
+    result, done = [], []
     for nid, typ, op in plan:
         srcs = sorted({idx[s] for s in op.get("sources", []) if s in idx})
         rel = [newids.get(r, r) for r in op.get("related", [])]
+        olds = [o for o in op.get("supersedes", []) if o in notes and o != nid]
+        if review_decisions and (typ == "decision" or notes.get(nid, {}).get("type") == "decision"
+                                 or any(notes[o]["type"] == "decision" for o in olds)):
+            # incremental runs are unattended: decision changes wait in the dashboard queue
+            q = _queue_decision(project, nid, typ, op, srcs, rel, olds, notes, len(files), dry)
+            result.append({"action": "queued", "id": nid, "title": op.get("title") or notes.get(nid, {}).get("title", ""), "suggestion_id": q})
+            continue
+        done.append((nid, typ, op))
         if nid in notes:
             n = notes[nid]; action = "update"
             n.update(scene=op.get("scene") or n["scene"], practice=op.get("practice") or n["practice"], reason=op.get("reason") or n["reason"],
@@ -261,11 +285,11 @@ def _apply(project, files, data, idx, dry):
         if op.get("merged_by_dedupe"): action = "update(dedupe)"
         result.append({"action": action, "id": nid, "title": n["title"], "sources": len(srcs), "supersedes": n["supersedes"]})
     # keep backlinks symmetric
-    for nid, _, _ in plan:
+    for nid, _, _ in done:
         for r in notes[nid]["related"]:
             if r in notes and nid not in notes[r]["related"]: notes[r]["related"].append(nid)
     if dry: return result
-    touched = {nid for nid, _, _ in plan} | {r for nid, _, _ in plan for r in notes[nid]["related"] + notes[nid]["supersedes"]}
+    touched = {nid for nid, _, _ in done} | {r for nid, _, _ in done for r in notes[nid]["related"] + notes[nid]["supersedes"]}
     for nid in touched:
         if nid in notes and notes[nid]["type"] in ("tip", "decision", "lesson"):
             notes[nid]["related"] = [r for r in notes[nid]["related"] if r in notes]
@@ -305,10 +329,10 @@ class Lock:
             print("busy: another batch run holds batch.lock", file=sys.stderr); sys.exit(75)  # EX_TEMPFAIL
     def __exit__(self, *a): self.f.close()
 
-def run_project(project, max_batches=None):
+def run_project(project, max_batches=None, review_decisions=False):
     k = 0
     while (files := drafts_of(project)) and (max_batches is None or k < max_batches):
-        try: r = process(project, files[:BATCH]); print(project, json.dumps(r, ensure_ascii=False))
+        try: r = process(project, files[:BATCH], review_decisions=review_decisions); print(project, json.dumps(r, ensure_ascii=False))
         except Exception as e: log({"event": "error", "project": project, "error": str(e)[:300]}); print("ERR", project, e); break
         k += 1
     rebuild_hubs()
@@ -319,9 +343,9 @@ def cmd_run(force_below: bool = False):
             if p["state"] in ("incremental", "auto-tips") and p["drafts"]:
                 # tips: wait for a handful so the model sees >1 session (unless force timer)
                 if p["state"] == "auto-tips" and p["drafts"] < 5 and not force_below: continue
-                run_project(p["project"], RUN_MAX_BATCHES)
+                run_project(p["project"], RUN_MAX_BATCHES, review_decisions=True)
             elif force_below and p["state"] == "incremental" and p["drafts"]:
-                run_project(p["project"], RUN_MAX_BATCHES)
+                run_project(p["project"], RUN_MAX_BATCHES, review_decisions=True)
 
 def cmd_approve(project, now_=False):
     g = load_gate(); g.setdefault(project, {}).update(approved=True, approved_at=now()); save_gate(g)

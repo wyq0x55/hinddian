@@ -100,3 +100,12 @@ def test_score_works_for_chinese():
     n = {"title": "部署门禁", "scene": "API 主机 部署时", "practice": "", "reason": ""}
     assert nf.score("部署", n) > 0
     assert nf.score("无关话题", n) == 0
+
+
+def test_slugify_keeps_ascii_and_hashes_cjk():
+    assert nf.slugify("Only HTTPS") == "only-https"
+    assert nf.slugify("") == "note"
+    a, b = nf.slugify("HTTPS 证书"), nf.slugify("HTTPS 端口")
+    assert a.startswith("https-") and b.startswith("https-") and a != b
+    assert nf.slugify("部署门禁") == nf.slugify("部署门禁") != nf.slugify("日志轮转")
+    assert nf.slugify("部署门禁").startswith("n-")

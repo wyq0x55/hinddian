@@ -22,8 +22,9 @@
 
 5. **蒸馏 / 批处理（vault 主机）**
    - 新项目：满阈值（默认 20 会话草稿）+ 仪表盘批准
-   - 已批准：增量自动；技巧可自动
-   - 产出原子笔记（add/update/supersede）
+   - 已批准：增量自动；技巧可自动。**增量运行里涉及决策的改动**（新建 / 改写 / 取代决策）不直接写，
+     进仪表盘「Agent 修正」（标「批处理增量」）等你批准；经验、技巧照旧自动写。首次批量（你点「开始」）可直接写决策
+   - 产出原子笔记（add/update/supersede）；新建遇到同 id 自动加后缀，不会覆盖已有笔记
 
 6. **索引**
    - `hinddian-hindsight-sync`：active → retain；删除/非 active → 删索引
@@ -31,6 +32,8 @@
 ## 显式旁路
 
 - `upsert_note`（门控）或 `suggest_correction` → 仪表盘「Agent 修正」
+- `upsert_note` 新增时若已有相近笔记（同类型、同项目，标题/做法 bigram 相似度 ≥ `HINDDIAN_DEDUPE`，默认 0.40），
+  返回 `similar_exists` + `candidates`，由 Agent 改用 `update` 合并，确是新主题再带 `force_new: true`
 - Obsidian 仍为 SoT；Hindsight 跟同步
 
 ## 常见进不了笔记
