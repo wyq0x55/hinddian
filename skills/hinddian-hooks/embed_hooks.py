@@ -16,9 +16,9 @@ import tarfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-SCRIPT_NAMES = ("jev.py", "extract.py", "session_buf.py", "finalize.py", "session_start.py", "turn_end.py")
+SCRIPT_NAMES = ("jev.py", "hookcfg.py", "extract.py", "session_buf.py", "finalize.py", "session_start.py", "turn_end.py")
 DEFAULT_VER = "20261018.1"
-MEMORY_URL = os.environ.get("HINDDIAN_MEMORY_URL", "http://124.70.90.224/hinddian")
+MEMORY_URL = (os.environ.get("HINDDIAN_MEMORY_URL") or "").strip()  # baked into the hook command; empty = read env at run time
 
 
 def hooks_version() -> str:
@@ -72,11 +72,12 @@ if need:
             if not m.isfile():
                 continue
             name = pathlib.Path(m.name).name
-            if name not in ("jev.py", "extract.py", "session_buf.py", "finalize.py", "session_start.py", "turn_end.py"):
+            if name not in {SCRIPT_NAMES!r}:
                 continue
             (D / name).write_bytes(tf.extractfile(m).read())
     (D / ".version").write_text(V + "\\n")
-os.environ.setdefault("HINDDIAN_MEMORY_URL", MEM)
+if MEM:
+    os.environ.setdefault("HINDDIAN_MEMORY_URL", MEM)
 sys.path.insert(0, str(D))
 os.execv(sys.executable, [sys.executable, str(D / (which + ".py"))] + sys.argv[2:])
 '''.strip()

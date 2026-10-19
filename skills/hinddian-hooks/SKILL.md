@@ -65,8 +65,8 @@ magpie webdav now
 
 ## Agent 修正记忆（门控 upsert）
 
-- **可直写**：`tip` / `preference`，或本轮用户当面纠错（`face_correction=true`）→ `upsert_note`（可用 `auto_verdict`）
-- **须确认**：`decision` / 架构定论 → 用户一句话确认后 `user_confirmed=true`，或 `suggest_correction` 进仪表盘「Agent 修正」队列
+- **可直写**：`tip` / `preference` / `lesson` → `upsert_note`（可用 `auto_verdict`）
+- **须仪表盘批准**：凡新增、修改、取代或作废 `decision` 的写入，一律进「Agent 修正」队列，由用户在仪表盘批准；`user_confirmed` / `face_correction` 只作为说明展示给审批人，不能绕过
 - **禁止**：硬删、Hindsight `retain`；只用 `supersede` / `obsolete`
 - Obsidian 为真相源；同步层跟随笔记状态
 

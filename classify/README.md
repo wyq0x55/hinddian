@@ -28,7 +28,7 @@ Agent 查重 / 召回只用 **`mcp__hinddian-memory__recall`**（及 `list_notes
 早期「待入库 md + pi JSON 建议」路径仍留在本目录工具中，但产品主叙事是上面的 **session drafts + batch**。若跑 pi：
 
 - `PI_CODING_AGENT_DIR=/opt/hinddian-classify/pi-agent`
-- `mcp.json`：**仅** `hinddian-memory` → `http://124.70.90.224/hinddian/mcp`
+- `mcp.json`：**仅** `hinddian-memory` → `${HINDDIAN_MCP_URL}`（在 `/etc/hinddian-classify/secrets.env` 里设 https 地址与 `HINDDIAN_MCP_TOKEN`）
 - 已移除原生 Hindsight MCP；AGENTS 铁律见 `classify/AGENTS.md`
 
 ### 过滤要点

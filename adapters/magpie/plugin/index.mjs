@@ -21,7 +21,7 @@ const ROOT = path.resolve(HERE, "..")
 function skillDirs() {
   return [
     path.join(ROOT, "skills", "hinddian-hooks"),
-    path.join(ROOT, "deploy", "skill-hinddian-hooks"),
+    path.join(ROOT, "..", "..", "skills", "hinddian-hooks"),
   ]
 }
 

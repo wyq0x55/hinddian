@@ -16,7 +16,11 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-MCP_URL = os.environ.get("HINDDIAN_MCP_URL", "http://124.70.90.224/hinddian/mcp")
+MCP_URL = (os.environ.get("HINDDIAN_MCP_URL") or (
+    (os.environ.get("HINDDIAN_MEMORY_URL") or "").rstrip("/") + "/mcp" if os.environ.get("HINDDIAN_MEMORY_URL") else ""
+)).strip()
+if not MCP_URL:
+    raise SystemExit("set HINDDIAN_MCP_URL (or HINDDIAN_MEMORY_URL), e.g. https://<host>/hinddian/mcp")
 MCP_NAME = "hinddian-memory"
 HOOK_NAMES = {"hinddian-session-start", "hinddian-turn-end"}
 
@@ -80,7 +84,7 @@ def ensure_mcp(data: dict) -> dict:
         if h.lower().startswith("bearer "):
             bearer = h.split(" ", 1)[1].strip()
             break
-    env_tok = (os.environ.get("HINDDIAN_MCP_TOKEN") or os.environ.get("HINDSIGHT_API_KEY") or "").strip()
+    env_tok = (os.environ.get("HINDDIAN_MCP_TOKEN") or "").strip()
     if env_tok:
         bearer = env_tok
     agents = ["claude", "codex", "grok", "pi", "cursor", "gemini"]

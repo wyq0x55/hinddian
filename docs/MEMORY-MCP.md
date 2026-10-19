@@ -6,7 +6,7 @@
 
 | 名 | URL | 用途 |
 |----|-----|------|
-| **`hinddian-memory`** | `http://124.70.90.224/hinddian/mcp` | Agent **唯一**记忆入口：路由 / recall / 门控写入 / push_draft |
+| **`hinddian-memory`** | `https://<huawei>:8444/hinddian/mcp`（Bearer `HINDDIAN_MCP_TOKEN`） | Agent **唯一**记忆入口：路由 / recall / 门控写入 / push_draft |
 
 Header：`Authorization: Bearer <HINDDIAN_MCP_TOKEN>`（常与 Hindsight tenant key 同源；只放 secrets，勿进笔记）。
 

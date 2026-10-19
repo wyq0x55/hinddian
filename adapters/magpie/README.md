@@ -5,7 +5,7 @@
 | Path | Role |
 |------|------|
 | `skills/hinddian-hooks/` | Magpie Library skill + installers (`install.ps1` / `install.py`) — SoT under adapters |
-| `deploy/` | DMIT `apply_library.py`, hook scripts, skill mirror |
+| `deploy/` | DMIT `apply_library.py` (reads the skill pack from `skills/hinddian-hooks/`) |
 | `plugin/` | Magpie/`opencode` plugin UI (`hinddian_install` tool) |
 | `package.json` | Magpie-local package metadata |
 
@@ -38,7 +38,12 @@ Do **not** run `apply_library.py` on non-DMIT machines.
 | Path | Why |
 |------|-----|
 | `adapters/magpie/` | **Documented home** of the optional Magpie adapter |
-| `skills/hinddian-hooks/` | Magpie GitHub skill discovery still probes repo `skills/` — keep in sync with `adapters/magpie/skills/hinddian-hooks/` |
-| `deploy/magpie/` | DMIT `apply_library.py` historical path — mirror of `adapters/magpie/deploy/` |
+| `skills/hinddian-hooks/` | Magpie GitHub skill discovery still probes repo `skills/` — generated mirror |
 
-Edit **`adapters/magpie/skills/hinddian-hooks/`** first, then copy to `skills/hinddian-hooks/` and deploy skill mirrors.
+Hook scripts come from repo `hooks/` (+ `src/hinddian/jev.py`); the Magpie-only installer files
+(`SKILL.md`, `install.*`, `embed_hooks.py`) live in `adapters/magpie/skills/hinddian-hooks/`.
+After editing either, run `python tools/sync_hooks.py` — it regenerates every copy and
+`HOOKS_VERSION` (content hash, so Magpie hosts re-extract automatically). CI fails on drift.
+
+Hooks need `HINDDIAN_MEMORY_URL` (https) and `HINDDIAN_MCP_TOKEN`; installers need
+`HINDDIAN_MCP_URL` or `HINDDIAN_MEMORY_URL`. There is no built-in server address.

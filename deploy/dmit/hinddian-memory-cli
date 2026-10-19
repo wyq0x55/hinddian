@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""DMIT CLI for hinddian-memory vault ops (called via SSH from Huawei MCP)."""
+"""DMIT CLI for hinddian-memory vault ops (called via SSH from the Huawei API).
+
+upsert_note here is the *agent* path (gated). decide_correction is only invoked by the
+dashboard endpoints on the Huawei side and is the one trusted write.
+"""
 from __future__ import annotations
 import argparse, json, os, sys
 from pathlib import Path
@@ -28,7 +32,7 @@ def _payload(arg: str | None) -> dict:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=[
-        "routing_global", "routing_project", "get_note", "list_notes",
+        "routing_global", "routing_project", "get_note", "list_notes", "search_notes",
         "upsert_note", "push_draft", "export_routing",
         "suggest_correction", "list_corrections", "decide_correction",
     ])
@@ -41,6 +45,7 @@ def main():
     ap.add_argument("--approve", action="store_true")
     ap.add_argument("--reject", action="store_true")
     ap.add_argument("--reason", default="")
+    ap.add_argument("--query", default="")
     a = ap.parse_args()
     if a.cmd == "routing_global":
         out = notes.routing_global()
@@ -50,6 +55,8 @@ def main():
         out = notes.get_note(a.id or "")
     elif a.cmd == "list_notes":
         out = notes.list_notes(project=a.project, type_=a.type, status=a.status, limit=a.limit)
+    elif a.cmd == "search_notes":
+        out = notes.search_notes(a.query, project=a.project, type_=a.type, limit=a.limit)
     elif a.cmd == "upsert_note":
         out = notes.upsert_note(_payload(a.payload))
     elif a.cmd == "suggest_correction":
@@ -59,10 +66,9 @@ def main():
     elif a.cmd == "list_corrections":
         out = notes.list_corrections(status=a.status or "pending", limit=a.limit)
     elif a.cmd == "decide_correction":
-        if a.reject:
-            out = notes.decide_correction(a.id or "", approve=False, reason=a.reason or "")
-        else:
-            out = notes.decide_correction(a.id or "", approve=True, reason=a.reason or "")
+        if a.approve == a.reject:
+            ap.error("decide_correction needs exactly one of --approve / --reject")
+        out = notes.decide_correction(a.id or "", approve=a.approve, reason=a.reason or "")
     elif a.cmd == "push_draft":
         pl = _payload(a.payload)
         meta = (

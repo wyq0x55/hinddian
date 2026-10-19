@@ -1,0 +1,21 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e '.[dev]'
+      - name: Hook copies match their sources
+        run: python tools/sync_hooks.py --check
+      - name: Byte-compile scripts that run outside the package
+        run: python -m py_compile classify/*.py tools/*.py hooks/*.py deploy/huawei/*.py adapters/magpie/deploy/*.py adapters/magpie/skills/hinddian-hooks/*.py plugins/hinddian/hooks/*.py deploy/dmit/hinddian-memory-cli
+      - run: pytest -q

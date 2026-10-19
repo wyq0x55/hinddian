@@ -7,7 +7,6 @@
   "files": [
     "plugin",
     "skills/hinddian-hooks",
-    "deploy/skill-hinddian-hooks",
     "README.md"
   ],
   "keywords": [

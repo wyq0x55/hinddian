@@ -12,5 +12,5 @@ services:
     environment:
       HINDDIAN_HOST: "0.0.0.0"
       HINDDIAN_PORT: "8787"
-      USE_DEMO_DATA: "true"
+      HINDDIAN_ALLOW_NO_AUTH: "true"  # local stub only — never in production
       STATUS_DB: "/app/data/hinddian.db"
