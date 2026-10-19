@@ -71,7 +71,7 @@ def test_jev_down_keeps_buffer_then_gives_up(hooks, monkeypatch):
 def test_successful_finalize_pushes_once(hooks, monkeypatch):
     sb, fin = hooks["session_buf"], hooks["finalize"]
     monkeypatch.setattr(fin, "projects_list", lambda: ["P"])
-    monkeypatch.setattr(fin, "_classify", lambda c, p: {"ok": True, "source": "jev:local", "confidence": 0.9,
+    monkeypatch.setattr(fin, "_classify", lambda c, p, cwd="": {"ok": True, "source": "jev:local", "confidence": 0.9,
                                                          "value": {"keep": True, "title": "T", "type": "lesson", "project": "P"}})
     sent = []
     monkeypatch.setattr(fin, "req", lambda m, path, body=None, timeout=0: sent.append((path, body)) or {"ok": True})
@@ -79,6 +79,7 @@ def test_successful_finalize_pushes_once(hooks, monkeypatch):
     res = fin.finalize_idle_and_others(current_sid="new")
     assert [r.get("pushed") for r in res] == [{"ok": True}]
     assert sent[0][0] == "/api/memory/push_draft" and sent[0][1]["session_id"] == "old"
+    assert sent[0][1]["project"] == "P"  # no cwd / repo: Jev's pick
     assert fin.finalize_idle_and_others(current_sid="new") == []
 
 
@@ -190,6 +191,32 @@ def test_recall_skips_cheap_prompts(hooks):
     for p in ("好的", "继续", "ok", "Thanks!", "/hinddian:doctor", "<task-notification>x</task-notification>", "短"):
         assert not w(p), p
     assert w("部署到 API 主机之前要检查什么")
+
+
+def test_draft_project_comes_from_the_directory(hooks, tmp_path):
+    fin = importlib.import_module("finalize")
+    repo = tmp_path / "work" / "new-repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "src").mkdir()
+    known = ["hinddian", "my-app"]
+    assert fin.pick_project(str(tmp_path / "x" / "my-app" / "web"), "hinddian", known) == "my-app"   # path beats text
+    assert fin.pick_project(str(repo / "src"), "hinddian", known) == "new-repo"                       # new project bootstraps
+    assert fin.pick_project(str(tmp_path / "loose"), "hinddian", known) == "hinddian"                 # no repo: Jev's pick
+    assert fin.pick_project("", None, known) == "通用-未定"
+
+
+def test_private_blocks_never_buffered_or_queried(hooks, monkeypatch, capsys):
+    import io
+    import json
+
+    sb, pr = hooks["session_buf"], hooks["prompt_recall"]
+    buf = sb.append_turn(session_id="p1", turn_text="部署 <private>token=abc 密码</private> 完成 <PRIVATE>尾巴")
+    assert buf["turns"][0]["text"] == "部署 [private] 完成 [private]"
+    sent = []
+    monkeypatch.setattr(pr.hookcfg, "req", lambda m, path, body=None, **k: sent.append(body) or {"results": []})
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"session_id": "p1", "prompt": "上次部署怎么做的 <private>内部地址 10.0.0.1</private>"})))
+    pr.main()
+    assert "10.0.0.1" not in sent[0]["query"]
 
 
 def test_recall_query_drops_pastes(hooks):

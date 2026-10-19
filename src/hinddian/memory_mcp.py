@@ -574,5 +574,5 @@ def api_should_recall(args: dict):
 
 @router.post("/api/memory/gates/classify_turn", dependencies=agent)
 def api_classify_turn(args: dict):
-    r = jev.classify_turn(args.get("turn", "") or args.get("text", ""), _project_names())
+    r = jev.classify_turn(args.get("turn", "") or args.get("text", ""), _project_names(), str(args.get("cwd") or ""))
     return {"ok": r.ok, "value": r.value, "confidence": r.confidence, "source": r.source, "error": r.error}

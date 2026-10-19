@@ -321,7 +321,7 @@ def turn_worth_keeping(turn_text: str) -> GateResult:
     return GateResult(False, False, r.confidence, src, r.raw, r.error or "jev_unavailable")
 
 
-def classify_turn(turn_text: str, projects: list[str]) -> GateResult:
+def classify_turn(turn_text: str, projects: list[str], cwd: str = "") -> GateResult:
     """Return dict with keep/type/project/structured fields. Write only when Jev keep=true."""
     keep = turn_worth_keeping(turn_text)
     if not keep.ok:
@@ -356,7 +356,7 @@ def classify_turn(turn_text: str, projects: list[str]) -> GateResult:
             typ.raw,
             typ.error or "jev_type_unavailable",
         )
-    proj = match_project("", turn_text, projects)
+    proj = match_project(cwd, turn_text, projects)
     # match_project may use path/LLM; project label failure must not invent keep
     payload = {
         "keep": True,

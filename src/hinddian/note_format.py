@@ -56,7 +56,13 @@ class UnsafePath(ValueError):
 
 
 # ------------------------------------------------------------------ text helpers
+# <private>…</private> in a conversation never leaves the user's machine (the hooks strip it);
+# stripped again here in case an older hook copy sent it. Unclosed → to the end.
+PRIVATE_RE = re.compile(r"<private>.*?(?:</private>|\Z)", re.S | re.I)
+
+
 def redact(t: str) -> str:
+    t = PRIVATE_RE.sub("[private]", t)
     for r in SECRET_RE:
         t = r.sub("[REDACTED]", t)
     return t

@@ -86,6 +86,18 @@ python3 …/scripts/setup.py --url https://<host>:8444/hinddian --token <HINDDIA
 - Claude Code：`/mcp` 里能看到 `plugin:hinddian:hinddian-memory` 已连接
 - Codex：会话里能调用 `routing_global` / `recall`
 
+## 关掉 Agent 自带的记忆（推荐）
+
+hinddian 是多台电脑共用、带审批的长期记忆；Agent 自带的记忆只在本机本项目，两边都开会重复、互相矛盾。
+
+- **Claude Code Auto Memory**（它自己写的 `MEMORY.md`）：`~/.claude/settings.json` 加 `"autoMemoryEnabled": false`
+  （只关一个项目就写进该项目的 `.claude/settings.json`），或会话里 `/memory` 切换
+- **Codex Memories**：默认关；开过的话在 `~/.codex/config.toml` 的 `[features]` 下设 `memories = false`
+- **保留** `CLAUDE.md` / `AGENTS.md`：那是你写给 Agent 的固定规则，不是记忆
+
+代价：新知识要经「会话结束 → 草稿 → 批处理 → Obsidian → Hindsight」才能被召回（新项目还要先攒够草稿并批准）；
+想马上生效用 `/hinddian:remember`。服务器连不上时没有记忆可用（对话照常）。
+
 ## 自动召回
 
 每条用户消息会按内容去服务端 recall，命中的相关笔记（最多 3 条、每条一行）附在**该条消息末尾**；

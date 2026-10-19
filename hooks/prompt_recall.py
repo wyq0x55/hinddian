@@ -124,7 +124,7 @@ def main() -> None:
         raw = json.loads(stdin) if stdin.strip().startswith("{") else {}
     except ValueError:
         return
-    prompt = str(raw.get("prompt") or raw.get("user_prompt") or raw.get("message") or "")
+    prompt = session_buf.strip_private(str(raw.get("prompt") or raw.get("user_prompt") or raw.get("message") or ""))
     if not worth_recalling(prompt):
         return
     query = clean_query(prompt)

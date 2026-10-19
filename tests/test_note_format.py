@@ -109,3 +109,7 @@ def test_slugify_keeps_ascii_and_hashes_cjk():
     assert a.startswith("https-") and b.startswith("https-") and a != b
     assert nf.slugify("部署门禁") == nf.slugify("部署门禁") != nf.slugify("日志轮转")
     assert nf.slugify("部署门禁").startswith("n-")
+
+
+def test_redact_strips_private_blocks():
+    assert nf.redact("a <private>secret</private> b <private>tail") == "a [private] b [private]"
