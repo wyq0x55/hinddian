@@ -16,7 +16,7 @@ import tarfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-SCRIPT_NAMES = ("jev.py", "hookcfg.py", "extract.py", "session_buf.py", "finalize.py", "session_start.py", "turn_end.py")
+SCRIPT_NAMES = ("jev.py", "hookcfg.py", "extract.py", "session_buf.py", "finalize.py", "session_start.py", "turn_end.py", "setup.py")
 DEFAULT_VER = "20261018.1"
 MEMORY_URL = (os.environ.get("HINDDIAN_MEMORY_URL") or "").strip()  # baked into the hook command; empty = read env at run time
 

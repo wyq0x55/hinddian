@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "hinddian-memory": {
+      "command": "python3",
+      "args": [
+        "./scripts/mcp_bridge.py"
+      ],
+      "cwd": "."
+    }
+  }
+}

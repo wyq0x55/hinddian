@@ -37,7 +37,9 @@ def should_recall_local(cwd_: str, message: str, projects: list):
 def main():
     why = hookcfg.transport_problem()
     if why:
-        print(f"hinddian-memory: hooks disabled — {why}.")
+        setup = hookcfg.HERE / "setup.py"
+        print(f"hinddian-memory 未就绪（{why}）。请用户在终端运行一次：")
+        print(f'  python3 "{setup}" --url https://<host>/hinddian --token <HINDDIAN_MCP_TOKEN>')
         return
     stdin = ""
     if not sys.stdin.isatty():
