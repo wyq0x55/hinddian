@@ -113,8 +113,9 @@ TOOLS = [
     {
         "name": "suggest_correction",
         "description": (
-            "Queue an Agent memory correction for dashboard approval (preferred for decision/architecture). "
-            "Does not write Obsidian until the user approves."
+            "Queue a memory correction for dashboard approval. Use when the user corrects memory "
+            "or you discover a wrong/outdated note (preferred for decision/architecture). "
+            "Does not write Obsidian until approved. Never use push_draft for corrections."
         ),
         "inputSchema": {
             "type": "object",
@@ -136,7 +137,12 @@ TOOLS = [
     },
     {
         "name": "push_draft",
-        "description": "Push one session draft into drafts/<project>/ (session_id upserts same file). Threshold counts session drafts, not turns. Include jev_source when known.",
+        "description": (
+            "Hooks/session-finalize only: push one session transcript draft into drafts/<project>/ "
+            "(session_id upserts same file; batch may distill later). "
+            "Do NOT call for remember/correct/update — use upsert_note or suggest_correction. "
+            "push_draft does not enter the Agent 修正 queue and is not a review path for corrections."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {

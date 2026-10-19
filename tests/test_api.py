@@ -311,3 +311,17 @@ def test_dashboard_needs_auth_but_static_does_not(dash_client):
     assert dash_client.get("/api/notes", headers=agent()).status_code == 403
     assert dash_client.get("/static/manifest.webmanifest").status_code == 200
     assert dash_client.get("/", headers=dash()).status_code == 200
+
+
+def test_mcp_tool_descriptions_steer_corrections_away_from_push_draft():
+    """Agents read these strings; push_draft must not look like a correction path."""
+    from hinddian.memory_mcp import TOOLS
+
+    by_name = {t["name"]: t["description"] for t in TOOLS}
+    pd = by_name["push_draft"].lower()
+    sc = by_name["suggest_correction"].lower()
+    assert "hooks" in pd or "session-finalize" in pd or "session finalize" in pd
+    assert "upsert_note" in pd or "suggest_correction" in pd
+    assert "correct" in pd  # tell agents not to use it for corrections
+    assert "push_draft" in sc
+    assert "discover" in sc or "outdated" in sc or "wrong" in sc
