@@ -243,6 +243,41 @@ def test_recall_filters_and_dedupes(hooks):
     assert [i["id"] for i in pr.pick_new("s2", items)] == ["a", "c"]
 
 
+def test_recall_keeps_fact_rows_but_stops_promising_get_note(hooks):
+    pr = hooks["prompt_recall"]
+    results = [
+        # Hindsight fact row: has a fact id, no document_id → get_note(<fact id>) is not_found
+        {"id": "f1", "text": "WinAMS 桩代码设有内存预算", "scores": {"final": 0.9}},
+        {"document_id": "n2", "id": "f2", "text": "---\nid: n2\n---\n# N2\n\n## 做法\n先跑门禁",
+         "metadata": {"title": "N2"}, "scores": {"final": 0.8}},
+    ]
+    items = pr.normalize(results)
+    assert [(i["key"], i["id"]) for i in items] == [("f1", ""), ("n2", "n2")]
+    text = pr.render(items)
+    assert "[f1]" not in text and "get_note(f1)" not in text
+    assert "[n2]" in text and "需要全文用 get_note(id)。" in text
+    assert "（Hindsight 事实条目，无笔记全文）" in text
+    assert "get_note" not in pr.render(items[:1])  # nothing fetchable → no such line
+
+
+def test_recall_fact_rows_are_deduped_by_fact_id(hooks):
+    pr = hooks["prompt_recall"]
+    items = pr.normalize([{"id": "f1", "text": "只有事实层的条目", "scores": {"final": 0.9}}])
+    assert len(pr.pick_new("s3", items)) == 1
+    assert pr.pick_new("s3", items) == []          # same fact must not be injected twice
+
+
+def test_recall_tolerates_null_score_from_hindsight(hooks):
+    pr = hooks["prompt_recall"]
+    # one Hindsight endpoint answers with an explicit `"score": null` next to `scores`
+    items = pr.normalize([
+        {"document_id": "n1", "id": "f1", "text": "t", "metadata": {"title": "N1"},
+         "score": None, "scores": {"final": 0.9}},
+        {"id": "f2", "text": "t2", "score": None, "scores": {"final": 0.9}},
+    ])
+    assert [(i["key"], i["id"]) for i in items] == [("n1", "n1"), ("f2", "")]
+
+
 def test_recall_scopes_to_session_project_and_dedupes(hooks, monkeypatch, capsys):
     import io
     import json
