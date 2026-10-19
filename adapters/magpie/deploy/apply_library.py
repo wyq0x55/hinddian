@@ -20,7 +20,7 @@ MCP_URL = (os.environ.get("HINDDIAN_MCP_URL") or (
     (os.environ.get("HINDDIAN_MEMORY_URL") or "").rstrip("/") + "/mcp" if os.environ.get("HINDDIAN_MEMORY_URL") else ""
 )).strip()
 if not MCP_URL:
-    raise SystemExit("set HINDDIAN_MCP_URL (or HINDDIAN_MEMORY_URL), e.g. https://<host>/hinddian/mcp")
+    raise SystemExit("set HINDDIAN_MCP_URL (or HINDDIAN_MEMORY_URL), e.g. https://<host>:8444/hinddian/mcp")
 def _skill_src() -> Path:
     """Skill pack next to this adapter (adapters/magpie/skills), else the repo-root mirror."""
     candidates = [
