@@ -132,8 +132,17 @@ def test_setup_writes_config_and_strips_mcp_suffix(hooks, monkeypatch, capsys):
     import setup
 
     monkeypatch.setattr(setup, "check", lambda: True)
+    monkeypatch.delenv("HINDDIAN_MEMORY_URL")  # the fixture's env URL would override the written config
     assert setup.main(["--url", "https://h:8444/hinddian/mcp", "--token", "t"]) == 0
     assert hooks["hookcfg"].load_config() == {"url": "https://h:8444/hinddian", "token": "t"}
+
+
+def test_setup_fails_when_env_overrides_written_url(hooks, monkeypatch, capsys):
+    import setup
+
+    monkeypatch.setattr(setup, "check", lambda: True)
+    assert setup.main(["--url", "https://h:8444/hinddian", "--token", "t"]) == 1
+    assert "HINDDIAN_MEMORY_URL" in capsys.readouterr().out
 
 
 def test_bridge_answers_when_unconfigured(hooks, monkeypatch):

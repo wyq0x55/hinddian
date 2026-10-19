@@ -1,6 +1,6 @@
 {
   "name": "hinddian",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Hindian memory: hinddian-memory MCP + SessionStart/Stop hooks for session drafts into Obsidian.",
   "author": {
     "name": "Wanwan",
@@ -21,7 +21,7 @@
     "HINDDIAN_MEMORY_URL": {
       "type": "string",
       "title": "hinddian base URL",
-      "description": "https base of your hinddian server, e.g. https://memory.example.com/hinddian (plain http only for localhost). Optional if you ran scripts/setup.py."
+      "description": "https base of your hinddian server, e.g. https://host:8444/hinddian (must include port 8444; plain http only for localhost). Optional if you ran scripts/setup.py."
     },
     "HINDDIAN_MCP_TOKEN": {
       "type": "string",

@@ -54,7 +54,7 @@ def main() -> None:
         hookcfg.emit_context(
             "SessionStart",
             f"hinddian-memory 未就绪（{why}）。请提醒用户在终端运行一次：\n"
-            f'  python3 "{setup}" --url https://<host>/hinddian --token <HINDDIAN_MCP_TOKEN>',
+            f'  python3 "{setup}" --url https://<host>:8444/hinddian --token <HINDDIAN_MCP_TOKEN>',
             raw,
         )
         return

@@ -52,6 +52,9 @@ python3 …/scripts/setup.py --url https://<host>:8444/hinddian --token <HINDDIA
 # 服务器用自签证书时加：--ca /path/to/fullchain.pem
 ```
 
+**注意**：必须是 **`https` + 端口 `8444`**。不要填 `http://<host>/hinddian`（旧 `:80` 入口已关闭，会返回 **HTTP 410**）。
+仪表盘是 `:8443`（mTLS），Agent/MCP 才是 `:8444`。
+
 它会写配置并逐项自检：
 
 ```
@@ -64,6 +67,19 @@ python3 …/scripts/setup.py --url https://<host>:8444/hinddian --token <HINDDIA
 
 之后随时可以 `setup.py --check` 只自检。两台以上电脑：每台各跑一次，或者把
 `~/.config/hinddian/config.json` 拷过去。
+
+
+## 排错
+
+- **写入了 `https://…:8444/hinddian` 但自检仍显示 `http://…/hinddian`（无端口）**：
+  `HINDDIAN_MEMORY_URL` 或 Claude 插件选项覆盖了配置文件。PowerShell：
+  `Remove-Item Env:HINDDIAN_MEMORY_URL -ErrorAction SilentlyContinue`
+  并在 Windows「环境变量」/ Claude 插件设置里删掉旧 URL，再重跑 `setup.py`。
+
+- **`/api/health` 返回 HTTP 410**：只有旧明文 `:80 /hinddian` 会 410；`:8444` 本身不会。 若你填的已是 `https://…:8444/hinddian` 仍报 410，看输出里的「实际请求」——多半是环境变量 `HINDDIAN_MEMORY_URL`（或 `CLAUDE_PLUGIN_OPTION_HINDDIAN_MEMORY_URL`）仍指向旧 `http://…/hinddian`，覆盖了配置文件。 `unset HINDDIAN_MEMORY_URL` 后重跑 `setup.py`，或把该变量改成带 `:8444` 的 https 地址。
+- **鉴权失败 401/403**：token 必须是服务端的 `HINDDIAN_MCP_TOKEN`，不是仪表盘 `AUTH_TOKEN`。
+- **证书错误**：加 `--ca /path/to/fullchain.pem`。
+- **Codex**：审查并 **trust** 插件 hooks。
 
 ## 3. 新开会话
 

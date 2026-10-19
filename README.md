@@ -42,6 +42,7 @@ codex plugin add hinddian@hinddian-plugins
 
 # 一次性配置 + 自检（新会话开头也会打印这条命令的完整路径）
 python3 <插件目录>/scripts/setup.py --url https://<host>:8444/hinddian --token <HINDDIAN_MCP_TOKEN>
+# 必须 https + :8444；http://<host>/hinddian（旧 :80）已关闭，会返回 410
 ```
 
 细节：[`plugins/INSTALL.md`](plugins/INSTALL.md)。

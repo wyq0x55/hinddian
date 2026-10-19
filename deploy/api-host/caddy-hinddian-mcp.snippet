@@ -10,7 +10,9 @@
 	tls /etc/caddy/certs/fullchain.pem /etc/caddy/certs/privkey.pem
 	encode gzip
 
-	@agent path /hinddian/mcp /hinddian/mcp/ /hinddian/api/memory/* /hinddian/api/health
+	# Agent-only paths (hooks + MCP). Trailing-slash / health* variants included so
+	# clients that normalize URLs differently still match (unmatched → 404, never 410).
+	@agent path /hinddian/mcp /hinddian/mcp/* /hinddian/api/health /hinddian/api/health/* /hinddian/api/memory /hinddian/api/memory/*
 	handle @agent {
 		uri strip_prefix /hinddian
 		reverse_proxy 127.0.0.1:8787 {
@@ -25,5 +27,5 @@
 # Bearer tokens must not cross the internet unencrypted.
 #
 #	handle_path /hinddian/* {
-#		respond "hinddian moved to https://<api-host>:8444/hinddian" 410
+#		respond "dashboard https://<api-host>:8443/ (mTLS); agent https://<api-host>:8444/hinddian" 410
 #	}
