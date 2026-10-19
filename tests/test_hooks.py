@@ -20,10 +20,11 @@ def hooks(tmp_path, monkeypatch):
     for k in ("HINDDIAN_MCP_TOKEN", "HINDDIAN_CA_FILE", "HINDDIAN_ALLOW_INSECURE"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.syspath_prepend(str(SCRIPTS))
-    names = ("hookcfg", "session_buf", "finalize", "extract", "jev", "mcp_bridge", "setup", "turn_end")
+    names = ("hookcfg", "session_buf", "finalize", "extract", "jev", "mcp_bridge", "setup", "turn_end",
+             "prompt_recall", "session_start")
     for m in names:
         sys.modules.pop(m, None)
-    mods = {m: importlib.import_module(m) for m in ("hookcfg", "session_buf", "finalize", "mcp_bridge")}
+    mods = {m: importlib.import_module(m) for m in ("hookcfg", "session_buf", "finalize", "mcp_bridge", "prompt_recall", "session_start")}
     yield mods
     for m in names:
         sys.modules.pop(m, None)
@@ -143,7 +144,7 @@ def test_bridge_answers_when_unconfigured(hooks, monkeypatch):
     init = json.loads(b.handle('{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'))
     assert "setup.py" in init["result"]["instructions"]
     assert b.handle('{"jsonrpc":"2.0","method":"notifications/initialized"}') is None
-    assert json.loads(b.handle('{"jsonrpc":"2.0","id":2,"method":"tools/list"}'))["result"]["tools"] == []
+    assert [t["name"] for t in json.loads(b.handle('{"jsonrpc":"2.0","id":2,"method":"tools/list"}'))["result"]["tools"]] == ["doctor"]
     call = json.loads(b.handle('{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"recall"}}'))
     assert call["result"]["isError"] and "setup.py" in call["result"]["content"][0]["text"]
 
@@ -153,12 +154,86 @@ def test_bridge_forwards_and_degrades(hooks, monkeypatch):
 
     b = hooks["mcp_bridge"]
     sent = []
-    monkeypatch.setattr(b, "_forward", lambda raw: sent.append(raw) or b'{"jsonrpc":"2.0","id":1,"result":{"tools":[1]}}')
-    assert json.loads(b.handle('{"jsonrpc":"2.0","id":1,"method":"tools/list"}'))["result"]["tools"] == [1]
+    monkeypatch.setattr(b, "_forward", lambda raw: sent.append(raw) or b'{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"recall"}]}}')
+    names = [t["name"] for t in json.loads(b.handle('{"jsonrpc":"2.0","id":1,"method":"tools/list"}'))["result"]["tools"]]
+    assert names == ["recall", "doctor"]
     assert json.loads(sent[0])["method"] == "tools/list"
 
     def down(raw):
         raise OSError("refused")
 
     monkeypatch.setattr(b, "_forward", down)
-    assert json.loads(b.handle('{"jsonrpc":"2.0","id":2,"method":"tools/list"}'))["result"]["tools"] == []
+    assert [t["name"] for t in json.loads(b.handle('{"jsonrpc":"2.0","id":2,"method":"tools/list"}'))["result"]["tools"]] == ["doctor"]
+
+
+def test_bridge_doctor_runs_locally(hooks, monkeypatch):
+    import json
+
+    b = hooks["mcp_bridge"]
+    monkeypatch.setattr(b, "_forward", lambda raw: (_ for _ in ()).throw(AssertionError("doctor must not be forwarded")))
+    out = json.loads(b.handle('{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"doctor","arguments":{}}}'))
+    assert "hinddian" in out["result"]["content"][0]["text"]
+
+
+# ------------------------------------------------------------------ auto recall
+def test_recall_skips_cheap_prompts(hooks):
+    w = hooks["prompt_recall"].worth_recalling
+    for p in ("好的", "继续", "ok", "Thanks!", "/hinddian:doctor", "<task-notification>x</task-notification>", "短"):
+        assert not w(p), p
+    assert w("部署到 API 主机之前要检查什么")
+
+
+def test_recall_filters_and_dedupes(hooks):
+    pr = hooks["prompt_recall"]
+    results = [
+        {"document_id": "a", "text": "---\nid: a\n---\n# A\n\n## 做法\n先跑门禁", "metadata": {"title": "A"}, "scores": {"reranker": 0.9}},
+        {"document_id": "b", "text": "无关", "metadata": {"title": "B"}, "scores": {"reranker": 0.1}},
+        {"id": "c", "title": "C", "practice": "p", "score": 0.6},
+        {"id": "d", "title": "D", "practice": "p", "score": 0.1},
+    ]
+    items = pr.normalize(results)
+    assert [i["id"] for i in items] == ["a", "c"]
+    assert items[0]["snippet"] == "先跑门禁"
+    assert [i["id"] for i in pr.pick_new("s1", items)] == ["a", "c"]
+    assert pr.pick_new("s1", items) == []          # already injected this session
+    assert [i["id"] for i in pr.pick_new("s2", items)] == ["a", "c"]
+
+
+def test_recall_emits_structured_context(hooks, monkeypatch, capsys):
+    import io
+    import json
+
+    pr = hooks["prompt_recall"]
+    monkeypatch.setattr(pr.hookcfg, "req", lambda *a, **k: {"results": [{"document_id": "a", "text": "t", "metadata": {"title": "A"}}]})
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"hook_event_name": "UserPromptSubmit", "session_id": "s", "prompt": "上次部署门禁怎么定的"})))
+    pr.main()
+    out = json.loads(capsys.readouterr().out)
+    ctx = out["hookSpecificOutput"]
+    assert ctx["hookEventName"] == "UserPromptSubmit" and "<hinddian_recall>" in ctx["additionalContext"]
+
+
+def test_recall_off_switch_and_failure_are_silent(hooks, monkeypatch, capsys):
+    import io
+
+    pr = hooks["prompt_recall"]
+    monkeypatch.setenv("HINDDIAN_AUTO_RECALL", "0")
+    monkeypatch.setattr("sys.stdin", io.StringIO('{"prompt": "上次部署门禁怎么定的"}'))
+    pr.main()
+    monkeypatch.setenv("HINDDIAN_AUTO_RECALL", "1")
+
+    def boom(*a, **k):
+        raise TimeoutError
+
+    monkeypatch.setattr(pr.hookcfg, "req", boom)
+    monkeypatch.setattr("sys.stdin", io.StringIO('{"prompt": "上次部署门禁怎么定的"}'))
+    pr.main()
+    assert capsys.readouterr().out == ""
+
+
+# ------------------------------------------------------------------ session start
+def test_routing_block_is_cache_stable(hooks):
+    ss = hooks["session_start"]
+    a = ss.routing_block(sorted(["b", "a"]), "a")
+    assert a == ss.routing_block(["a", "b"], "a")
+    assert not any(ch.isdigit() for ch in a.replace("hinddian", ""))  # no counts / dates in the prefix
+    assert ss.match_project("/home/me/work/my-app-api", ["my-app", "my-app-api"]) == "my-app-api"

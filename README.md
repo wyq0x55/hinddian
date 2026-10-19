@@ -30,6 +30,7 @@ Host-agnostic memory product: **Obsidian 原子笔记**为人读唯一真相源�
 ## Agent 插件安装（Claude Code / Codex）— 首选
 
 装插件 → 跑一次 `setup.py` → 新开会话。插件内置本地 MCP 桥，插件配置里不写服务器地址。
+用起来：每条消息自动召回相关笔记（附在消息末尾，不破坏缓存）；`/hinddian:recall`、`/hinddian:remember`、`/hinddian:doctor` 手动用。
 
 ```bash
 # Claude Code

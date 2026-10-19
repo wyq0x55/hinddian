@@ -1,6 +1,6 @@
 {
   "name": "hinddian",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Hindian memory: hinddian-memory MCP + SessionStart/Stop hooks for session drafts into Obsidian.",
   "author": {
     "name": "Wanwan",

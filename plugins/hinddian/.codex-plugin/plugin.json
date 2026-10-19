@@ -1,6 +1,6 @@
 {
   "name": "hinddian",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "hinddian memory for Codex: MCP (local bridge) + SessionStart/Stop hooks + skills. One-time: python3 scripts/setup.py --url … --token …",
   "author": {
     "name": "Wanwan",

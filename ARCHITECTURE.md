@@ -9,7 +9,8 @@
 ```
 Agent 会话
   ├─ session-start：finalize 上一会话缓冲 → Jev(keep) → 一次 push_draft
-  │                 注入 routing_global / routing_project；Jev should-recall → 按需 recall
+  │                 注入固定的记忆路由块（规则 + 项目名；逐字节稳定，不破坏提示词缓存）
+  ├─ user-prompt：按本条消息自动 recall，命中的 ≤3 条短摘要附在该消息末尾（去重、3s 超时、短消息跳过）
   └─ turn-end：白名单抽取（用户 + 最终回复）→ 本机会话缓冲（不远程写）
                        ↓（空闲 ~30min / 换项目 也会 finalize）
               /var/lib/hinddian/drafts/<project>/session-*.md
@@ -51,13 +52,13 @@ Agent 会话
 2. 可选云端 TypeSafe（`TYPESAFE_API_KEY`）
 3. 都失败 → **本轮暂不写**（无松弛 LLM auto-keep），缓冲留着退避重试
 
-**读/UX 路径（should-recall 等）**：本机失败时可用 chat completions soft fallback，只影响是否提示 recall，不自动写草稿。
+**读/UX 路径**：本机失败时可用 chat completions soft fallback，不自动写草稿。召回不经 Jev：由 UserPromptSubmit hook 按消息直接 recall，并按相关度阈值过滤。
 
 - 任意暴露 System One 的本机网关均可；与 Magpie 产品身份无关
 - API 主机 API 可选经 SSH LocalForward 使用远端 `:3425`（infra，非产品品牌）
 - 仪表盘 / 日志：`source=jev:local|cloud|none`（`jev:magpie` 旧标签归一为 `jev:local`）
 
-用于：should-recall、项目匹配、本会话是否值得记、类型/项目分类、写入四态辅助。
+用于：项目匹配、本会话是否值得记、类型/项目分类、写入四态辅助。
 
 ## MCP：hinddian-memory
 

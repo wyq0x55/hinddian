@@ -11,8 +11,8 @@
 | 组件 | Claude Code | Codex CLI / 桌面 |
 |------|-------------|------------------|
 | MCP `hinddian-memory` | 是：本地 stdio 桥 `scripts/mcp_bridge.py`，转发到你的服务器 | 是：同一个桥（`.codex-plugin/mcp.json`） |
-| Hooks SessionStart + Stop | 是 | 是，但需在 Codex 里 **trust** 插件 hooks |
-| Skills（`setup`、`memory`） | 是 | 是 |
+| Hooks：SessionStart（注入记忆路由块）、UserPromptSubmit（按消息自动召回）、Stop（会话草稿） | 是 | 是，但需在 Codex 里 **trust** 插件 hooks |
+| Skills：`memory`（何时读/写）、`recall`、`remember`、`doctor`、`setup` | 是（`/hinddian:recall` 等） | 是 |
 
 MCP 走插件内置的本地桥，所以插件配置里**不写任何服务器地址**；地址和 token 只存在你本机的
 `~/.config/hinddian/config.json`（权限 600），hooks 和 MCP 共用这一份。
@@ -69,6 +69,15 @@ python3 …/scripts/setup.py --url https://<host>:8444/hinddian --token <HINDDIA
 
 - Claude Code：`/mcp` 里能看到 `plugin:hinddian:hinddian-memory` 已连接
 - Codex：会话里能调用 `routing_global` / `recall`
+
+## 自动召回
+
+每条用户消息会按内容去服务端 recall，命中的相关笔记（最多 3 条、每条一行）附在**该条消息末尾**；
+会话开头只注入一段固定不变的规则 + 项目名，所以不破坏提示词缓存。短消息（「好的」「继续」等）、`/` 命令跳过；
+同一会话不重复注入；3 秒超时就跳过。
+
+- 关闭：`HINDDIAN_AUTO_RECALL=0`，或在 `~/.config/hinddian/config.json` 写 `"auto_recall": false`
+- 调节：`HINDDIAN_RECALL_MIN_CHARS`（默认 8）、`HINDDIAN_RECALL_MAX_ITEMS`（3）、`HINDDIAN_RECALL_MIN_SCORE`（0.5）
 
 ## 进阶
 

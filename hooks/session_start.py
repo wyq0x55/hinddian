@@ -1,9 +1,14 @@
-"""SessionStart: finalize previous session buffers (detached); inject routing; Jev should-recall."""
+"""SessionStart: finalize previous session buffers (detached); inject the memory routing block.
+
+The block sits at the very front of the conversation, so it must be byte-stable across turns
+and sessions (prompt-cache prefix): fixed rules + sorted project names only — no counts,
+dates or note text. Per-message recall happens later, in prompt_recall.py.
+"""
 from __future__ import annotations
 
+import json
 import os
 import sys
-import urllib.parse
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -12,99 +17,63 @@ import extract  # noqa: E402
 import hookcfg  # noqa: E402
 import session_buf  # noqa: E402
 
+RULES = """\
+长期记忆来自 hinddian-memory MCP（以 Obsidian 笔记为准）。
+- 自动召回：用户消息若命中相关笔记，会以 <hinddian_recall> 附在该消息后。可能不相关，自行判断；不必向用户复述。
+- 需要更多：recall(query, project) 搜索；get_note(id) 看全文；routing_project(project) 看项目现状与决策/经验列表。
+- 工具可能是延迟加载的：首次调用找不到时，先用 ToolSearch 搜 "hinddian" 加载，不要因此当作没有记忆。
+- 写入：会话内容会自动整理成草稿，平时不用手动写。用户明确要求记住或纠正时：tip/preference/lesson 用 upsert_note；涉及 decision 一律 suggest_correction（用户在仪表盘批准）。不硬删（用 supersede/obsolete），不写密钥。"""
 
-def req(method, path, body=None, timeout=12):
-    return hookcfg.req(method, path, body, timeout=timeout)
+
+def routing_block(projects: list[str], current: str | None) -> str:
+    lines = ["<hinddian_memory>", RULES]
+    if projects:
+        lines.append("- 已知项目：" + "、".join(projects))
+    if current:
+        lines.append(f"- 当前目录对应项目：{current}")
+    lines.append("</hinddian_memory>")
+    return "\n".join(lines)
 
 
-def should_recall_local(cwd_: str, message: str, projects: list):
+def match_project(cwd: str, projects: list[str]) -> str | None:
+    low = cwd.lower()
+    hits = [p for p in projects if p and p.lower() in low]
+    return max(hits, key=len) if hits else None
+
+
+def main() -> None:
+    stdin = sys.stdin.read(50000) if not sys.stdin.isatty() else ""
     try:
-        import jev
-
-        r = jev.should_recall(cwd_, message, projects)
-        return {
-            "ok": r.ok,
-            "should_recall": r.value,
-            "confidence": r.confidence,
-            "source": r.source,
-            "error": r.error,
-        }
-    except Exception as e:
-        print(f"session-start local Jev skipped: {type(e).__name__}: {str(e)[:100]}")
-        return None
-
-
-def main():
+        raw = json.loads(stdin) if stdin.strip().startswith("{") else {}
+    except ValueError:
+        raw = {}
     why = hookcfg.transport_problem()
     if why:
         setup = hookcfg.HERE / "setup.py"
-        print(f"hinddian-memory 未就绪（{why}）。请用户在终端运行一次：")
-        print(f'  python3 "{setup}" --url https://<host>/hinddian --token <HINDDIAN_MCP_TOKEN>')
+        hookcfg.emit_context(
+            "SessionStart",
+            f"hinddian-memory 未就绪（{why}）。请提醒用户在终端运行一次：\n"
+            f'  python3 "{setup}" --url https://<host>/hinddian --token <HINDDIAN_MCP_TOKEN>',
+            raw,
+        )
         return
-    stdin = ""
-    if not sys.stdin.isatty():
-        stdin = sys.stdin.read(50000)
     payload = extract.parse_hook_payload(stdin)
-    cwd = payload.get("cwd") or os.environ.get("MAGPIE_CWD") or os.environ.get("PWD") or ""
-    msg = payload.get("first_message") or os.environ.get("MAGPIE_FIRST_MESSAGE") or os.environ.get("MAGPIE_PROMPT") or ""
-    new_sid = session_buf.stable_session_id(payload.get("session_id"), cwd, msg[:80] if msg else "new")
+    cwd = payload.get("cwd") or os.environ.get("PWD") or ""
+    sid = session_buf.stable_session_id(payload.get("session_id"), cwd, "new")
 
-    # Flush previous session drafts (hosts without portable session-end) without blocking start-up
-    if not hookcfg.spawn_finalize("--current", new_sid, log=session_buf.hook_dir() / "finalize.log"):
-        import finalize
+    # compact / resume continue the same session: nothing new to finalize
+    if raw.get("source") not in ("compact", "resume"):
+        if not hookcfg.spawn_finalize("--current", sid, log=session_buf.hook_dir() / "finalize.log"):
+            import finalize
 
-        for fr in finalize.finalize_idle_and_others(current_sid=new_sid):
-            src = fr.get("source") or fr.get("skipped")
-            print(f"hinddian finalize session={fr.get('session_id')} source={src} reason={fr.get('reason')}")
+            finalize.finalize_idle_and_others(current_sid=sid)
 
     try:
-        global_rt = req("GET", "/api/memory/routing/global")
-    except Exception as e:
-        print(f"hinddian-memory: routing unavailable ({e}). Prefer MCP hinddian-memory if tools are listed.")
-        return
-    projects = global_rt.get("projects") or []
-    plist = "; ".join(
-        f"{p.get('name')}({p.get('decisions', 0)}d/{p.get('lessons', 0)}l)" for p in projects
-    ) or "none"
-    print("hinddian-memory MCP (not raw Hindsight). Stable prefix — do not rewrite.")
-    print(f"Projects: {plist}")
-    print(f"Guidance: {global_rt.get('guidance', '')}")
-    print("Memory write: session-bucket (one draft/session after Jev keep). Threshold counts session drafts.")
-    proj = None
-    blob = (cwd + " " + msg).lower()
-    for p in projects:
-        n = p.get("name") or ""
-        if n and n.lower() in blob:
-            proj = n
-            break
-    names = [p.get("name") for p in projects if p.get("name")]
-    gate = should_recall_local(cwd, msg, names)
-    if gate is None:
-        try:
-            gate = req("POST", "/api/memory/gates/should_recall", {"cwd": cwd, "message": msg}, timeout=20)
-        except Exception:
-            gate = {"should_recall": True, "source": "fallback"}
-    if proj:
-        try:
-            pr = req("GET", "/api/memory/routing/project/" + urllib.parse.quote(proj))
-            print(f"PROJECT {pr.get('project')} | state: {(pr.get('current_state') or '')[:240]}")
-            print(f"when_to_recall: {pr.get('when_to_recall', '')}")
-            print(f"decisions: {len(pr.get('decisions') or [])} lessons: {len(pr.get('lessons') or [])}")
-        except Exception:
-            pass
-    src = gate.get("source", "")
-    if gate.get("should_recall"):
-        print(
-            f"Gate should_recall=YES (source={src}). If task needs memory: MCP routing_project then "
-            "recall(project=…). Put recall AFTER this prefix. Never Hindsight retain. "
-            "Gated write: tip/preference/lesson → upsert_note; decision → queued for the user's "
-            "dashboard approval (suggest_correction). No hard delete (supersede/obsolete). No secrets."
-        )
-    else:
-        print(
-            f"Gate should_recall=NO (source={src}). Skip recall unless the user asks about prior "
-            "decisions. Same gated write rules if correcting memory. No secrets in notes."
-        )
+        g = hookcfg.req("GET", "/api/memory/routing/global", timeout=5)
+        projects = sorted(p["name"] for p in g.get("projects") or [] if p.get("name"))
+    except Exception:  # noqa: BLE001 — server down: still give the rules, just no project list
+        projects = []
+    hookcfg.emit_context("SessionStart", routing_block(projects, match_project(cwd, projects)), raw)
 
 
 if __name__ == "__main__":

@@ -4,8 +4,8 @@
 
 1. **开会话（session-start）**
    - Finalize 上一会话 / 空闲缓冲：Jev `keep` → 一次 `push_draft`（或丢弃）
-   - 注入全局/项目路由表
-   - Jev `should-recall`：仅决定是否提示 `recall`（不写记忆）
+   - 注入固定的记忆路由块（不含数量/日期，保证提示词缓存前缀稳定）
+   - 之后每条用户消息由 UserPromptSubmit hook 自动 recall，命中才附 ≤3 条短摘要（`HINDDIAN_AUTO_RECALL=0` 关闭）
 
 2. **每回合结束（turn-end）**
    - 白名单：用户话 + 最终助手回复
@@ -14,7 +14,7 @@
 
 3. **Finalize 触发**
    - 新开会话、空闲约 30 分钟、或切换项目
-   - Jev：本机 System One（`JEV_BASE_URL`）→ 云端 TypeSafe → 失败则 `source=none` **不记**
+   - Jev：本机 System One（`JEV_BASE_URL`）→ 云端 TypeSafe → 都失败则**暂不记**，缓冲保留、退避重试
 
 4. **草稿**
    - API 主机/vault 主机：`/var/lib/hinddian/drafts/<项目>/…`

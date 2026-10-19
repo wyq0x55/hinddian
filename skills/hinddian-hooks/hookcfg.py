@@ -108,6 +108,27 @@ def req(method: str, path: str, body: Any = None, timeout: float = 30) -> Any:
         return json.loads(resp.read())
 
 
+def emit_context(event: str, text: str, payload: dict | None = None) -> None:
+    """Hand text to the agent as hook context. Claude Code / Codex send `hook_event_name`
+    and read `hookSpecificOutput.additionalContext`; other hosts (Magpie) take plain stdout."""
+    if not text:
+        return
+    if payload and (payload.get("hook_event_name") or payload.get("hookEventName")):
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}}, ensure_ascii=False))
+    else:
+        print(text)
+
+
+def flag(name: str, default: bool) -> bool:
+    """Boolean switch from env, else config file key (lower-case name without HINDDIAN_)."""
+    v = os.environ.get(name)
+    if v is None:
+        v = load_config().get(name.removeprefix("HINDDIAN_").lower())
+    if v is None or v == "":
+        return default
+    return str(v).strip().lower() not in ("0", "false", "no", "off")
+
+
 def _ssl_context() -> ssl.SSLContext | None:
     ca = setting("HINDDIAN_CA_FILE")
     if not ca:
