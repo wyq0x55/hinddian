@@ -210,6 +210,10 @@ def vault(op: str, **kw: Any) -> Any:
             return n.list_corrections(status=kw.get("status", "pending"), limit=kw.get("limit", 100))
         if op == "decide_correction":
             return n.decide_correction(kw["id"], approve=kw["approve"], reason=kw.get("reason", ""))
+        if op == "list_drafts":
+            return n.list_drafts(project=kw.get("project"), status=kw.get("status", "pending"), limit=kw.get("limit", 100))
+        if op == "get_draft":
+            return n.get_draft(kw["id"])
         raise ValueError(f"unknown vault op {op}")
 
     if op in ("routing_global",):
@@ -236,6 +240,13 @@ def vault(op: str, **kw: Any) -> Any:
         if not kw["approve"]:
             cmd += ["--reason", kw.get("reason", "")]
         return _ssh_cli(cmd)
+    if op == "list_drafts":
+        cmd = [op, f"--status={kw.get('status', 'pending')}", "--limit", str(kw.get("limit", 100))]
+        if kw.get("project"):
+            cmd += ["--project", kw["project"]]
+        return _ssh_cli(cmd)
+    if op == "get_draft":
+        return _ssh_cli([op, "--id", kw["id"]])
     raise ValueError(f"unknown vault op {op}")
 
 

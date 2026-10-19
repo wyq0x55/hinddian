@@ -20,6 +20,7 @@ from . import note_format as nf
 
 VAULT = pathlib.Path(os.environ.get("VAULT_ROOT") or os.environ.get("HC_VAULT") or "/srv/obsidian/vault")
 DRAFTS = pathlib.Path(os.environ.get("HB_DRAFTS") or "/var/lib/hinddian/drafts")
+PROCESSED = pathlib.Path(os.environ.get("HB_PROCESSED") or "/var/lib/hinddian/processed")
 CORRECTIONS = pathlib.Path(os.environ.get("HB_CORRECTIONS") or "/var/lib/hinddian/agent_corrections")
 ROUTING_CACHE = pathlib.Path(os.environ.get("HINDDIAN_ROUTING") or "/var/lib/hinddian/routing")
 OWNER = os.environ.get("HC_OWNER", "obsidian")
@@ -517,4 +518,110 @@ def push_draft(*, project: str, title: str, body: str, meta: dict | None = None)
         "session_id": sid or None,
         "jev_source": meta.get("jev_source"),
         "upsert": bool(sid),
+    }
+
+
+def list_drafts(*, project: str | None = None, status: str = "pending", limit: int = 100) -> list[dict]:
+    """List push_draft session files for the dashboard (pending in drafts/, processed after batch)."""
+    limit = max(1, min(int(limit or 100), 500))
+    status = (status or "pending").lower()
+    if status not in ("pending", "processed", "all"):
+        status = "pending"
+    rows: list[dict] = []
+    if status in ("pending", "all"):
+        rows.extend(_scan_draft_tree(DRAFTS, "pending", project))
+    if status in ("processed", "all"):
+        rows.extend(_scan_draft_tree(PROCESSED, "processed", project))
+    rows.sort(key=lambda r: r.get("mtime") or "", reverse=True)
+    return rows[:limit]
+
+
+def get_draft(draft_id: str) -> dict | None:
+    """Load one draft by ``project/filename`` (with or without .md) from pending then processed."""
+    draft_id = (draft_id or "").strip().lstrip("/")
+    if not draft_id or ".." in draft_id or draft_id.startswith("/") or draft_id.count("/") != 1:
+        return None
+    project, name = draft_id.split("/", 1)
+    project = nf.safe_project(project)
+    name = pathlib.Path(name).name
+    if name.endswith(".md"):
+        stem = name[:-3]
+    else:
+        stem = name
+    if not stem or stem.startswith("."):
+        return None
+    for root, st in ((DRAFTS, "pending"), (PROCESSED, "processed")):
+        try:
+            path = nf.within(root, f"{project}/{stem}")
+        except nf.UnsafePath:
+            return None
+        if not path.is_file():
+            continue
+        row = _draft_row(project, path, st)
+        if not row:
+            return None
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+        parsed = nf.parse_frontmatter(text)
+        row["body"] = (parsed[2] if parsed else text).strip()
+        return row
+    return None
+
+
+def _scan_draft_tree(root: pathlib.Path, status: str, project: str | None) -> list[dict]:
+    if not root.is_dir():
+        return []
+    proj = nf.safe_project(project) if project else None
+    out: list[dict] = []
+    for d in sorted(root.iterdir()):
+        if not d.is_dir() or d.name.startswith("."):
+            continue
+        if proj and d.name != proj:
+            continue
+        for f in d.glob("*.md"):
+            row = _draft_row(d.name, f, status)
+            if row:
+                out.append(row)
+    return out
+
+
+def _draft_row(project: str, path: pathlib.Path, status: str) -> dict | None:
+    try:
+        st = path.stat()
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    fm: dict[str, Any] = {}
+    body = text
+    parsed = nf.parse_frontmatter(text)
+    if parsed:
+        fm, _raw, body = parsed
+    title = str(fm.get("title") or "").strip()
+    if not title:
+        for line in (body or "").splitlines():
+            if line.startswith("# "):
+                title = line[2:].strip()
+                break
+    if not title:
+        title = path.stem
+    sid = str(fm.get("session_id") or "").strip() or None
+    if not sid and path.stem.startswith("session-"):
+        sid = path.stem[len("session-") :] or None
+    mtime = dt.datetime.fromtimestamp(st.st_mtime).astimezone().isoformat(timespec="seconds")
+    snippet = " ".join((body or "").strip().split())[:160]
+    return {
+        "id": f"{project}/{path.name}",
+        "project": project,
+        "name": path.name,
+        "title": title,
+        "session_id": sid,
+        "jev_source": str(fm.get("jev_source") or "").strip() or None,
+        "origin": str(fm.get("origin") or "").strip() or None,
+        "created": str(fm.get("created") or "").strip() or None,
+        "mtime": mtime,
+        "status": status,
+        "snippet": snippet,
+        "bytes": st.st_size,
     }

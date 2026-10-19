@@ -164,6 +164,25 @@ def batch_approve(project: str, settings: Settings = Depends(_settings)) -> dict
         raise HTTPException(400, str(e)) from e
 
 
+@app.get("/api/drafts", dependencies=dash)
+def list_session_drafts(project: str | None = None, status: str = "pending", limit: int = 100) -> list[dict]:
+    """push_draft session files: pending in drafts/, processed after batch."""
+    limit = max(1, min(int(limit), 500))
+    status = (status or "pending").lower()
+    if status not in ("pending", "processed", "all"):
+        raise HTTPException(400, "status must be pending|processed|all")
+    return _vault("list_drafts", project=project or None, status=status, limit=limit)
+
+
+@app.get("/api/draft", dependencies=dash)
+def session_draft(id: str) -> dict:
+    """One session draft by project/filename (pending or processed)."""
+    d = _vault("get_draft", id=id)
+    if not d:
+        raise HTTPException(404, "draft not found")
+    return d
+
+
 @app.get("/api/corrections", dependencies=dash)
 def list_agent_corrections(status: str = "pending") -> list[dict]:
     """Agent gated-upsert suggestions queued on the vault host."""
