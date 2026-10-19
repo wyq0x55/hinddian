@@ -120,7 +120,8 @@ Agent 会话
 
 ## Agent plugins (Claude / Codex)
 
-- 包：`plugins/hinddian/` — plugin.json、mcp、hooks（SessionStart + Stop）、skills
+- 包：`plugins/hinddian/` — `.claude-plugin/` 与 `.codex-plugin/` 各一份清单；MCP 为本地 stdio 桥 `scripts/mcp_bridge.py`（转发到服务端 `/mcp`）；hooks（SessionStart + Stop）；skills
+- 客户端配置：`scripts/setup.py` 写 `~/.config/hinddian/config.json`（600），hooks 与 MCP 桥共用；环境变量可覆盖
 - 市场清单：`.claude-plugin/marketplace.json`、`.agents/plugins/marketplace.json`
 - Codex 公开目录不接受带 lifecycle hooks 的插件；用 CLI/桌面 + trust hooks
 

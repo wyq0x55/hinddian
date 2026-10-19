@@ -10,7 +10,7 @@
 	tls /etc/caddy/certs/fullchain.pem /etc/caddy/certs/privkey.pem
 	encode gzip
 
-	@agent path /hinddian/mcp /hinddian/mcp/ /hinddian/api/memory/*
+	@agent path /hinddian/mcp /hinddian/mcp/ /hinddian/api/memory/* /hinddian/api/health
 	handle @agent {
 		uri strip_prefix /hinddian
 		reverse_proxy 127.0.0.1:8787 {

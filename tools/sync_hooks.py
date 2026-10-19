@@ -28,6 +28,8 @@ CORE = {
     "finalize.py": ROOT / "hooks/finalize.py",
     "session_start.py": ROOT / "hooks/session_start.py",
     "turn_end.py": ROOT / "hooks/turn_end.py",
+    "mcp_bridge.py": ROOT / "hooks/mcp_bridge.py",
+    "setup.py": ROOT / "hooks/setup.py",
     "jev.py": ROOT / "src/hinddian/jev.py",
 }
 MAGPIE_SKILL = ROOT / "adapters/magpie/skills/hinddian-hooks"

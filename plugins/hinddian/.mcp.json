@@ -1,11 +1,10 @@
 {
   "mcpServers": {
     "hinddian-memory": {
-      "type": "http",
-      "url": "${HINDDIAN_MEMORY_URL}/mcp",
-      "headers": {
-        "Authorization": "Bearer ${HINDDIAN_MCP_TOKEN}"
-      }
+      "command": "python3",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/scripts/mcp_bridge.py"
+      ]
     }
   }
 }

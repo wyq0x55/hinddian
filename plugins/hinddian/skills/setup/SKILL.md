@@ -1,14 +1,24 @@
 ---
 name: setup
-description: After installing the hinddian plugin, verify MCP connection and explain hooks trust / Windows Python.
+description: Configure or troubleshoot the hinddian plugin (server URL + token, MCP connection, hooks trust).
 ---
 
 # hinddian setup
 
-1. Confirm MCP: ask the agent to list tools or call `routing_global` / `recall` on **hinddian-memory**.
-2. **Claude Code**: hooks from the plugin load with the plugin. New session → SessionStart; after a reply → Stop buffers the turn.
-3. **Codex**: enable the plugin, then **review and trust** plugin hooks (Codex skips untrusted plugin hooks). Hooks work best on Codex desktop / local CLI, not the public web directory path.
-4. Required env (no built-in server): `HINDDIAN_MEMORY_URL` (https base incl. `/hinddian`, e.g. `https://<host>:8444/hinddian`) and `HINDDIAN_MCP_TOKEN`. The MCP config expands both; hooks refuse plain http to non-loopback hosts. Self-signed server cert: `HINDDIAN_CA_FILE` (hooks) + `NODE_EXTRA_CA_CERTS` (Claude Code MCP).
-5. Need Magpie hosts too: Magpie WebDAV does **not** sync Library Hooks — use Magpie skill `hinddian-hooks` install.ps1 on each PC.
+Configuration is one command the **user** runs in a terminal — do not ask for or handle the token yourself:
 
-Do not put secrets in the repo. Prefer Magpie local Jev at `127.0.0.1:3425` when Magpie is the gateway.
+```bash
+python3 "<plugin root>/scripts/setup.py"            # interactive (token not echoed)
+python3 "<plugin root>/scripts/setup.py" --check    # self-check only
+```
+
+The SessionStart hook prints the exact path when hinddian is not configured. `setup.py` writes
+`~/.config/hinddian/config.json` (mode 600), shared by the hooks and the local MCP bridge, and checks
+TLS, auth and the MCP tool list.
+
+Troubleshooting:
+- `[fail] 鉴权失败`: the token must be the server's `HINDDIAN_MCP_TOKEN`, not the dashboard `AUTH_TOKEN`.
+- Certificate errors: re-run with `--ca /path/to/fullchain.pem` (self-signed server).
+- MCP shows 0 tools: not configured yet, or the server is unreachable — run `--check`.
+- **Codex**: review and **trust** the plugin hooks (Codex skips untrusted plugin hooks).
+- Magpie hosts: Magpie WebDAV does not sync Library Hooks — use the `hinddian-hooks` skill installer on each PC.

@@ -29,39 +29,18 @@ Host-agnostic memory product: **Obsidian 原子笔记**为人读唯一真相源�
 
 ## Agent 插件安装（Claude Code / Codex）— 首选
 
-包路径：`plugins/hinddian/`（MCP + SessionStart/Stop hooks + skills）。
-
-| 市场 | MCP + Hooks 同包？ | 安装 |
-|------|-------------------|------|
-| **Claude Code** | **是** | marketplace add → install |
-| **Codex CLI / 桌面** | **是**（hooks 需用户 **trust**；公开目录拒收带 hooks 的包） | marketplace add → plugin add |
-
-### Claude Code
+装插件 → 跑一次 `setup.py` → 新开会话。插件内置本地 MCP 桥，插件配置里不写服务器地址。
 
 ```bash
+# Claude Code
 claude plugin marketplace add wyq0x55/hinddian
-# 会话内：
-# /plugin install hinddian@hinddian-plugins
-
-# 或本地：
-claude --plugin-dir ./plugins/hinddian
-claude plugin validate ./plugins/hinddian
-```
-
-### Codex
-
-```bash
+claude plugin install hinddian@hinddian-plugins
+# Codex（启用后 trust 插件 hooks）
 codex plugin marketplace add wyq0x55/hinddian
 codex plugin add hinddian@hinddian-plugins
-# 启用后审查并 trust 插件 hooks
-```
 
-私有仓库：先登录 GitHub，或克隆后：
-
-```bash
-claude --plugin-dir /path/to/hinddian/plugins/hinddian
-codex plugin marketplace add /path/to/hinddian
-codex plugin add hinddian@hinddian-plugins
+# 一次性配置 + 自检（新会话开头也会打印这条命令的完整路径）
+python3 <插件目录>/scripts/setup.py --url https://<host>:8444/hinddian --token <HINDDIAN_MCP_TOKEN>
 ```
 
 细节：[`plugins/INSTALL.md`](plugins/INSTALL.md)。
