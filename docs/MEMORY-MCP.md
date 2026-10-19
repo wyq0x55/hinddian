@@ -10,6 +10,8 @@
 
 Header：`Authorization: Bearer <HINDDIAN_MCP_TOKEN>`（常与 Hindsight tenant key 同源；只放 secrets，勿进笔记）。
 
+写入分工：记住/纠正用 `upsert_note`（tip/preference/lesson）或 `suggest_correction`（decision）；**不要**用手调 `push_draft` 代替纠正——草稿只进批处理蒸馏，不进「Agent 修正」队列，空 ops 时面板上看不到改动。
+
 ## 禁止 / 已移除
 
 | 项 | 说明 |

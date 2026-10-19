@@ -33,12 +33,14 @@ Tools may be deferred: if a hinddian tool "doesn't exist", load it with ToolSear
 
 ## Writing
 
-Sessions are turned into drafts automatically (Stop hook → nightly batch); normal work needs
-no writes. Write only when the user explicitly asks to remember or correct something:
+Sessions are turned into drafts automatically by **hooks** (`push_draft` → batch distill). Agents must
+**not** call `push_draft` by hand — it is not a review queue and empty distill ops leave no notes.
+
+Write with gated tools when the user asks to remember/correct **or** you discover a wrong/outdated note:
 
 | Kind | Tool |
 |------|------|
 | tip / preference / lesson | `upsert_note` (add or update; `auto_verdict: true` lets Jev pick add/update/supersede) |
-| anything that creates, changes, supersedes or retires a **decision** | `suggest_correction` — the user approves it in the dashboard; no flag bypasses this |
+| anything that creates, changes, supersedes or retires a **decision** | `suggest_correction` — waits in dashboard 「Agent 修正」; no flag bypasses this |
 
-Never hard-delete (use `supersede` / `obsolete`). Never write secrets.
+Never hard-delete (use `supersede` / `obsolete`). Never write secrets. Never `push_draft` for corrections.

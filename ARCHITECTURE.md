@@ -69,7 +69,7 @@ Agent 会话
 | `get_note` / `list_notes` | 读笔记 |
 | `upsert_note` | 门控四态：add / update / supersede / noop |
 | `suggest_correction` | 入仪表盘「Agent 修正」队列 |
-| `push_draft` | hooks / 工具推会话草稿 |
+| `push_draft` | **仅 hooks** 会话 finalize 推草稿；Agent 纠正勿用 |
 
 任何宿主 **只挂**本 MCP，不挂原生 Hindsight MCP 给 Agent。
 
