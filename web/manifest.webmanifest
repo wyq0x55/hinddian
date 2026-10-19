@@ -1,10 +1,10 @@
 {
   "name": "hinddian 记忆",
   "short_name": "hinddian",
-  "start_url": "/#review",
+  "start_url": "/#pipeline",
   "display": "standalone",
-  "background_color": "#141416",
-  "theme_color": "#141416",
+  "background_color": "#1a1a1e",
+  "theme_color": "#1a1a1e",
   "icons": [
     { "src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml" },
     { "src": "/static/icon-180.png", "sizes": "180x180", "type": "image/png" },
