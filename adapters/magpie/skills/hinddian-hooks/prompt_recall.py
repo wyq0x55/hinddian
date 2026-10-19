@@ -72,18 +72,26 @@ def normalize(results: list) -> list[dict]:
     return out
 
 
-def _seen_path(sid: str) -> Path:
-    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in sid)[:100]
-    return session_buf.sessions_dir() / f"{safe}.recalled.json"
+def session_project(sid: str) -> str:
+    """Project matched from cwd at SessionStart (session_start.py writes it); "" = none."""
+    try:
+        return session_buf.side_file(sid, "project").read_text(encoding="utf-8").strip()[:120]
+    except OSError:
+        return ""
 
 
 def pick_new(sid: str, items: list[dict]) -> list[dict]:
-    p = _seen_path(sid)
+    p = session_buf.side_file(sid, "recalled.json")
     try:
         seen = set(json.loads(p.read_text(encoding="utf-8")))
-    except (OSError, ValueError):
+    except (OSError, ValueError, TypeError):
         seen = set()
-    fresh = [i for i in items if i["id"] and i["id"] not in seen][:MAX_ITEMS]
+    fresh, ids = [], set()
+    for i in items:  # one line per note, even if the server sent several facts of it
+        if i["id"] and i["id"] not in seen and i["id"] not in ids:
+            fresh.append(i)
+            ids.add(i["id"])
+    fresh = fresh[:MAX_ITEMS]
     if fresh:
         p.write_text(json.dumps(sorted(seen | {i["id"] for i in fresh}), ensure_ascii=False), encoding="utf-8")
     return fresh
@@ -107,11 +115,15 @@ def main() -> None:
     prompt = str(raw.get("prompt") or raw.get("user_prompt") or raw.get("message") or "")
     if not worth_recalling(prompt):
         return
+    sid = session_buf.stable_session_id(raw.get("session_id"), raw.get("cwd") or "", "new")
+    body = {"query": prompt.strip()[:500], "budget": "low"}
+    project = session_project(sid)
+    if project:  # this project's notes + global tips, not every project's
+        body["project"] = project
     try:
-        r = hookcfg.req("POST", "/api/memory/recall", {"query": prompt.strip()[:500], "budget": "low"}, timeout=TIMEOUT)
+        r = hookcfg.req("POST", "/api/memory/recall", body, timeout=TIMEOUT)
     except Exception:  # noqa: BLE001 — never block or fail the user's turn
         return
-    sid = session_buf.stable_session_id(raw.get("session_id"), raw.get("cwd") or "", "new")
     items = pick_new(sid, normalize(r.get("results") if isinstance(r, dict) else []))
     if items:
         hookcfg.emit_context("UserPromptSubmit", render(items), raw)

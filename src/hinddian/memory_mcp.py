@@ -101,6 +101,7 @@ TOOLS = [
                 "tags": {"type": "array", "items": {"type": "string"}},
                 "sources": {"type": "array", "items": {"type": "string"}},
                 "auto_verdict": {"type": "boolean", "description": "Let Jev pick add/update/supersede/noop against existing notes"},
+                "force_new": {"type": "boolean", "description": "add only: write even though similar notes exist (an add that looks like a duplicate returns similar_exists + candidates)"},
                 "face_correction": {"type": "boolean", "description": "User explicitly corrected a wrong memory in this turn (shown to the reviewer)"},
                 "user_confirmed": {"type": "boolean", "description": "User confirmed in chat (shown to the reviewer; decisions still need dashboard approval)"},
                 "mode": {"type": "string", "description": "suggest = force queue to dashboard"},
@@ -317,7 +318,7 @@ _recall_path: dict[str, str] = {}
 _recall_lock = threading.Lock()
 
 
-def _hindsight_recall(query: str, budget: str, tags: list[str] | None = None) -> list | dict:
+def _hindsight_recall(query: str, budget: str, tags: list[str] | None = None, match: str = "all_strict") -> list | dict:
     """POST the plain query; project/type go as tag filters (the sync tags notes `project:<p>`,
     `type:<t>`), never into the embedding text. The working endpoint is discovered once and
     remembered. A server that rejects `tags` (422) is retried without them."""
@@ -331,7 +332,7 @@ def _hindsight_recall(query: str, budget: str, tags: list[str] | None = None) ->
         for path in paths:
             body: dict[str, Any] = {"query": query, "budget": budget}
             if tags:
-                body.update(tags=tags, tags_match="all_strict")
+                body.update(tags=tags, tags_match=match)
             r = client.post(base + path, headers=headers, json=body)
             if r.status_code == 422 and tags:
                 r = client.post(base + path, headers=headers, json={"query": query, "budget": budget})
@@ -357,15 +358,45 @@ def _recall(args: dict) -> dict:
     typ = str(args.get("type") or "")
     budget = str(args.get("budget") or "mid")
     try:
-        tags = [VAULT_TAG] + ([f"type:{typ}"] if typ else [])
-        if project and typ != "tip":
-            tags.append(f"project:{project}")
-        items = _hindsight_recall(query, budget, tags)
-        return {"ok": True, "via": "hindsight", "query": query, "results": _filter_active(items, project, typ)}
+        if project and not typ:
+            # this project's notes OR global tips (tips carry no project tag, so AND would drop them);
+            # only the vault sync writes project:/type: tags, so any_strict still excludes other memories
+            tags, match = [f"project:{project}", "type:tip"], "any_strict"
+        else:
+            tags, match = [VAULT_TAG] + ([f"type:{typ}"] if typ else []), "all_strict"
+            if project and typ != "tip":
+                tags.append(f"project:{project}")
+        items = _hindsight_recall(query, budget, tags, match)
+        return {"ok": True, "via": "hindsight", "query": query, "results": _by_note(_filter_active(items, project, typ))}
     except Exception as e:  # noqa: BLE001 — any Hindsight failure falls back to the vault itself
         err = f"{type(e).__name__}: {str(e)[:200]}"
     results = vault("search_notes", query=query, project=project or None, type=typ or None, limit=12)
     return {"ok": True, "via": "local-fallback", "error": err, "query": query, "results": results}
+
+
+def _by_note(items: Any) -> Any:
+    """Hindsight returns facts, several per note. Keep one row per note (document_id): the
+    first, i.e. best-ranked, fact, with the best score of its siblings and how many matched."""
+    if not isinstance(items, list):
+        return items
+    out: list = []
+    seen: dict[str, dict] = {}
+    for it in items:
+        key = it.get("document_id") if isinstance(it, dict) else None
+        if not key:
+            out.append(it)
+            continue
+        first = seen.get(key)
+        if first is None:
+            seen[key] = dict(it, facts=1, scores=dict(it.get("scores") or {}))
+            out.append(seen[key])
+            continue
+        first["facts"] += 1
+        for k, v in (it.get("scores") or {}).items():
+            old = first["scores"].get(k)
+            if isinstance(v, (int, float)) and (not isinstance(old, (int, float)) or v > old):
+                first["scores"][k] = v
+    return out
 
 
 def _filter_active(items: Any, project: str, typ: str) -> Any:

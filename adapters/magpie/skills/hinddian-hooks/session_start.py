@@ -6,6 +6,7 @@ dates or note text. Per-message recall happens later, in prompt_recall.py.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sys
@@ -73,7 +74,11 @@ def main() -> None:
         projects = sorted(p["name"] for p in g.get("projects") or [] if p.get("name"))
     except Exception:  # noqa: BLE001 — server down: still give the rules, just no project list
         projects = []
-    hookcfg.emit_context("SessionStart", routing_block(projects, match_project(cwd, projects)), raw)
+    current = match_project(cwd, projects)
+    if current:  # prompt_recall scopes per-message recall to it
+        with contextlib.suppress(OSError):
+            session_buf.side_file(sid, "project").write_text(current, encoding="utf-8")
+    hookcfg.emit_context("SessionStart", routing_block(projects, current), raw)
 
 
 if __name__ == "__main__":

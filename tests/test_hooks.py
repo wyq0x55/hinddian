@@ -199,6 +199,37 @@ def test_recall_filters_and_dedupes(hooks):
     assert [i["id"] for i in pr.pick_new("s2", items)] == ["a", "c"]
 
 
+def test_recall_scopes_to_session_project_and_dedupes(hooks, monkeypatch, capsys):
+    import io
+    import json
+
+    pr, sb = hooks["prompt_recall"], hooks["session_buf"]
+    sb.side_file("s9", "project").write_text("my-app", encoding="utf-8")
+    sent = []
+
+    def req(method, path, body=None, **kw):
+        sent.append(body)
+        return {"results": [{"document_id": "a", "text": "x", "metadata": {"title": "A"}}] * 3}
+
+    monkeypatch.setattr(pr.hookcfg, "req", req)
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"session_id": "s9", "prompt": "上次部署门禁怎么定的"})))
+    pr.main()
+    assert sent[0]["project"] == "my-app"
+    assert capsys.readouterr().out.count("[a]") == 1
+
+
+def test_prune_handles_side_files(hooks):
+    sb = hooks["session_buf"]
+    seen = sb.side_file("old", "recalled.json")
+    seen.write_text('["a"]', encoding="utf-8")
+    sb.side_file("new", "project").write_text("p", encoding="utf-8")
+    import os
+
+    os.utime(seen, (1, 1))
+    assert sb.prune() == 1
+    assert not seen.exists() and sb.side_file("new", "project").exists()
+
+
 def test_recall_emits_structured_context(hooks, monkeypatch, capsys):
     import io
     import json

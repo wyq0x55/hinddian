@@ -58,8 +58,13 @@ def stable_session_id(explicit: str | None, cwd: str = "", seed: str = "") -> st
 
 
 def _path(sid: str) -> Path:
+    return side_file(sid, "json")
+
+
+def side_file(sid: str, kind: str) -> Path:
+    """Per-session file next to the buffer: <sid>.json (buffer), <sid>.recalled.json, <sid>.project."""
     safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in sid)[:100]
-    return sessions_dir() / f"{safe}.json"
+    return sessions_dir() / f"{safe}.{kind}"
 
 
 def load(sid: str) -> dict[str, Any] | None:
@@ -169,12 +174,20 @@ def prune(now: float | None = None) -> int:
     """Delete finalized buffers older than RETAIN_SEC (they hold raw conversation text)."""
     now = now if now is not None else time.time()
     n = 0
-    for p in sessions_dir().glob("*.json"):
+    for p in sessions_dir().iterdir():
+        if p.name.endswith((".recalled.json", ".project")):  # side files: by age
+            with contextlib.suppress(OSError):
+                if now - p.stat().st_mtime >= RETAIN_SEC:
+                    p.unlink()
+                    n += 1
+            continue
+        if p.suffix != ".json":
+            continue
         try:
             b = json.loads(p.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        if b.get("finalized") and now - float(b.get("finalized_at") or 0) >= RETAIN_SEC:
+        if isinstance(b, dict) and b.get("finalized") and now - float(b.get("finalized_at") or 0) >= RETAIN_SEC:
             with contextlib.suppress(OSError):
                 p.unlink()
                 n += 1

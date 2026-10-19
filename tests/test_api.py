@@ -128,6 +128,36 @@ def test_recall_hindsight_contract(client, monkeypatch):
     assert body == {"query": "部署", "budget": "mid", "tags": ["source:obsidian", "type:lesson", "project:P"], "tags_match": "all_strict"}
 
 
+def _mock_hindsight(monkeypatch, results):
+    import httpx
+
+    from hinddian import memory_mcp
+
+    seen = []
+
+    def handler(request):
+        seen.append(__import__("json").loads(request.content))
+        return httpx.Response(200, json={"results": results})
+
+    real = httpx.Client
+    monkeypatch.setattr(memory_mcp.httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    memory_mcp._recall_path.clear()
+    return seen
+
+
+def test_project_recall_includes_tips_and_one_row_per_note(client, monkeypatch):
+    seen = _mock_hindsight(monkeypatch, [
+        {"id": "f1", "document_id": "proj/P/lesson/a", "text": "a1", "metadata": {"type": "lesson", "project": "P"}, "scores": {"reranker": 0.7}},
+        {"id": "f2", "document_id": "tip/t", "text": "t1", "metadata": {"type": "tip"}, "scores": {"reranker": 0.6}},
+        {"id": "f3", "document_id": "proj/P/lesson/a", "text": "a2", "metadata": {"type": "lesson", "project": "P"}, "scores": {"reranker": 0.9}},
+    ])
+    r = client.post("/api/memory/recall", json={"query": "部署", "project": "P"}, headers=agent()).json()
+    assert seen[0]["tags"] == ["project:P", "type:tip"] and seen[0]["tags_match"] == "any_strict"
+    assert [x["document_id"] for x in r["results"]] == ["proj/P/lesson/a", "tip/t"]
+    first = r["results"][0]
+    assert first["text"] == "a1" and first["facts"] == 2 and first["scores"]["reranker"] == 0.9
+
+
 # ------------------------------------------------------------------ dashboard v2
 @pytest.fixture
 def dash_client(client, monkeypatch, tmp_path, vault):

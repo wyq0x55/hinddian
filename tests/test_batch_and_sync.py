@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -52,3 +54,47 @@ def test_batch_apply_uses_shared_format(tmp_path, monkeypatch):
     assert "## 我的补充\n保留" in t
     assert "### 相关\n- `evil`" in t
     assert "sources: [sess-1]" in t
+
+
+@pytest.fixture
+def batch(tmp_path, monkeypatch, vault):
+    monkeypatch.setenv("HC_VAULT", str(vault))
+    monkeypatch.setenv("HB_BASE", str(tmp_path / "base"))
+    monkeypatch.syspath_prepend(str(ROOT / "classify"))
+    sys.modules.pop("hinddian_batch", None)
+    hb = importlib.import_module("hinddian_batch")
+    monkeypatch.setattr(hb, "OWNER", "")
+    yield hb
+    sys.modules.pop("hinddian_batch", None)
+
+
+def test_batch_create_never_overwrites_an_existing_note(batch, vault):
+    from hinddian import notes as N
+
+    old = N.upsert_note({"action": "add", "type": "lesson", "project": "P", "title": "部署前先跑门禁", "practice": "gate.sh"})
+    clash = old["id"].rsplit("/", 1)[-1]
+    res = batch._apply("P", [], {"ops": [{"op": "create", "slug": clash, "title": "缓存命中率", "type": "lesson", "practice": "别改前缀"}]}, {}, False)
+    assert res[0]["action"] == "create" and res[0]["id"] != old["id"]
+    assert N.get_note(old["id"])["practice"] == "gate.sh"
+
+
+def test_incremental_batch_queues_decisions(batch, vault):
+    from hinddian import notes as N
+
+    dec = N.upsert_note({"action": "add", "type": "decision", "project": "P", "title": "只走 HTTPS"}, trusted=True)
+    ops = {"ops": [
+        {"op": "create", "slug": "tls-only", "title": "新决策", "type": "decision", "practice": "x"},
+        {"op": "update", "id": dec["id"], "title": "只走 HTTPS", "type": "decision", "practice": "改写"},
+        {"op": "create", "slug": "lesson-a", "title": "一条经验", "type": "lesson", "practice": "y"},
+    ]}
+    res = batch._apply("P", [], ops, {}, False, review_decisions=True)
+    assert [r["action"] for r in res] == ["queued", "queued", "create"]
+    assert N.get_note(dec["id"])["practice"] == ""             # decision untouched until approved
+    assert len(N.list_notes(project="P", type_="decision")) == 1
+    queue = {c["action"]: c for c in N.list_corrections()}
+    assert set(queue) == {"add", "update"} and queue["update"]["target_id"] == dec["id"]
+    assert N.decide_correction(queue["update"]["id"], approve=True)["ok"]
+    assert N.get_note(dec["id"])["practice"] == "改写"
+    # the first (user-approved) batch still writes decisions directly
+    res = batch._apply("P", [], {"ops": [{"op": "create", "slug": "d2", "title": "另一个决策", "type": "decision"}]}, {}, False)
+    assert res[0]["action"] == "create"

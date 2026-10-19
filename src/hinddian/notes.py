@@ -196,11 +196,12 @@ def list_notes(*, project: str | None = None, type_: str | None = None, status: 
 
 
 def search_notes(query: str, *, project: str | None = None, type_: str | None = None, limit: int = 12) -> list[dict]:
-    """Local recall fallback: bigram score over title + body (Chinese-safe)."""
+    """Local recall fallback: bigram score over title + body (Chinese-safe). Like Hindsight recall,
+    a project search without a type also covers the global tips."""
     notes = load_notes(include_inactive=False)
     scored = []
     for n in notes.values():
-        if not _match(n, project, type_, "active"):
+        if not (_match(n, project, type_, "active") or (project and not type_ and n["type"] == "tip")):
             continue
         s = nf.score(query, n)
         if s > 0:
@@ -352,6 +353,16 @@ def _new_path(base: str, notes: dict) -> str:
     return path
 
 
+DEDUPE = float(os.environ.get("HINDDIAN_DEDUPE", "0.40"))  # same scale as the batch engine's HB_DEDUPE
+
+
+def _similar(title: str, practice: str, typ: str, project: str, notes: dict, k: int = 3) -> list[dict]:
+    """Active notes of the same type (and project, unless tip) that look like the same topic."""
+    pool = [n for n in notes.values() if n["status"] == "active" and n["type"] == typ and (typ == "tip" or n["project"] == project)]
+    scored = sorted(((nf.similarity(title, practice, n), n) for n in pool), key=lambda x: -x[0])
+    return [{"id": n["id"], "title": n["title"], "score": round(sc, 2)} for sc, n in scored[:k] if sc >= DEDUPE]
+
+
 def upsert_note(payload: dict, *, trusted: bool = False) -> dict:
     """Gated 4-state write: add | update | supersede | obsolete | noop.  No hard delete.
 
@@ -392,6 +403,15 @@ def upsert_note(payload: dict, *, trusted: bool = False) -> dict:
 
         if action == "obsolete" and not target:
             return {"ok": False, "error": "obsolete_needs_id", "hint": "Pass id of note to mark obsolete"}
+        if action == "add" and not trusted and not payload.get("force_new"):
+            similar = _similar(title, fields["practice"], typ, project, notes)
+            if similar:
+                return {
+                    "ok": False,
+                    "error": "similar_exists",
+                    "candidates": similar,
+                    "hint": "已有相近笔记：要补充就用 action=update + id 合并；确是新主题再带 force_new=true 重试。",
+                }
         if not trusted and _needs_review(typ, target=target_id, supersedes=supersedes, notes=notes, mode=mode):
             pl = dict(payload, type=typ, tags=tags, project=project, title=title, action=action, supersedes=supersedes)
             if target_id:

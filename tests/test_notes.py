@@ -35,9 +35,27 @@ def test_supersede_banner_survives_rerender(vault):
 
 def test_id_and_path_collisions_get_suffix(vault):
     a = _lesson("Same")
-    b = _lesson("Same")
+    b = _lesson("Same", force_new=True)
     assert a["id"] != b["id"] and a["path"] != b["path"]
     assert len(N.list_notes(project="P")) == 2
+
+
+def test_chinese_titles_get_distinct_ids(vault):
+    a = _lesson("部署前先跑门禁")
+    b = _lesson("日志轮转")
+    assert a["id"] != b["id"] and not a["id"].endswith("/note")
+    assert a["id"].startswith("proj/P/lesson/n-")
+
+
+def test_agent_add_flags_near_duplicates(vault):
+    a = _lesson("部署前先跑门禁脚本", practice="每次部署前跑 gate.sh")
+    r = _lesson("部署前要先跑门禁", practice="部署前跑 gate.sh")
+    assert r["ok"] is False and r["error"] == "similar_exists"
+    assert r["candidates"][0]["id"] == a["id"]
+    assert _lesson("日志轮转", practice="logrotate 每天")["ok"]          # unrelated → written
+    assert _lesson("部署前要先跑门禁", practice="部署前跑 gate.sh", force_new=True)["ok"]
+    # the dashboard (trusted) path is never blocked
+    assert N.upsert_note({"action": "add", "type": "lesson", "project": "P", "title": "部署前先跑门禁脚本"}, trusted=True)["ok"]
 
 
 # ------------------------------------------------------------------ gate
@@ -118,3 +136,13 @@ def test_search_notes_chinese(vault):
     _lesson("无关")
     hits = N.search_notes("部署时注意什么")
     assert hits and hits[0]["title"] == "部署门禁"
+
+
+def test_project_search_includes_global_tips(vault):
+    _lesson("部署门禁", practice="gate.sh")
+    N.upsert_note({"action": "add", "type": "tip", "title": "部署前清缓存", "practice": "rm -rf .cache"})
+    N.upsert_note({"action": "add", "type": "lesson", "project": "Q", "title": "部署别的项目", "scene": "s"})
+    hits = {h["type"] for h in N.search_notes("部署", project="P")}
+    assert hits == {"lesson", "tip"}
+    assert all(h["project"] != "Q" for h in N.search_notes("部署", project="P"))
+    assert {h["type"] for h in N.search_notes("部署", project="P", type_="lesson")} == {"lesson"}

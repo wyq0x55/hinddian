@@ -209,10 +209,10 @@
     }).join("");
     return `<article class="prop" data-cid="${esc(c.id)}">
       <div class="prop-h">${chip((ACTION_ZH[c.action] || c.action) + (TYPE_ZH[c.type] || c.type || ""), c.type)}
-        ${c.project ? chip(c.project, "ghost") : ""}${claims.user_confirmed ? chip("Agent 称用户已确认", "ghost") : ""}${claims.face_correction ? chip("当面纠错", "ghost") : ""}</div>
+        ${c.project ? chip(c.project, "ghost") : ""}${p.origin === "batch-distill" ? chip("批处理增量", "ghost") : ""}${claims.user_confirmed ? chip("Agent 称用户已确认", "ghost") : ""}${claims.face_correction ? chip("当面纠错", "ghost") : ""}</div>
       <h3>${esc(c.summary || p.title || c.id)}</h3>
       <p class="meta">${esc(when(c.created_at))}${c.target_id ? " · 目标 " + noteLink(c.target_id) : ""}${(p.supersedes || []).length ? " · 取代 " + p.supersedes.map(noteLink).join(" ") : ""}</p>
-      ${c.reason && c.reason !== p.reason ? `<p class="why">Agent：${esc(c.reason)}</p>` : ""}
+      ${c.reason && c.reason !== p.reason ? `<p class="why">${p.origin === "batch-distill" ? "来源" : "Agent"}：${esc(c.reason)}</p>` : ""}
       ${fields ? `<dl class="diff">${fields}</dl>` : ""}
       <div class="acts">
         <button type="button" class="btn danger" data-act="reject">拒绝</button>
