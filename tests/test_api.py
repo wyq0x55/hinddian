@@ -158,6 +158,26 @@ def test_project_recall_includes_tips_and_one_row_per_note(client, monkeypatch):
     assert first["text"] == "a1" and first["facts"] == 2 and first["scores"]["reranker"] == 0.9
 
 
+def test_auto_verdict_merges_into_the_most_similar_note(client, monkeypatch):
+    from hinddian import jev, memory_mcp
+
+    N.upsert_note({"action": "add", "type": "lesson", "project": "P", "title": "日志轮转", "practice": "logrotate"})
+    gate = N.upsert_note({"action": "add", "type": "lesson", "project": "P", "title": "部署前先跑门禁", "practice": "gate.sh"})
+    seen = {}
+
+    def verdict(digest, cands):
+        seen["cands"] = cands
+        return jev.GateResult(True, "update", 0.9, "jev:local", {"answers": {"g": {"choice": "update"}}})
+
+    monkeypatch.setattr(memory_mcp.jev, "write_verdict", verdict)
+    r = memory_mcp.call_tool("upsert_note", {"action": "add", "type": "lesson", "project": "P", "title": "部署门禁要先跑",
+                                             "practice": "部署前 gate.sh --strict", "auto_verdict": True})
+    assert seen["cands"][0]["id"] == gate["id"] and "practice" in seen["cands"][0]
+    assert r["action"] == "update" and r["id"] == gate["id"]
+    assert N.get_note(gate["id"])["practice"] == "部署前 gate.sh --strict"
+    assert len(N.list_notes(project="P")) == 2
+
+
 # ------------------------------------------------------------------ dashboard v2
 @pytest.fixture
 def dash_client(client, monkeypatch, tmp_path, vault):

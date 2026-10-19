@@ -28,6 +28,9 @@
 
 6. **索引**
    - `hinddian-hindsight-sync`：active → retain；删除/非 active → 删索引
+   - 送进索引的是「标题 + 人写的引用行 + 场景/做法/理由 + 人写的段落」，不含 frontmatter 和自动生成的
+     所属/相关/取代链接；是否需要重新 retain 只看这部分内容，重建链接或改日期不会触发
+     （升级后第一次同步会把全部笔记重新 retain 一遍，每轮最多 `HS_MAX_RETAIN` 条）
 
 ## 显式旁路
 

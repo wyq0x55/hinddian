@@ -98,3 +98,22 @@ def test_incremental_batch_queues_decisions(batch, vault):
     # the first (user-approved) batch still writes decisions directly
     res = batch._apply("P", [], {"ops": [{"op": "create", "slug": "d2", "title": "另一个决策", "type": "decision"}]}, {}, False)
     assert res[0]["action"] == "create"
+
+
+def test_export_indexes_content_not_links_or_dates(batch, vault):
+    from hinddian import notes as N
+
+    a = N.upsert_note({"action": "add", "type": "lesson", "project": "P", "title": "部署门禁", "practice": "gate.sh"})
+    pa = vault / (a["path"] + ".md")
+    pa.write_text(pa.read_text(encoding="utf-8") + "\n## 我的补充\n人写的\n", encoding="utf-8")
+    before = {n["id"]: n for n in batch.cmd_export()}[a["id"]]
+    assert "## 做法\ngate.sh" in before["text"] and "## 我的补充\n人写的" in before["text"]
+    assert "id:" not in before["text"] and "所属" not in before["text"]
+    # a relink + date bump (what every batch run / hub rebuild does) leaves the index sha alone
+    b = N.upsert_note({"action": "add", "type": "lesson", "project": "P", "title": "日志轮转", "practice": "logrotate", "related": [a["id"]]})
+    t = pa.read_text(encoding="utf-8").replace("updated: ", "updated: 1999-01-01 #")
+    pa.write_text(t, encoding="utf-8")
+    N.upsert_note({"action": "update", "id": a["id"], "related": [b["id"]]})
+    assert {n["id"]: n for n in batch.cmd_export()}[a["id"]]["sha"] == before["sha"]
+    N.upsert_note({"action": "update", "id": a["id"], "practice": "gate.sh --strict"})
+    assert {n["id"]: n for n in batch.cmd_export()}[a["id"]]["sha"] != before["sha"]

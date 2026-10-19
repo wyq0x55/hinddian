@@ -303,6 +303,20 @@ def parse_note(p: pathlib.Path, vault: pathlib.Path) -> dict | None:
     return n
 
 
+def index_text(n: dict) -> str:
+    """What a search index should see: title, human preamble lines and the content sections.
+    No frontmatter, no generated hub / related / supersedes lines — so relinking or a new
+    `updated:` date doesn't make the note look changed."""
+    parts = [f"# {n['title']}", *(n.get("_preamble") or [])]
+    for h, k in FIELD_SECTIONS.items():
+        if n.get(k):
+            parts += ["", f"## {h}", n[k].strip()]
+    for h, c in n.get("_sections") or []:
+        if c.strip():
+            parts += ["", f"## {h}", c.strip()]
+    return "\n".join(parts).strip() + "\n"
+
+
 def link_target(link: str) -> str:
     m = re.match(r"\[\[([^\]|]+)", link or "")
     return m.group(1) if m else (link or "")

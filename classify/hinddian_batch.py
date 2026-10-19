@@ -364,11 +364,15 @@ def cmd_approve(project, now_=False):
     return {"ok": True, "project": project}
 
 def cmd_export():
+    """Notes for the Hindsight sync. `text` is the index text (no frontmatter / generated link lines)
+    and `sha` covers only what gets indexed, so relinking or a date bump doesn't trigger a re-retain."""
     out = []
     for n in load_notes().values():
         if n["type"] in ("tip", "decision", "lesson", "state"):
+            text = nf.index_text(n)
+            sha = hashlib.sha256(f"{n['type']}|{n['project']}|{n['title']}\n{text}".encode()).hexdigest()[:16]
             out.append({"id": n["id"], "path": n["path"], "type": n["type"], "project": n["project"], "status": n["status"],
-                        "title": n["title"], "sha": hashlib.sha256(n["text"].encode()).hexdigest()[:16], "text": n["text"]})
+                        "title": n["title"], "sha": sha, "text": text})
     return out
 
 if __name__ == "__main__":

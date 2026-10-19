@@ -294,19 +294,30 @@ def call_tool(name: str, args: dict) -> Any:
 
 
 def _apply_jev_verdict(payload: dict) -> None:
-    """Let Jev choose add/update/supersede/noop against nearby notes. Decisions skip this:
-    they are queued for the dashboard whatever the verdict."""
-    cands = vault("list_notes", project=payload.get("project"), type=payload.get("type"), status="active", limit=20)
+    """Let Jev choose add/update/supersede/noop against the most similar existing notes. Decisions
+    skip this: they are queued for the dashboard whatever the verdict."""
+    query = " ".join(str(payload.get(k) or "") for k in ("title", "practice", "scene")).strip()[:400]
+    hits = vault("search_notes", query=query, project=payload.get("project") or None, type=payload.get("type") or None, limit=8) if query else []
+    cands = [{"id": h["id"], "title": h["title"], "scene": (h.get("scene") or "")[:200], "practice": (h.get("practice") or "")[:300]}
+             for h in (hits if isinstance(hits, list) else []) if isinstance(h, dict) and h.get("id")]
+    if not cands:
+        return  # nothing to merge into: a plain add
     digest = f"{payload.get('title')}\n{payload.get('scene')}\n{payload.get('practice')}"
-    ver = jev.write_verdict(digest, cands if isinstance(cands, list) else [])
+    ver = jev.write_verdict(digest, cands)
     if not ver.ok:
         return
-    if isinstance(ver.value, str):
-        payload["action"] = ver.value
-    elif isinstance(ver.raw, dict) and ver.raw.get("verdict"):
-        payload["action"] = ver.raw["verdict"]
-        if ver.raw.get("target_id"):
-            payload["id"] = ver.raw["target_id"]
+    raw = ver.raw if isinstance(ver.raw, dict) else {}
+    verdict = str(raw.get("verdict") or ver.value or "").lower()
+    if verdict not in ("add", "update", "supersede", "noop"):
+        return
+    ids = {c["id"] for c in cands}
+    # System One only names the verdict; without a target, the closest candidate is the one meant
+    target = raw.get("target_id") if raw.get("target_id") in ids else cands[0]["id"]
+    payload["action"] = verdict
+    if verdict == "update":
+        payload["id"] = target
+    elif verdict == "supersede":
+        payload["supersedes"] = list(dict.fromkeys([*(payload.get("supersedes") or []), target]))
 
 
 # Hindsight ≥1.0 serves only the first; the others are kept for older self-hosted builds.

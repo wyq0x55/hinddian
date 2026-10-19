@@ -43,6 +43,18 @@ def worth_recalling(prompt: str) -> bool:
     return len(re.sub(r"\s+", "", p)) >= MIN_CHARS
 
 
+FENCE = re.compile(r"```.*?(?:```|\Z)", re.S)
+LONG_CODE = re.compile(r"`[^`\n]{40,}`")
+
+
+def clean_query(prompt: str) -> str:
+    """The words of the message, minus what drowns them in a search: fenced code / pasted logs,
+    long inline code, very long single lines (stack traces, minified JSON)."""
+    t = LONG_CODE.sub(" ", FENCE.sub(" ", prompt or ""))
+    lines = [line for line in t.splitlines() if len(line) <= 300]
+    return re.sub(r"\s+", " ", " ".join(lines)).strip()[:500]
+
+
 def _snippet(text: str, limit: int = 110) -> str:
     t = re.sub(r"\A---\n.*?\n---\n", "", text or "", flags=re.S)
     t = "\n".join(l for l in t.splitlines() if l.strip() and not l.startswith(("#", "> ")))
@@ -115,8 +127,11 @@ def main() -> None:
     prompt = str(raw.get("prompt") or raw.get("user_prompt") or raw.get("message") or "")
     if not worth_recalling(prompt):
         return
+    query = clean_query(prompt)
+    if not worth_recalling(query):  # nothing left but a paste
+        return
     sid = session_buf.stable_session_id(raw.get("session_id"), raw.get("cwd") or "", "new")
-    body = {"query": prompt.strip()[:500], "budget": "low"}
+    body = {"query": query, "budget": "low"}
     project = session_project(sid)
     if project:  # this project's notes + global tips, not every project's
         body["project"] = project
