@@ -4,46 +4,79 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#f6f6f4" media="(prefers-color-scheme: light)" />
-  <meta name="theme-color" content="#141416" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#1a1a1e" media="(prefers-color-scheme: dark)" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="hinddian" />
-  <title>hinddian</title>
+  <title>hinddian · 记忆管线</title>
   <link rel="manifest" href="/static/manifest.webmanifest" />
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/static/icon-180.png" />
-  <link rel="stylesheet" href="/static/styles.css?v=20" />
+  <link rel="stylesheet" href="/static/styles.css?v=30" />
 </head>
 <body>
   <header class="top">
-    <div class="brand">
-      <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 21 7v10l-9 5-9-5V7z" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>
-      <h1>hinddian</h1>
-      <span id="health" class="health" title="服务状态"></span>
+    <div class="top-in">
+      <div class="brand">
+        <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 21 7v10l-9 5-9-5V7z" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>
+        <div><h1>hinddian</h1><p class="sub">原子笔记管线 · Obsidian 为准 · hinddian-memory MCP · Hindsight 索引</p></div>
+      </div>
+      <span class="grow"></span>
+      <span id="health" class="pill">…</span>
+      <button type="button" id="refresh" class="btn" aria-label="刷新"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>刷新</span></button>
     </div>
-    <button type="button" id="refresh" class="icon-btn" aria-label="刷新">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    </button>
   </header>
 
   <nav class="tabs" id="tabs" aria-label="页面">
+    <a href="#pipeline" data-tab="pipeline"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg><span>流水线</span></a>
     <a href="#review" data-tab="review"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 12l2 2 4-4M12 3l8 4v5c0 5-3.4 8.3-8 9-4.6-.7-8-4-8-9V7z"/></svg><span>待批准</span><b class="badge" id="badge-review" hidden></b></a>
     <a href="#notes" data-tab="notes"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l3 3v15H6zM9 9h6M9 13h6M9 17h4"/></svg><span>笔记</span></a>
     <a href="#drafts" data-tab="drafts"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10"/></svg><span>草稿</span><b class="badge muted" id="badge-drafts" hidden></b></a>
-    <a href="#overview" data-tab="overview"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V10M10 19V5M16 19v-7M22 19H2"/></svg><span>概览</span></a>
   </nav>
 
   <main class="page">
-    <section class="view" id="view-review" hidden>
-      <h2 class="vh">Agent 修正</h2>
-      <p class="hint">Agent 想改动 decision 时，一律先排在这里，你批准后才写入 Obsidian。</p>
-      <div id="corrections" class="stack"><p class="empty">加载中…</p></div>
-      <h2 class="vh">等待批量分析的项目</h2>
-      <p class="hint">新项目攒够会话草稿后，要你点一次「开始」；之后的新草稿会自动增量合并。</p>
-      <div id="ready" class="stack"><p class="empty">加载中…</p></div>
+    <!-- 流水线: nodes on a grid, SVG wires measured from the DOM -->
+    <section class="view" id="view-pipeline" hidden>
+      <div class="rt">
+        <div class="rt-top">
+          <div class="rt-what"><b>流水线</b> · 会话 → Jev 过滤 → 草稿 → 分析 → Obsidian → 同步 → Hindsight 索引（Agent 只走 hinddian-memory）</div>
+          <p class="rt-mode" id="rt-mode">—</p>
+        </div>
+        <div class="rt-stage" id="stage">
+          <svg class="rt-wires" id="wires" aria-hidden="true"></svg>
+          <div class="rt-node lane-m" data-n="hooks" style="grid-area:hooks"><span class="dot muted"></span><b>会话</b><strong>hooks</strong><small>每台电脑 · 每轮缓冲</small></div>
+          <div class="rt-node rt-hub" data-n="jev" style="grid-area:jev"><b>Jev 过滤</b><small>会话结束时</small><i>值不值得记</i></div>
+          <a class="rt-node lane-b" data-n="drafts" style="grid-area:drafts" href="#drafts"><span class="dot accent"></span><b>草稿·按项目</b><strong id="n-drafts">—</strong><small id="drafts-by">—</small></a>
+          <div class="rt-node rt-hub" data-n="analysis" style="grid-area:analysis"><b>分析</b><small>vault 主机</small><i id="analysis-chip">定时批处理</i></div>
+          <ol class="rt-outs" style="grid-area:outs">
+            <li data-n="o-batch"><a href="#review"><span class="dot amber"></span><span class="t">批量<small>需批准</small></span><b id="n-batch">—</b></a></li>
+            <li data-n="o-incr"><div><span class="dot green"></span><span class="t">增量<small>自动</small></span><b id="n-incr">—</b></div></li>
+            <li data-n="o-tips"><div><span class="dot blue"></span><span class="t">技巧<small>自动</small></span><b id="n-tips">—</b></div></li>
+          </ol>
+          <a class="rt-node lane-q" data-n="corr" style="grid-area:corr" href="#review"><span class="dot amber"></span><b>Agent 修正</b><strong id="n-corr">—</strong><small id="corr-note">决策类需你批准</small></a>
+          <a class="rt-node lane-o" data-n="obsidian" style="grid-area:obsidian" href="#notes"><span class="dot green"></span><b>Obsidian</b><strong id="n-notes">—</strong><small id="notes-by">原子笔记 · 真相源</small></a>
+          <div class="rt-node lane-h" data-n="hindsight" style="grid-area:hindsight"><span class="dot blue"></span><b>Hindsight</b><strong id="n-hs">—</strong><small id="hs-note">已同步 / 笔记总数</small></div>
+        </div>
+        <div class="rt-foot">
+          <p class="rt-cap" id="rt-cap">—</p>
+          <div class="rt-legend"><span><i class="lg"></i>已接通</span><span><i class="lg dash"></i>空闲</span><span><i class="lg flow"></i>有积压在流动</span></div>
+        </div>
+      </div>
+      <footer class="foot"><span>技巧 → <code>技巧/</code>（一条一个文件）</span><span id="version"></span></footer>
     </section>
 
-    <section class="view" id="view-notes" hidden>
+    <section class="view narrow" id="view-review" hidden>
+      <section class="card">
+        <header class="card-h"><h2>Agent 修正</h2><span class="note">决策类改动先排队，你批准后才写入 Obsidian</span><span class="grow"></span><span class="count amber" id="corr-count">—</span></header>
+        <div class="card-b" id="corrections"><p class="empty">加载中…</p></div>
+      </section>
+      <section class="card">
+        <header class="card-h"><h2>等待批量分析的项目</h2><span class="note">攒够草稿后点一次「开始」，之后自动增量</span><span class="grow"></span><span class="count" id="ready-count">—</span></header>
+        <div class="card-b" id="ready"><p class="empty">加载中…</p></div>
+      </section>
+    </section>
+
+    <section class="view narrow" id="view-notes" hidden>
       <form id="search" class="search" role="search">
         <input id="q" type="search" enterkeyhint="search" autocomplete="off" placeholder="问记忆：和 Agent 自动召回同一套检索" />
       </form>
@@ -54,33 +87,27 @@
           <button type="button" data-type="lesson">经验</button>
           <button type="button" data-type="tip">技巧</button>
         </div>
-        <select id="project" aria-label="项目"><option value="">所有项目</option></select>
+        <select id="project" class="sel" aria-label="项目"><option value="">所有项目</option></select>
       </div>
       <p class="hint" id="notes-hint"></p>
-      <div id="notes" class="list"><p class="empty">加载中…</p></div>
+      <section class="card"><div class="card-b" id="notes"><p class="empty">加载中…</p></div></section>
     </section>
 
-    <section class="view" id="view-drafts" hidden>
-      <h2 class="vh">会话草稿（按项目）</h2>
-      <p class="hint">每个会话结束后由 hooks 整理成一份草稿；批处理把草稿合并进原子笔记。</p>
-      <div id="gate" class="stack"><p class="empty">加载中…</p></div>
-    </section>
-
-    <section class="view" id="view-overview" hidden>
-      <div class="kpis" id="kpis"></div>
-      <h2 class="vh">流水线</h2>
-      <ol class="flow" id="flow"></ol>
-      <p class="foot" id="version"></p>
+    <section class="view narrow" id="view-drafts" hidden>
+      <section class="card">
+        <header class="card-h"><h2>分批分析（按项目）</h2><span class="note">hooks 每个会话整理一份草稿，批处理合并进原子笔记</span><span class="grow"></span><span class="count" id="gate-count">—</span></header>
+        <div class="card-b" id="gate"><p class="empty">加载中…</p></div>
+      </section>
     </section>
   </main>
 
   <dialog id="sheet" class="sheet">
     <div class="sheet-head"><span id="sheet-kind" class="chip"></span><span class="grow"></span>
-      <button type="button" class="icon-btn" id="sheet-close" aria-label="关闭"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+      <button type="button" class="btn icon" id="sheet-close" aria-label="关闭"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
     </div>
     <div id="sheet-body" class="sheet-body"></div>
   </dialog>
   <div id="toast" class="toast" role="status" hidden></div>
-  <script src="/static/app.js?v=20"></script>
+  <script src="/static/app.js?v=30"></script>
 </body>
 </html>
