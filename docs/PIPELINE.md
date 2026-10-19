@@ -34,7 +34,7 @@
 
 ## 显式旁路
 
-- `upsert_note`（门控）或 `suggest_correction` → 仪表盘「Agent 修正」
+- `upsert_note`（门控）或 `suggest_correction` → 仪表盘「Agent 修正」（用户纠正或 Agent 自发现都走这里；**不要**用手调 `push_draft` 代替）
 - `upsert_note` 新增时若已有相近笔记（同类型、同项目，标题/做法 bigram 相似度 ≥ `HINDDIAN_DEDUPE`，默认 0.40），
   返回 `similar_exists` + `candidates`，由 Agent 改用 `update` 合并，确是新主题再带 `force_new: true`
 - Obsidian 仍为 SoT；Hindsight 跟同步
