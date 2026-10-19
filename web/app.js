@@ -332,9 +332,44 @@
   $("sheet").addEventListener("click", (e) => { if (e.target === $("sheet")) $("sheet").close(); const b = e.target.closest("[data-note]"); if (b) openNote(b.dataset.note); });
 
   // ---------------- 草稿 ----------------
+  function draftItem(d) {
+    const bits = [d.project, d.session_id ? "会话 " + d.session_id : "", d.jev_source ? "Jev " + d.jev_source : "", d.origin || ""].filter(Boolean);
+    return `<button type="button" class="item" data-draft="${esc(d.id)}">
+      <div class="t">${chip(d.status === "processed" ? "已处理" : "待处理", d.status === "processed" ? "ghost" : "decision")}<span>${esc(d.title || d.name)}</span></div>
+      <span class="sc">${esc(when(d.mtime))}</span>
+      <div class="s">${esc(bits.join(" · "))}${d.snippet ? " · " + esc(d.snippet) : ""}</div></button>`;
+  }
+  async function openDraft(id) {
+    const sheet = $("sheet");
+    $("sheet-kind").textContent = "草稿"; $("sheet-kind").className = "chip decision"; $("sheet-body").innerHTML = empty("加载中…");
+    if (!sheet.open) sheet.showModal();
+    try {
+      const d = await api("/api/draft?id=" + encodeURIComponent(id));
+      $("sheet-kind").textContent = d.status === "processed" ? "已处理草稿" : "待处理草稿";
+      const meta = [d.project, d.session_id ? "会话 " + d.session_id : "", d.jev_source ? "Jev · " + d.jev_source : "", d.origin, when(d.mtime)].filter(Boolean).join(" · ");
+      $("sheet-body").innerHTML = `<h3>${esc(d.title || d.name)}</h3>
+        <div class="meta">${esc(meta)}</div>
+        <div class="meta"><code>${esc(d.id)}</code></div>
+        <h4>正文</h4>${md(d.body || "") || empty("（空）")}`;
+    } catch (e) { $("sheet-body").innerHTML = empty("打不开：" + e.message, true); }
+  }
+  function renderDraftList(el, countEl, list, emptyMsg) {
+    setText(countEl, list.length);
+    $(el).innerHTML = list.length ? list.map(draftItem).join("") : empty(emptyMsg);
+  }
   async function loadGate() {
-    try { state.gate = await api("/api/gate"); }
-    catch (e) { $("gate").innerHTML = empty("读不到批处理状态：" + e.message, true); setText("gate-count", null); return; }
+    const [gate, pending, processed] = await Promise.allSettled([
+      api("/api/gate"),
+      api("/api/drafts?status=pending&limit=100"),
+      api("/api/drafts?status=processed&limit=30"),
+    ]);
+    if (pending.status === "fulfilled") renderDraftList("draft-list", "draft-list-count", pending.value, "没有待处理的会话草稿");
+    else { $("draft-list").innerHTML = empty("读不到草稿：" + pending.reason.message, true); setText("draft-list-count", null); }
+    if (processed.status === "fulfilled") renderDraftList("draft-processed", "draft-processed-count", processed.value, "还没有已处理的会话草稿");
+    else { $("draft-processed").innerHTML = empty("读不到已处理草稿：" + processed.reason.message, true); setText("draft-processed-count", null); }
+
+    if (gate.status === "rejected") { $("gate").innerHTML = empty("读不到批处理状态：" + gate.reason.message, true); setText("gate-count", null); badges(); return; }
+    state.gate = gate.value;
     const ps = projects().slice().sort((a, b) => (b.state === "ready") - (a.state === "ready") || b.drafts - a.drafts);
     setText("gate-count", ps.length);
     $("gate").innerHTML = ps.length ? ps.map((p) => {
@@ -350,6 +385,8 @@
     }).join("") : empty("还没有会话草稿");
     badges();
   }
+  $("draft-list").addEventListener("click", (e) => { const b = e.target.closest("[data-draft]"); if (b) openDraft(b.dataset.draft); });
+  $("draft-processed").addEventListener("click", (e) => { const b = e.target.closest("[data-draft]"); if (b) openDraft(b.dataset.draft); });
 
   // ---------------- chrome ----------------
   function badges() {

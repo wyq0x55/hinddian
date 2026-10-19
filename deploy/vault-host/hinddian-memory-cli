@@ -35,6 +35,7 @@ def main():
         "routing_global", "routing_project", "get_note", "list_notes", "search_notes",
         "upsert_note", "push_draft", "export_routing",
         "suggest_correction", "list_corrections", "decide_correction",
+        "list_drafts", "get_draft",
     ])
     ap.add_argument("--project")
     ap.add_argument("--id")
@@ -84,6 +85,14 @@ def main():
             body=pl.get("body") or "",
             meta=meta,
         )
+    elif a.cmd == "list_drafts":
+        # reuse --status (default "active" for notes); map empty/active → pending for drafts
+        st = a.status or "pending"
+        if st == "active":
+            st = "pending"
+        out = notes.list_drafts(project=a.project, status=st, limit=a.limit)
+    elif a.cmd == "get_draft":
+        out = notes.get_draft(a.id or "")
     else:
         out = notes.export_routing()
     print(json.dumps(out, ensure_ascii=False))

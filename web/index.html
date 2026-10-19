@@ -12,7 +12,7 @@
   <link rel="manifest" href="/static/manifest.webmanifest" />
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/static/icon-180.png" />
-  <link rel="stylesheet" href="/static/styles.css?v=31" />
+  <link rel="stylesheet" href="/static/styles.css?v=32" />
 </head>
 <body>
   <header class="top">
@@ -95,6 +95,14 @@
 
     <section class="view narrow" id="view-drafts" hidden>
       <section class="card">
+        <header class="card-h"><h2>待处理会话草稿</h2><span class="note">push_draft 写入 drafts/，批处理前可在此查看</span><span class="grow"></span><span class="count" id="draft-list-count">—</span></header>
+        <div class="card-b" id="draft-list"><p class="empty">加载中…</p></div>
+      </section>
+      <section class="card">
+        <header class="card-h"><h2>最近已处理</h2><span class="note">批处理后移到 processed/ 的会话草稿</span><span class="grow"></span><span class="count" id="draft-processed-count">—</span></header>
+        <div class="card-b" id="draft-processed"><p class="empty">加载中…</p></div>
+      </section>
+      <section class="card">
         <header class="card-h"><h2>分批分析（按项目）</h2><span class="note">hooks 每个会话整理一份草稿，批处理合并进原子笔记</span><span class="grow"></span><span class="count" id="gate-count">—</span></header>
         <div class="card-b" id="gate"><p class="empty">加载中…</p></div>
       </section>
@@ -108,6 +116,6 @@
     <div id="sheet-body" class="sheet-body"></div>
   </dialog>
   <div id="toast" class="toast" role="status" hidden></div>
-  <script src="/static/app.js?v=31"></script>
+  <script src="/static/app.js?v=32"></script>
 </body>
 </html>

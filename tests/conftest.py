@@ -19,6 +19,7 @@ def vault(tmp_path, monkeypatch):
     monkeypatch.setattr(notes, "VAULT", v)
     monkeypatch.setattr(notes, "CORRECTIONS", tmp_path / "corrections")
     monkeypatch.setattr(notes, "DRAFTS", tmp_path / "drafts")
+    monkeypatch.setattr(notes, "PROCESSED", tmp_path / "processed")
     monkeypatch.setattr(notes, "OWNER", "")
     monkeypatch.setenv("HINDDIAN_VAULT_LOCK", str(tmp_path / "vault.lock"))
     return v
