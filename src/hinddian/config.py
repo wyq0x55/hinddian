@@ -18,18 +18,12 @@ class Settings(BaseSettings):
 
     # Optional on the API host (vault lives on the vault host). Empty / missing = vault ops go over SSH.
     vault_root: Path | None = None
-    inbox_dir: Path = Path("/opt/session-distill/inbox")
-    processed_dir: Path = Path("/opt/session-distill/processed")
-    quarantine_dir: Path = Path("/opt/session-distill/quarantine")
-    failed_dir: Path = Path("/opt/session-distill/failed")
 
     hindsight_base_url: str = "http://127.0.0.1:8888"
     hindsight_api_key: str | None = None
     hindsight_bank: str = "hinddian"
-    # Does the distill worker retain filtered sessions into Hindsight? (branch c)
-    hindsight_retain_enabled: bool = False
 
-    # Vault host (vault + classify stage), reached via a root SSH alias.
+    # Vault host (vault + batch engine), reached via a root SSH alias.
     classify_ssh_host: str = "vault-host"
     classify_enabled: bool = True
     ssh_control_path: str = "/run/hinddian-ssh-%C"
@@ -44,10 +38,6 @@ class Settings(BaseSettings):
     # Local development only: run without tokens.
     hinddian_allow_no_auth: bool = False
 
-    status_db: Path = Path("./data/hinddian.db")
-
-    agent_tips_relpath: str = "00-系统/agent使用技巧.md"
-    projects_dirname: str = "项目"
 
     @field_validator("vault_root", mode="before")
     @classmethod

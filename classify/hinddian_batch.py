@@ -331,9 +331,12 @@ def cmd_approve(project, now_=False):
             g = load_gate(); g[project]["running"] = True; save_gate(g)
             try: run_project(project)
             finally: g = load_gate(); g[project]["running"] = False; save_gate(g)
-    else:
+    elif shutil.which("systemd-run"):
         subprocess.Popen(["systemd-run", "--unit", f"hinddian-batch-{abs(hash(project)) % 10**6}", "--collect",
                           sys.executable, __file__, "approve", project, "--now"])
+    else:  # no systemd (dev box / container): detach a plain background process
+        subprocess.Popen([sys.executable, __file__, "approve", project, "--now"],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     return {"ok": True, "project": project}
 
 def cmd_export():

@@ -1,5 +1,5 @@
 [Unit]
-Description=hinddian classify every 15 min
+Description=hinddian batch every 15 min
 
 [Timer]
 # wall-clock schedule: survives stop/start (OnUnitActiveSec stalls after a restart)

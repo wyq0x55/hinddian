@@ -1,6 +1,6 @@
 # hinddian · API 主机 部署
 
-目标：仪表盘与 hinddian-memory API 在 API 主机（与 `/opt/session-distill` 同机）；手机用 **既有 mTLS 客户端证书** 访问 `https://<api-host-ip>:8443/`。
+目标：仪表盘与 hinddian-memory API 在 API 主机；手机用 **既有 mTLS 客户端证书** 访问 `https://<api-host-ip>:8443/`。
 
 ## 现行组件一览
 
@@ -16,7 +16,7 @@
 | 会话草稿 | hooks → `push_draft` → vault 主机 `/var/lib/hinddian/drafts`（经 MCP/SSH） |
 | Agent 修正队列 | vault 主机 `/var/lib/hinddian/agent_corrections`；仪表盘确认/拒绝 |
 
-Vault / batch / pi 在 **vault 主机**；API 主机 通过已有 root SSH（`CLASSIFY_SSH_HOST=vault-host`）调 `hinddian-memory-cli` / `hinddian-classify`。
+Vault / batch 在 **vault 主机**；API 主机 通过已有 root SSH（`CLASSIFY_SSH_HOST=vault-host`）调 `hinddian-memory-cli` / `hinddian-classify`。
 
 ## 前置
 
@@ -46,13 +46,8 @@ mkdir -p /opt/hinddian/data
 
 ```bash
 cat >/opt/hinddian/.env <<'ENV'
-INBOX_DIR=/opt/session-distill/inbox
-PROCESSED_DIR=/opt/session-distill/processed
-QUARANTINE_DIR=/opt/session-distill/quarantine
-FAILED_DIR=/opt/session-distill/failed
 HINDDIAN_HOST=127.0.0.1
 HINDDIAN_PORT=8787
-STATUS_DB=/opt/hinddian/data/hinddian.db
 HINDSIGHT_BASE_URL=http://127.0.0.1:8888
 CLASSIFY_SSH_HOST=vault-host
 ENV
@@ -133,7 +128,7 @@ SH
 
 ```bash
 curl -s http://127.0.0.1:8787/api/health
-curl -s -H "Authorization: Bearer $AUTH_TOKEN" http://127.0.0.1:8787/api/stats | python3 -m json.tool | head
+curl -s -H "Authorization: Bearer $AUTH_TOKEN" http://127.0.0.1:8787/api/overview | python3 -m json.tool
 # Agent token 必须进不了仪表盘（期望 403）：
 curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $HINDDIAN_MCP_TOKEN" http://127.0.0.1:8787/api/corrections
 # Jev 经隧道：
@@ -158,7 +153,7 @@ rm -f /tmp/client.pem /tmp/client.key
 ## 10. vault 主机 归类 / 修正
 
 API 主机 `.env`：`CLASSIFY_SSH_HOST=vault-host`。  
-hinddian 经 SSH（ControlMaster 复用连接，`SSH_CONTROL_PATH`）调 `hinddian-classify` / `hinddian-memory-cli`（含 `search_notes` / `suggest_correction` / `decide_correction`）。
+hinddian 经 SSH（ControlMaster 复用连接，`SSH_CONTROL_PATH`）调 `hinddian-batch` / `hinddian-memory-cli`（含 `search_notes` / `suggest_correction` / `decide_correction`）。
 vault 主机 上同步更新 `/opt/hinddian/src`（`note_format.py` 被 `hinddian-memory-cli` 与 `hinddian_batch.py` 共用）。
 
 > 更省事的形态：hinddian API 直接跑在 vault 主机（设 `VAULT_ROOT`），vault 操作走本地，不再经 SSH。  

@@ -1,59 +1,36 @@
 # 仪表盘（hinddian）
 
-入口（手机 / 桌面，既有 mTLS 客户端证书；Caddy 校验后代为提交 `AUTH_TOKEN`）：
-
-`https://<api-host>:8443/`
-
+入口：`https://<api-host>:8443/`（mTLS 客户端证书；Caddy 校验后代为提交 `AUTH_TOKEN`）。
 本机调试：`scripts/run_dev.sh` 后开 `http://127.0.0.1:8787/`（未设 token 时为免鉴权开发模式）。
 
-## 图谱（顶部流水线）
+手机优先：iPhone 上底部四个页签，所有按钮 ≥44pt，输入框 16px（Safari 不会自动放大）。
+Safari「分享 → 添加到主屏幕」后像 App 一样全屏打开（带图标）。
 
-从左到右示意：
+## 页签
 
-**收件箱 → 隔离 → 草稿·按项目 → 分析 → Obsidian → Hindsight**
-
-| 节点 | 含义 |
+| 页签 | 内容 |
 |------|------|
-| 收件箱 | API 主机 原始会话（历史 OTLP/inbox；现行主写入是 hooks 草稿） |
-| 隔离 | 过滤掉的会话及原因 |
-| 草稿·按项目 | `/var/lib/hinddian/drafts` 按项目计数（会话桶草稿） |
-| 分析 | vault 主机 batch：批量（需批准）/ 增量（自动）/ 技巧（自动） |
-| Obsidian | 原子笔记总数（真相源） |
-| Hindsight | 已同步索引数；状态来自 sync timer |
+| **待批准**（默认） | **Agent 修正**：涉及 decision 的新增 / 修改 / 取代 / 作废都排在这里；卡片显示改动字段，修改已有笔记时同时显示旧值（删除线）；「Agent 称用户已确认」只是说明，不能代替你批准。「批准写入」会再确认一次，「拒绝」可填原因。<br>**等待批量分析的项目**：新项目攒够阈值（默认 20 份会话草稿）后点「开始批量分析」，之后新草稿自动增量合并。 |
+| **笔记** | 按类型（决策 / 经验 / 技巧）和项目浏览原子笔记；搜索框走和 Agent 自动召回**同一套检索**（Hindsight，不可用时本地检索），可以直接检验召回效果。点开看全文、取代关系和相关笔记。 |
+| **草稿** | 每个项目的会话草稿：积累中（进度条 / 阈值）、等你批准、自动增量、只提技巧。 |
+| **概览** | 笔记数、待批准数、草稿积压、Hindsight 同步；流水线 hooks → 草稿 → 批处理 → Obsidian → Hindsight，每段出错时标红并给出原因。 |
 
-连线「分析 → 技巧」等为示意；刷新异常时硬刷新缓存。
+页签上的红色数字 = 待批准（修正 + 等待批量分析的项目）。页面回到前台时自动刷新，平时每分钟刷新一次。
 
-## 分批分析（按项目）
+## 接口（仪表盘通道，均需 `AUTH_TOKEN`）
 
-- **未批准项目**：草稿达到阈值（默认 20）后点「开始批量分析」
-- **已批准项目**：之后新草稿走增量，可不点批准
-- 批准只影响该项目后续自动化，不代替「Agent 修正」队列
-
-## Agent 修正
-
-卡片 **「Agent 修正」**：Agent 对 `decision` 等提交的 `suggest_correction`。
-
-- **确认**：按建议写入 Obsidian（upsert/supersede）
-- **拒绝**：记录原因，不写笔记
-
-队列文件：vault 主机 `/var/lib/hinddian/agent_corrections/ac-*.json`。
-
-政策摘要：
-
-- tip / preference / lesson → Agent 可直写，不出现在此队列
-- 凡涉及 decision 的写入（新增 / 修改 / 取代 / 作废）→ **一定**出现在此，只有这里能批准；Agent 声称的 `user_confirmed` / `face_correction` 仅作展示
-- 批准接口只在仪表盘通道（`AUTH_TOKEN`，经 :8443 mTLS 注入）；Agent 的 MCP token 调不到
-
-## 其他卡片
-
-| 卡片 | 作用 |
+| 接口 | 作用 |
 |------|------|
-| 待确认建议 | 旧/并行 classify proposals（按目标文件确认） |
-| 归类记录 | 最近会话→主题合并记录 |
-| 收件箱最近 / 主题 | 运维浏览 |
+| `GET /api/overview` | 概览与页签角标 |
+| `GET /api/notes?type=&project=&q=` | 列表（不含项目首页等枢纽页）；带 `q` 时为检索 |
+| `GET /api/note?id=` | 单条笔记 |
+| `POST /api/recall` | 与 Agent 相同的 recall |
+| `GET /api/gate` · `POST /api/gate/{project}/approve` | 批处理闸门 |
+| `GET /api/corrections` · `POST /api/corrections/{id}/approve|reject` | Agent 修正队列 |
 
-## API（同源，需会话/mTLS）
+写操作需要 `X-Hinddian: 1` 头（防 CSRF）。vault 在本机（设了 `VAULT_ROOT`）时全部本地执行，否则经 SSH 到 vault 主机。
 
-常用：`/api/health`、`/api/stats`、`/api/corrections?status=pending`、`POST /api/corrections/{id}/approve|reject`、项目批准相关 `/api/…`（见 `web/app.js`）。
+## 真机才能验证的
 
-写操作前端带 `X-Hinddian: 1` 防 CSRF；公网靠 Caddy mTLS。
+- Safari 选择 mTLS 客户端证书的弹窗（以及证书过期时的表现）
+- 「添加到主屏幕」后的启动画面与状态栏颜色

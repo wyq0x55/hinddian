@@ -10,6 +10,7 @@ from __future__ import annotations
 import hmac
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
@@ -19,18 +20,16 @@ from . import __version__
 from . import classify_remote
 from . import memory_mcp
 from .config import Settings, get_settings
-from .models import FilterResult, InboxItem, PipelineStats, TopicDocStatus
-from .store import build_topic_statuses, collect_filters, compute_stats, scan_inbox
 
 WEB_DIR = Path(__file__).resolve().parents[2] / "web"
 
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
-    get_settings().status_db.parent.mkdir(parents=True, exist_ok=True)
     yield
 
 
-app = FastAPI(title="hinddian", version=__version__, description="Topic memory pipeline dashboard", lifespan=_lifespan)
+app = FastAPI(title="hinddian", version=__version__, description="hinddian memory dashboard", lifespan=_lifespan)
 app.include_router(memory_mcp.router)
 
 
@@ -63,8 +62,23 @@ def require_csrf(x_hinddian: str | None = Header(default=None)) -> None:
         raise HTTPException(403, "missing X-Hinddian header")
 
 
+NOTE_TYPES = ("decision", "lesson", "tip")
 dash = [Depends(require_dashboard)]
 dash_write = [Depends(require_dashboard), Depends(require_csrf)]
+
+
+def _vault(op: str, **kw: Any) -> Any:
+    try:
+        return memory_mcp.vault(op, **kw)
+    except Exception as e:  # noqa: BLE001 — surfaced to the dashboard as a 502
+        raise HTTPException(502, f"vault host: {str(e)[:300]}") from e
+
+
+def _soft(fn, *args) -> tuple[Any, str | None]:
+    try:
+        return fn(*args), None
+    except Exception as e:  # noqa: BLE001
+        return None, str(e)[:200]
 
 
 @app.get("/api/health")
@@ -72,49 +86,68 @@ def health() -> dict:
     return {"ok": True, "service": "hinddian", "version": __version__}
 
 
-@app.get("/api/stats", response_model=PipelineStats, dependencies=dash)
-def stats(settings: Settings = Depends(_settings)) -> PipelineStats:
-    return compute_stats(settings)
+@app.get("/api/overview", dependencies=dash)
+def overview() -> dict:
+    """Everything the 概览 tab and the tab badges need, each part failing independently."""
+    routing, routing_err = _soft(memory_mcp.vault, "routing_global")
+    gate, gate_err = _soft(classify_remote.gate)
+    corr, corr_err = _soft(lambda: memory_mcp.vault("list_corrections", status="pending", limit=100))
+    projects = (routing or {}).get("projects") or []
+    gate_projects = (gate or {}).get("projects") or []
+    return {
+        "version": __version__,
+        "vault": {
+            "ok": routing_err is None,
+            "error": routing_err,
+            "projects": len(projects),
+            "decisions": sum(p.get("decisions", 0) for p in projects),
+            "lessons": sum(p.get("lessons", 0) for p in projects),
+            "tips": ((routing or {}).get("tips") or {}).get("count", 0),
+        },
+        "drafts": {
+            "ok": gate_err is None,
+            "error": gate_err,
+            "total": sum(p.get("drafts", 0) for p in gate_projects),
+            "ready": sum(1 for p in gate_projects if p.get("state") == "ready"),
+            "processed": sum(p.get("processed", 0) for p in gate_projects),
+        },
+        "corrections": {"ok": corr_err is None, "error": corr_err, "pending": len(corr or [])},
+        "sync": classify_remote.sync_status(),
+        "hindsight": classify_remote.hindsight_stats(),
+    }
 
 
-@app.get("/api/inbox", response_model=list[InboxItem], dependencies=dash)
-def inbox(settings: Settings = Depends(_settings)) -> list[InboxItem]:
-    return scan_inbox(settings)
+@app.get("/api/notes", dependencies=dash)
+def notes(project: str | None = None, type: str | None = None, status: str = "active", q: str = "", limit: int = 200) -> list[dict]:
+    limit = max(1, min(int(limit), 500))
+    if q.strip():
+        return _vault("search_notes", query=q.strip()[:200], project=project or None, type=type or None, limit=min(limit, 50))
+    rows = _vault("list_notes", project=project or None, type=type or None, status=status, limit=limit)
+    # hub / project-state pages are navigation, not memory
+    return rows if type else [r for r in rows if r.get("type") in NOTE_TYPES]
 
 
-@app.get("/api/filters", response_model=list[FilterResult], dependencies=dash)
-def filters(settings: Settings = Depends(_settings)) -> list[FilterResult]:
-    return collect_filters(settings)
+@app.get("/api/note", dependencies=dash)
+def note(id: str) -> dict:
+    n = _vault("get_note", id=id)
+    if not n:
+        raise HTTPException(404, "note not found")
+    return n
 
 
-@app.get("/api/topics", response_model=list[TopicDocStatus], dependencies=dash)
-def topics(settings: Settings = Depends(_settings)) -> list[TopicDocStatus]:
-    return build_topic_statuses(settings)
-
-
-def _classify_guard(settings: Settings) -> None:
-    if not settings.classify_enabled:
-        raise HTTPException(503, "classify stage disabled")
-
-
-@app.get("/api/classify/stats", dependencies=dash)
-def classify_stats(settings: Settings = Depends(_settings)) -> dict:
-    _classify_guard(settings)
-    try:
-        data = classify_remote.stats()
-        data["reachable"] = True
-    except classify_remote.RemoteError as e:
-        data = {"reachable": False, "error": str(e)}
-    data["hindsight"] = classify_remote.hindsight_stats()
-    sync = classify_remote.sync_status()
-    data["obsidian_sync"] = sync
-    data["hindsight_retain_enabled"] = settings.hindsight_retain_enabled or bool(sync)
-    return data
+@app.post("/api/recall", dependencies=dash)
+def recall(payload: dict = Body(...)) -> dict:
+    """The same recall the agent gets — lets you check what auto-recall would inject."""
+    query = str(payload.get("query") or "").strip()
+    if not query:
+        raise HTTPException(400, "query required")
+    return memory_mcp.call_tool("recall", {"query": query[:500], "project": payload.get("project") or "", "budget": "low"})
 
 
 @app.get("/api/gate", dependencies=dash)
 def batch_gate(settings: Settings = Depends(_settings)) -> dict:
-    _classify_guard(settings)
+    if not settings.classify_enabled:
+        raise HTTPException(503, "batch stage disabled")
     try:
         return classify_remote.gate()
     except classify_remote.RemoteError as e:
@@ -123,96 +156,28 @@ def batch_gate(settings: Settings = Depends(_settings)) -> dict:
 
 @app.post("/api/gate/{project}/approve", dependencies=dash_write)
 def batch_approve(project: str, settings: Settings = Depends(_settings)) -> dict:
-    _classify_guard(settings)
+    if not settings.classify_enabled:
+        raise HTTPException(503, "batch stage disabled")
     try:
         return classify_remote.approve_batch(project)
     except classify_remote.RemoteError as e:
         raise HTTPException(400, str(e)) from e
 
 
-@app.get("/api/classify/proposals", dependencies=dash)
-def classify_proposals(status: str = "pending", settings: Settings = Depends(_settings)) -> list[dict]:
-    _classify_guard(settings)
-    try:
-        return classify_remote.proposals(status)
-    except classify_remote.RemoteError as e:
-        raise HTTPException(502, str(e)) from e
-
-
-@app.get("/api/classify/recent", dependencies=dash)
-def classify_recent(limit: int = 30, settings: Settings = Depends(_settings)) -> list[dict]:
-    _classify_guard(settings)
-    try:
-        return classify_remote.recent(limit)
-    except classify_remote.RemoteError as e:
-        raise HTTPException(502, str(e)) from e
-
-
-@app.post("/api/classify/proposals/{pid}/approve", dependencies=dash_write)
-def classify_approve(pid: str, settings: Settings = Depends(_settings)) -> dict:
-    _classify_guard(settings)
-    try:
-        return classify_remote.decide(pid, True)
-    except classify_remote.RemoteError as e:
-        raise HTTPException(502, str(e)) from e
-
-
-@app.post("/api/classify/proposals/{pid}/reject", dependencies=dash_write)
-def classify_reject(pid: str, payload: dict = Body(default={}), settings: Settings = Depends(_settings)) -> dict:
-    _classify_guard(settings)
-    try:
-        return classify_remote.decide(pid, False, str(payload.get("reason") or ""))
-    except classify_remote.RemoteError as e:
-        raise HTTPException(502, str(e)) from e
-
-
-@app.post("/api/classify/proposals/batch", dependencies=dash_write)
-def classify_batch(payload: dict = Body(...), settings: Settings = Depends(_settings)) -> dict:
-    """{ids: [...], action: approve|reject, reason?} — vault host applies sequentially under one lock,
-    re-reading the target before each write and renumbering D-/L- ids."""
-    _classify_guard(settings)
-    action = payload.get("action")
-    if action not in ("approve", "reject"):
-        raise HTTPException(400, "action must be approve|reject")
-    try:
-        return classify_remote.batch(list(payload.get("ids") or []), action == "approve", str(payload.get("reason") or ""))
-    except classify_remote.RemoteError as e:
-        raise HTTPException(502, str(e)) from e
-
-
-@app.post("/api/classify/proposals/{pid}/restore", dependencies=dash_write)
-def classify_restore(pid: str, settings: Settings = Depends(_settings)) -> dict:
-    _classify_guard(settings)
-    try:
-        return classify_remote.restore(pid)
-    except classify_remote.RemoteError as e:
-        raise HTTPException(502, str(e)) from e
-
-
 @app.get("/api/corrections", dependencies=dash)
 def list_agent_corrections(status: str = "pending") -> list[dict]:
-    """Agent gated-upsert suggestions queued on the vault host (alongside distill proposals)."""
-    try:
-        return memory_mcp.vault("list_corrections", status=status, limit=100)
-    except Exception as e:
-        raise HTTPException(502, str(e)[:300]) from e
+    """Agent gated-upsert suggestions queued on the vault host."""
+    return _vault("list_corrections", status=status, limit=100)
 
 
 @app.post("/api/corrections/{cid}/approve", dependencies=dash_write)
 def approve_agent_correction(cid: str) -> dict:
-    try:
-        return memory_mcp.vault("decide_correction", id=cid, approve=True)
-    except Exception as e:
-        raise HTTPException(502, str(e)[:300]) from e
+    return _vault("decide_correction", id=cid, approve=True)
 
 
 @app.post("/api/corrections/{cid}/reject", dependencies=dash_write)
 def reject_agent_correction(cid: str, payload: dict = Body(default={})) -> dict:
-    reason = str((payload or {}).get("reason") or "")
-    try:
-        return memory_mcp.vault("decide_correction", id=cid, approve=False, reason=reason)
-    except Exception as e:
-        raise HTTPException(502, str(e)[:300]) from e
+    return _vault("decide_correction", id=cid, approve=False, reason=str((payload or {}).get("reason") or ""))
 
 
 @app.get("/", dependencies=dash)
@@ -220,7 +185,7 @@ def index() -> FileResponse:
     index_path = WEB_DIR / "index.html"
     if not index_path.is_file():
         raise HTTPException(404, "web/index.html missing")
-    return FileResponse(index_path)
+    return FileResponse(index_path, headers={"Cache-Control": "no-cache"})
 
 
 if WEB_DIR.is_dir():
