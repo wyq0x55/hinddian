@@ -306,6 +306,18 @@ def test_dashboard_recall_and_gate(dash_client):
     assert dash_client.post("/api/gate/..%2Fx/approve", headers={**dash()}).status_code in (400, 404)
 
 
+def test_dashboard_lists_drafts(dash_client, vault, tmp_path):
+    from hinddian import notes as N
+    N.push_draft(project="my-app", title="一次会话", body="body here", meta={"session_id": "s-dash", "jev_source": "none"})
+    rows = dash_client.get("/api/drafts", params={"status": "pending"}, headers=dash()).json()
+    assert any(r["session_id"] == "s-dash" and r["title"] == "一次会话" for r in rows)
+    one = next(r for r in rows if r["session_id"] == "s-dash")
+    detail = dash_client.get("/api/draft", params={"id": one["id"]}, headers=dash()).json()
+    assert "body here" in detail["body"]
+    assert dash_client.get("/api/draft", params={"id": "nope/x.md"}, headers=dash()).status_code == 404
+    assert dash_client.get("/api/drafts").status_code == 401
+
+
 def test_dashboard_needs_auth_but_static_does_not(dash_client):
     assert dash_client.get("/api/overview").status_code == 401
     assert dash_client.get("/api/notes", headers=agent()).status_code == 403

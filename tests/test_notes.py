@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from hinddian import notes as N
 
 
@@ -146,3 +148,39 @@ def test_project_search_includes_global_tips(vault):
     assert hits == {"lesson", "tip"}
     assert all(h["project"] != "Q" for h in N.search_notes("部署", project="P"))
     assert {h["type"] for h in N.search_notes("部署", project="P", type_="lesson")} == {"lesson"}
+
+
+def test_list_and_get_drafts(vault, tmp_path):
+    r = N.push_draft(
+        project="ut-agent",
+        title="会话记忆状态",
+        body="- 记住部署前跑门禁\n- 不要写密钥",
+        meta={"session_id": "codex-memory-state-20261019", "jev_source": "local", "origin": "session-finalize"},
+    )
+    assert r["ok"]
+    pending = N.list_drafts(status="pending")
+    assert len(pending) == 1
+    row = pending[0]
+    assert row["project"] == "ut-agent"
+    assert row["title"] == "会话记忆状态"
+    assert row["session_id"] == "codex-memory-state-20261019"
+    assert row["jev_source"] == "local"
+    assert row["status"] == "pending"
+    assert "门禁" in row["snippet"]
+    got = N.get_draft(row["id"])
+    assert got and got["body"] and "门禁" in got["body"]
+    assert N.get_draft("../escape/x") is None
+    assert N.list_drafts(project="other") == []
+
+    # simulate batch move to processed/
+    src = Path(r["path"])
+    dest_dir = N.PROCESSED / "ut-agent"
+    dest_dir.mkdir(parents=True)
+    dest = dest_dir / src.name
+    src.replace(dest)
+    assert N.list_drafts(status="pending") == []
+    done = N.list_drafts(status="processed")
+    assert len(done) == 1 and done[0]["status"] == "processed"
+    assert N.get_draft(done[0]["id"])["status"] == "processed"
+    both = N.list_drafts(status="all")
+    assert len(both) == 1
