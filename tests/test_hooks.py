@@ -192,6 +192,14 @@ def test_recall_skips_cheap_prompts(hooks):
     assert w("部署到 API 主机之前要检查什么")
 
 
+def test_recall_query_drops_pastes(hooks):
+    pr = hooks["prompt_recall"]
+    q = pr.clean_query("部署又失败了，看下\n```\nTraceback (most recent call last):\n  File x\n```\n是不是门禁的问题")
+    assert q == "部署又失败了，看下 是不是门禁的问题"
+    assert pr.clean_query("x" * 400) == ""
+    assert not pr.worth_recalling(pr.clean_query("```\nonly a log\n```"))
+
+
 def test_recall_filters_and_dedupes(hooks):
     pr = hooks["prompt_recall"]
     results = [
