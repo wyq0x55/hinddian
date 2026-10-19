@@ -1,11 +1,11 @@
-# Append to Huawei /etc/caddy/Caddyfile (keep existing :80 OTLP/hindsight).
-# Dashboard channel: mTLS (reuses the DMIT CA at /etc/caddy/mtls/ca.pem, so the existing
-# iPhone client cert works). After the client cert verifies, Caddy presents the dashboard
+# Append to the API host /etc/caddy/Caddyfile (keep existing :80 OTLP/hindsight).
+# Dashboard channel: mTLS (reuses the vault host's CA at /etc/caddy/mtls/ca.pem, so the existing
+# phone client cert works). After the client cert verifies, Caddy presents the dashboard
 # credential itself — the browser never holds AUTH_TOKEN.
 # caddy.service needs HINDDIAN_DASHBOARD_TOKEN (= hinddian's AUTH_TOKEN) in its environment,
 # e.g. EnvironmentFile=/etc/caddy/hinddian.env (mode 600).
 #
-# Global options (once, at top of Caddyfile) — same as DMIT Magpie:
+# Global options (once, at top of Caddyfile) — same as vault host Magpie:
 # {
 # 	auto_https off
 # 	admin off

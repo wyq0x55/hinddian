@@ -1,13 +1,13 @@
-"""Bridge to the DMIT classify stage (pi 归类).
+"""Bridge to the vault 主机 classify stage (pi 归类).
 
-hinddian runs on Huawei; the vault + pi classifier run on DMIT. We reuse the
-existing root SSH trust (same as session-distill worker → DMIT) and call the
+hinddian runs on the API host; the vault + pi classifier run on the vault host. We reuse the
+existing root SSH trust (same as session-distill worker → vault host) and call the
 `hinddian-classify` CLI. No new public port, no extra token.
 
-  ssh dmit-vps hinddian-classify stats --json
-  ssh dmit-vps hinddian-classify proposals --json --status pending
-  ssh dmit-vps hinddian-classify recent --json
-  ssh dmit-vps hinddian-classify approve <id> | reject <id> --reason ...
+  ssh vault-host hinddian-classify stats --json
+  ssh vault-host hinddian-classify proposals --json --status pending
+  ssh vault-host hinddian-classify recent --json
+  ssh vault-host hinddian-classify approve <id> | reject <id> --reason ...
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ def _ssh(args: list[str], timeout: int = 25, binary: str = "hinddian-classify") 
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired as e:  # pragma: no cover
-        raise RemoteError("DMIT classify timeout") from e
+        raise RemoteError("vault host classify timeout") from e
     out = (r.stdout or "").strip()
     try:
         data = json.loads(out) if out else None
@@ -123,7 +123,7 @@ def restore(pid: str) -> dict:
 
 
 def hindsight_stats() -> dict | None:
-    """Hindsight bank stats (local REST on Huawei). None when not configured."""
+    """Hindsight bank stats (local REST on the API host). None when not configured."""
     s = get_settings()
     if not s.hindsight_api_key:
         return None
@@ -147,7 +147,7 @@ def hindsight_stats() -> dict | None:
         return {"error": "unreachable"}
 
 
-# ---------------- batch gate (hinddian-batch on DMIT) ----------------
+# ---------------- batch gate (hinddian-batch on the vault host) ----------------
 _PROJ = re.compile(r"^[\w\u4e00-\u9fff.-]{1,40}$")
 SYNC_STATUS = "/var/lib/hinddian/hindsight-sync-status.json"
 

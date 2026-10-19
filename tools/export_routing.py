@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export global/project routing JSON from the Obsidian vault (DMIT)."""
+"""Export global/project routing JSON from the Obsidian vault (vault host)."""
 from __future__ import annotations
 import os, sys
 from pathlib import Path

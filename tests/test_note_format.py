@@ -14,7 +14,7 @@ supersedes: []
 related: ["[[项目/P/经验/Gone|Gone]]"]
 sources: []
 updated: 2026-01-01
-reviewer: wanwan
+reviewer: alice
 generated: true
 ---
 # A
@@ -45,7 +45,7 @@ def _parse(tmp_path, text, name="A.md"):
 def test_block_list_and_unknown_keys_parse(tmp_path):
     n = _parse(tmp_path, HUMAN_NOTE)
     assert n["tags"] == ["alpha", "beta"]
-    assert n["_fm"]["reviewer"] == "wanwan"
+    assert n["_fm"]["reviewer"] == "alice"
     assert ("我的补充", "人手写的段落，不能丢。") in n["_sections"]
 
 
@@ -55,7 +55,7 @@ def test_render_preserves_human_content(tmp_path):
     nf.resolve_links(notes)
     n["practice"] = "p2"
     out = nf.render(n, notes, today="2026-02-02")
-    assert "reviewer: wanwan" in out
+    assert "reviewer: alice" in out
     assert "generated: true" in out  # unchanged value written back verbatim
     assert "tags:\n  - alpha\n  - beta" in out
     assert "## 我的补充\n人手写的段落，不能丢。" in out
@@ -97,6 +97,6 @@ def test_safe_segment():
 
 
 def test_score_works_for_chinese():
-    n = {"title": "部署门禁", "scene": "华为部署时", "practice": "", "reason": ""}
+    n = {"title": "部署门禁", "scene": "API 主机 部署时", "practice": "", "reason": ""}
     assert nf.score("部署", n) > 0
     assert nf.score("无关话题", n) == 0

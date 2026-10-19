@@ -17,5 +17,5 @@ jobs:
       - name: Hook copies match their sources
         run: python tools/sync_hooks.py --check
       - name: Byte-compile scripts that run outside the package
-        run: python -m py_compile classify/*.py tools/*.py hooks/*.py deploy/huawei/*.py adapters/magpie/deploy/*.py adapters/magpie/skills/hinddian-hooks/*.py plugins/hinddian/hooks/*.py deploy/dmit/hinddian-memory-cli
+        run: python -m py_compile classify/*.py tools/*.py hooks/*.py deploy/api-host/*.py adapters/magpie/deploy/*.py adapters/magpie/skills/hinddian-hooks/*.py plugins/hinddian/hooks/*.py deploy/vault-host/hinddian-memory-cli
       - run: pytest -q

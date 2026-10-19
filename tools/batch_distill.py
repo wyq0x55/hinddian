@@ -1,4 +1,4 @@
-"""Batch distillation trial: group drafts by inferred project, send ONE batch to pi (DMIT, magpie group/auto-flash),
+"""Batch distillation trial: group drafts by inferred project, send ONE batch to pi (vault host, magpie group/auto-flash),
 get 3-8 merged atomic notes back as JSON. Read-only on drafts.
 usage: batch_distill.py build <drafts_dir> <projects.json> <project> <out_prompt.txt>
        batch_distill.py write <pi_output.txt> <trial_root> <project>

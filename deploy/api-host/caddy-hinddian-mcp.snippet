@@ -1,5 +1,5 @@
 # Agent channel over TLS: hinddian-memory MCP + hook REST only. Hooks/agents use
-#   HINDDIAN_MEMORY_URL=https://<huawei>:8444/hinddian   (MCP: …/hinddian/mcp)
+#   HINDDIAN_MEMORY_URL=https://<api-host>:8444/hinddian   (MCP: …/hinddian/mcp)
 # with Bearer HINDDIAN_MCP_TOKEN (checked by hinddian, not by Caddy).
 #
 # Uses the same cert as the :8443 dashboard listener. If that cert is self-signed / private CA,
@@ -25,5 +25,5 @@
 # Bearer tokens must not cross the internet unencrypted.
 #
 #	handle_path /hinddian/* {
-#		respond "hinddian moved to https://<huawei>:8444/hinddian" 410
+#		respond "hinddian moved to https://<api-host>:8444/hinddian" 410
 #	}

@@ -4,7 +4,7 @@ Tools: routing_global, routing_project, recall, get_note, upsert_note, suggest_c
 Transport: HTTP POST /mcp (JSON-RPC). REST under /api/memory/* for host lifecycle hooks.
 Auth: Bearer HINDDIAN_MCP_TOKEN. Nothing here can approve a correction — that lives on the
 dashboard channel (api.py, AUTH_TOKEN).
-Vault ops run locally if VAULT_ROOT exists, else via SSH to CLASSIFY_SSH_HOST (DMIT).
+Vault ops run locally if VAULT_ROOT exists, else via SSH to CLASSIFY_SSH_HOST (vault host).
 """
 from __future__ import annotations
 
@@ -162,7 +162,7 @@ def _notes_mod():
 
 
 def _ssh_cli(args: list[str], payload: dict | None = None) -> Any:
-    """Call /usr/local/bin/hinddian-memory-cli on DMIT; return JSON. Payload via stdin.
+    """Call /usr/local/bin/hinddian-memory-cli on the vault host; return JSON. Payload via stdin.
     ControlMaster keeps one SSH connection warm instead of a handshake per tool call."""
     s = get_settings()
     remote = "/usr/local/bin/hinddian-memory-cli " + " ".join(shlex.quote(a) for a in args)
@@ -185,7 +185,7 @@ def _ssh_cli(args: list[str], payload: dict | None = None) -> Any:
 
 
 def vault(op: str, **kw: Any) -> Any:
-    """Run one vault op locally (VAULT_ROOT mounted) or on DMIT via the memory CLI."""
+    """Run one vault op locally (VAULT_ROOT mounted) or on the vault host via the memory CLI."""
     if get_settings().vault_local:
         n = _notes_mod()
         if op == "routing_global":

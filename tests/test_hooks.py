@@ -29,7 +29,7 @@ def test_transport_rules(hooks, monkeypatch):
     t = hooks["hookcfg"].transport_problem
     assert t("https://h/x") is None
     assert t("http://127.0.0.1:8787") is None
-    assert "refusing" in t("http://124.70.90.224/hinddian")
+    assert "refusing" in t("http://203.0.113.10/hinddian")
     assert t("") == "HINDDIAN_MEMORY_URL not set"
     monkeypatch.setenv("HINDDIAN_ALLOW_INSECURE", "1")
     assert t("http://10.0.0.1/x") is None

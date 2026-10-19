@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Obsidian -> Hindsight sync (runs on Huawei, next to Hindsight API).
+"""Obsidian -> Hindsight sync (runs on the API host, next to Hindsight API).
 
-Pulls the atomic-note export from DMIT (`ssh dmit-vps hinddian-batch export-notes --json`), then:
+Pulls the atomic-note export from the vault host (`ssh vault-host hinddian-batch export-notes --json`), then:
   new / changed active note  -> retain (document_id = frontmatter id, upsert)
   deleted or superseded note -> DELETE document
 State: /var/lib/hinddian/hindsight-sync.json ; status for dashboard: /var/lib/hinddian/hindsight-sync-status.json
@@ -12,7 +12,7 @@ import json, os, pathlib, subprocess, sys, time, urllib.parse, urllib.request, u
 SECRETS = pathlib.Path(os.environ.get("HS_SECRETS", "/opt/hindsight/secrets.env"))
 STATE = pathlib.Path(os.environ.get("HS_STATE", "/var/lib/hinddian/hindsight-sync.json"))
 STATUS = STATE.with_name("hindsight-sync-status.json")
-SSH_HOST = os.environ.get("HS_SSH_HOST", "dmit-vps")
+SSH_HOST = os.environ.get("HS_SSH_HOST", "vault-host")
 MAX_RETAIN = int(os.environ.get("HS_MAX_RETAIN", "200"))
 
 def secrets():
@@ -24,7 +24,7 @@ def secrets():
 
 S = secrets()
 BASE = S.get("HINDSIGHT_API_BASE", "http://127.0.0.1:8888").rstrip("/")
-BANK = S.get("HINDSIGHT_BANK_ID", "wanwan")
+BANK = S.get("HINDSIGHT_BANK_ID", "hinddian")
 
 def api(method, path, body=None, timeout=600):
     req = urllib.request.Request(BASE + path, method=method,

@@ -13,7 +13,7 @@ updated: 2026-10-18
 
 ## 当前焦点
 - **Obsidian 原子笔记 = 人读 SoT**；Agent 只走 **hinddian-memory** MCP（禁止原生 Hindsight retain）。
-- Hindsight bank `wanwan` **仅索引**：`hinddian-hindsight-sync` 从 active 笔记同步。
+- Hindsight bank **仅索引**：`hinddian-hindsight-sync` 从 active 笔记同步。
 - Magpie：hooks 会话桶 + Jev keep → `push_draft`；WebDAV **不同步 Hooks**（Windows 用 `install.ps1`）。
 
 ## 进行中
@@ -29,8 +29,8 @@ updated: 2026-10-18
 
 ## 已知环境（无密钥）
 - Vault：`/srv/obsidian/vault`
-- MCP：`hinddian-memory` → `http://124.70.90.224/hinddian/mcp`（Bearer 仅 secrets）
-- 仪表盘：`https://124.70.90.224:8443/`（Magpie 同款 mTLS）
+- MCP：`hinddian-memory` → `https://<api-host>:8444/hinddian/mcp`（Bearer 仅 secrets）
+- 仪表盘：`https://<api-host>:8443/`（Magpie 同款 mTLS）
 - 同步：CouchDB + LiveSync（人读）；勿放密钥进笔记
 - 说明：[[项目/笔记系统/MAGPIE-MCP|MAGPIE-MCP]] · [[项目/笔记系统/Hindsight与Obsidian双管线|SoT+索引]] · [[项目/笔记系统/会话提炼说明|会话→笔记]]
 

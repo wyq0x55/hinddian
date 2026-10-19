@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Patch Magpie library.json on DMIT: MCP + hooks + hinddian-hooks skill (WebDAV-carried).
+"""Patch Magpie library.json on the vault host: MCP + hooks + hinddian-hooks skill (WebDAV-carried).
 
 Hooks themselves are NOT in Magpie WebDAV Bundle — the skill is, so other PCs
 pull the skill then run install.py once to populate Hooks UI.
@@ -81,7 +81,7 @@ def main():
 
     skills = [s for s in (data.get("skills") or []) if s.get("name") != SKILL_NAME]
     # No absolute Source.Dir — skill lives in library/skills/hinddian-hooks and
-    # WebDAV carries its files; Windows Put writes them without linking to DMIT paths.
+    # WebDAV carries its files; Windows Put writes them without linking to the vault host paths.
     skills.append({
         "name": SKILL_NAME,
         "agents": ["claude", "codex", "grok", "cursor", "gemini"],

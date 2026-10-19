@@ -8,9 +8,9 @@ Host-agnostic memory product: **Obsidian 原子笔记**为人读唯一真相源�
 |----|------|
 | Host hooks（Claude / Codex / 可选 Magpie adapter） | 会话桶缓冲 + Jev keep → `push_draft` |
 | hinddian-memory MCP | 路由、recall、门控 `upsert_note` / `suggest_correction` |
-| DMIT 批处理 | 草稿 → 原子笔记（新项目需仪表盘批准） |
+| vault 主机 批处理 | 草稿 → 原子笔记（新项目需仪表盘批准） |
 | Obsidian vault | 人读 SoT |
-| Hindsight bank `wanwan` | 索引；`hinddian-hindsight-sync.timer` 对齐 |
+| Hindsight bank（`HINDSIGHT_BANK`，默认 `hinddian`） | 索引；`hinddian-hindsight-sync.timer` 对齐 |
 
 ## 文档地图
 
@@ -22,8 +22,8 @@ Host-agnostic memory product: **Obsidian 原子笔记**为人读唯一真相源�
 | [`docs/PIPELINE.md`](docs/PIPELINE.md) | 一轮会话如何进笔记 |
 | [`plugins/INSTALL.md`](plugins/INSTALL.md) | Claude Code / Codex 插件市场安装（首选） |
 | [`adapters/magpie/README.md`](adapters/magpie/README.md) | **可选** Magpie 宿主适配器 |
-| [`deploy/huawei/DEPLOY.md`](deploy/huawei/DEPLOY.md) | 华为部署与组件 |
-| [`classify/README.md`](classify/README.md) | DMIT 批处理 / 原子笔记 |
+| [`deploy/api-host/DEPLOY.md`](deploy/api-host/DEPLOY.md) | API 主机 部署与组件 |
+| [`classify/README.md`](classify/README.md) | vault 主机 批处理 / 原子笔记 |
 
 ---
 
@@ -72,11 +72,11 @@ codex plugin add hinddian@hinddian-plugins
 
 产品 **不依赖** Magpie。若某台机器仍跑 Magpie，用适配器（WebDAV **不同步** Library Hooks）：
 
-见 [`adapters/magpie/README.md`](adapters/magpie/README.md)。SoT：`adapters/magpie/skills/hinddian-hooks/`。不要在非 DMIT 机跑 `apply_library.py`。
+见 [`adapters/magpie/README.md`](adapters/magpie/README.md)。SoT：`adapters/magpie/skills/hinddian-hooks/`。不要在非 vault 主机跑 `apply_library.py`。
 
 ---
 
-## 华为 Quick start
+## API 主机 Quick start
 
 ```bash
 cp .env.example .env   # HINDSIGHT_API_KEY、HINDDIAN_MCP_TOKEN、AUTH_TOKEN（两者不同）；Jev 用 JEV_BASE_URL
@@ -85,8 +85,8 @@ uvicorn hinddian.api:app --host 127.0.0.1 --port 8787
 ```
 
 - MCP：`POST http://127.0.0.1:8787/mcp`（Bearer `HINDDIAN_MCP_TOKEN`）；本地开发用 `scripts/run_dev.sh`（未设 token 时自动 `HINDDIAN_ALLOW_NO_AUTH`）
-- 公网：`https://<huawei>:8444/hinddian/mcp`（Caddy TLS，只暴露 Agent 通道）；hooks 基址 env：`HINDDIAN_MEMORY_URL`
-- 仪表盘：`https://<huawei>:8443/`（mTLS；Caddy 注入 `AUTH_TOKEN`）
+- 公网：`https://<api-host>:8444/hinddian/mcp`（Caddy TLS，只暴露 Agent 通道）；hooks 基址 env：`HINDDIAN_MEMORY_URL`
+- 仪表盘：`https://<api-host>:8443/`（mTLS；Caddy 注入 `AUTH_TOKEN`）
 
 ## 开发
 
@@ -96,10 +96,10 @@ pytest                          # 门控 / 路径 / 笔记格式往返 / hooks /
 python tools/sync_hooks.py      # 改了 hooks/ 或 src/hinddian/jev.py 后重新生成各副本（CI 用 --check 校验）
 ```
 
-源码位置：hook 运行时 `hooks/`；Jev `src/hinddian/jev.py`；笔记文件格式 `src/hinddian/note_format.py`（MCP 与 DMIT batch 共用）。
+源码位置：hook 运行时 `hooks/`；Jev `src/hinddian/jev.py`；笔记文件格式 `src/hinddian/note_format.py`（MCP 与 vault 主机 batch 共用）。
 `plugins/hinddian/scripts/`、`skills/hinddian-hooks/`、`adapters/magpie/skills/hinddian-hooks/` 里的脚本是生成物，不要手改。
 
-完整部署：[`deploy/huawei/DEPLOY.md`](deploy/huawei/DEPLOY.md)。
+完整部署：[`deploy/api-host/DEPLOY.md`](deploy/api-host/DEPLOY.md)。
 
 ---
 
@@ -120,6 +120,6 @@ python tools/sync_hooks.py      # 改了 hooks/ 或 src/hinddian/jev.py 后重�
 - URL：`POST http://127.0.0.1:3425/v1/systemone`（**`JEV_BASE_URL`**；旧别名 `MAGPIE_JEV_URL`）
 - Auth：`Bearer` + **`JEV_API_KEY`**（旧别名 `MAGPIE_GATEWAY_KEY`；默认 token 字符串与部分本机网关约定有关，**不是**产品绑定 Magpie）
 - Model：`JEV_MODEL`（默认 `typesafe/jev-latest`）
-- 华为可选：SSH 隧道把远端 System One 映到本机 `:3425`（infra，见 `deploy/huawei`）
+- API 主机 可选：SSH 隧道把远端 System One 映到本机 `:3425`（infra，见 `deploy/api-host`）
 - 可选云端：`TYPESAFE_API_KEY` → `api.typesafe.ai`
 - 写失败策略：**不写**（漏记优于脏记）；日志 `source=jev:local|cloud|none`

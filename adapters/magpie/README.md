@@ -5,7 +5,7 @@
 | Path | Role |
 |------|------|
 | `skills/hinddian-hooks/` | Magpie Library skill + installers (`install.ps1` / `install.py`) — SoT under adapters |
-| `deploy/` | DMIT `apply_library.py` (reads the skill pack from `skills/hinddian-hooks/`) |
+| `deploy/` | vault host `apply_library.py` (reads the skill pack from `skills/hinddian-hooks/`) |
 | `plugin/` | Magpie/`opencode` plugin UI (`hinddian_install` tool) |
 | `package.json` | Magpie-local package metadata |
 
@@ -25,11 +25,11 @@ magpie webdav now
 python3 "$HOME/.config/magpie/library/skills/hinddian-hooks/install.py"
 ```
 
-Do **not** run `apply_library.py` on non-DMIT machines.
+Do **not** run `apply_library.py` on non-vault-host machines.
 
 ## Relation to core
 
-- Memory API / MCP: hinddian-memory (Huawei) — host-agnostic
+- Memory API / MCP: hinddian-memory (API host) — host-agnostic
 - Jev: any OpenAI-compatible System One at `JEV_BASE_URL` (default `http://127.0.0.1:3425/v1/systemone`). Magpie may expose that port on some hosts; it is not required branding.
 - Primary product install: Claude Code / Codex plugin (`plugins/hinddian/`)
 

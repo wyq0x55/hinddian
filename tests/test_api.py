@@ -86,7 +86,7 @@ def test_missing_tokens_fail_closed(client, monkeypatch):
 
 
 def test_recall_falls_back_to_local_search(client):
-    N.upsert_note({"action": "add", "type": "lesson", "project": "P", "title": "部署门禁", "scene": "华为"})
+    N.upsert_note({"action": "add", "type": "lesson", "project": "P", "title": "部署门禁", "scene": "API 主机"})
     r = client.post("/api/memory/recall", json={"query": "部署"}, headers=agent())
     body = r.json()
     assert body["via"] == "local-fallback"
@@ -125,5 +125,5 @@ def test_recall_hindsight_contract(client, monkeypatch):
     assert r["via"] == "hindsight"
     assert [x["id"] for x in r["results"]] == ["1"]
     path, body = seen[0]
-    assert path == "/v1/default/banks/wanwan/memories/recall"
+    assert path == "/v1/default/banks/hinddian/memories/recall"
     assert body == {"query": "部署", "budget": "mid", "tags": ["source:obsidian", "type:lesson", "project:P"], "tags_match": "all_strict"}

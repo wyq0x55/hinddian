@@ -1,6 +1,6 @@
 """Atomic Obsidian notes: load / upsert (4-state, gated) / routing export / correction queue / drafts.
 
-Runs where the vault is (DMIT, or any host with VAULT_ROOT). File format lives in note_format.py,
+Runs where the vault is (vault host, or any host with VAULT_ROOT). File format lives in note_format.py,
 shared with the batch engine. Secrets are redacted on write.
 
 Gate: callers on the agent channel (MCP / hooks) are untrusted — whatever flags they send,

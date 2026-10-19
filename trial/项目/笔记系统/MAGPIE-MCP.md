@@ -15,7 +15,7 @@ updated: 2026-10-18
 
 | 名 | URL | 用途 |
 |----|-----|------|
-| `hinddian-memory` | `http://124.70.90.224/hinddian/mcp` | 路由 / recall / 门控写入 / push_draft |
+| `hinddian-memory` | `https://<api-host>:8444/hinddian/mcp` | 路由 / recall / 门控写入 / push_draft |
 
 Bearer 只放 secrets，勿写进本笔记。
 
@@ -24,7 +24,7 @@ Bearer 只放 secrets，勿写进本笔记。
 - 原生 `hindsight` MCP（Agent **禁止 retain**）
 - 旧 `obsidian-vault` MCP（人读用 Obsidian / LiveSync）
 
-索引由华为 `hinddian-hindsight-sync` 从本 vault 的 active 笔记同步进 bank `wanwan`。
+索引由 API 主机 `hinddian-hindsight-sync` 从本 vault 的 active 笔记同步进 Hindsight bank。
 
 ## Hooks
 

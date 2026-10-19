@@ -1,5 +1,5 @@
 #!/bin/bash
-# Invoked from Huawei worker over SSH.
+# Invoked from the API host worker over SSH.
 # Usage:
 #   session-distill-remote write <vault-relpath>   # body on stdin
 #   session-distill-remote chat                     # OpenAI chat JSON body on stdin → stdout

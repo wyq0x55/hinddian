@@ -369,7 +369,7 @@
   const GATE_ZH = { ready: "可批量分析", accumulating: "积累中", incremental: "增量自动", "auto-tips": "只抽技巧 · 自动" };
   function renderGate(g) {
     const el = $("gate-list"); if (!el) return;
-    if (!g || !g.projects) { el.innerHTML = `<p class="empty">DMIT 不可达</p>`; return; }
+    if (!g || !g.projects) { el.innerHTML = `<p class="empty">vault 主机 不可达</p>`; return; }
     const rows = g.projects.map((p) => `<div class="gate-row ${p.state}"><b>${esc(p.project)}</b>
       <span class="t">${esc(GATE_ZH[p.state] || p.state)}${p.running ? " · 运行中" : ""}</span>
       <span>会话草稿 ${p.drafts}${p.state === "accumulating" || p.state === "ready" ? " / " + p.threshold : ""} · 已处理 ${p.processed}</span>

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run on DMIT as root from the repo's classify/ dir (rsynced to /opt/hinddian-classify/src).
+# Run on the vault host as root from the repo's classify/ dir (rsynced to /opt/hinddian-classify/src).
 # Prereq: /usr/local/bin/pi (pi 1.x on private node22) and
 #         /etc/hinddian-classify/secrets.env (600) with HINDSIGHT_API_KEY=...
 set -euo pipefail

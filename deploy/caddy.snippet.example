@@ -8,7 +8,7 @@
 # handle_path /hinddian/* {
 #     basicauth {
 #         # caddy hash-password — put hash here, not plaintext
-#         wanwan JDJh...replace_me
+#         admin JDJh...replace_me
 #     }
 #     reverse_proxy 127.0.0.1:8787
 # }

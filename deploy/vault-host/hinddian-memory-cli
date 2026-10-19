@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""DMIT CLI for hinddian-memory vault ops (called via SSH from the Huawei API).
+"""Vault-host CLI for hinddian-memory vault ops (called via SSH from the API host).
 
 upsert_note here is the *agent* path (gated). decide_correction is only invoked by the
-dashboard endpoints on the Huawei side and is the one trusted write.
+dashboard endpoints on the API-host side and is the one trusted write.
 """
 from __future__ import annotations
 import argparse, json, os, sys

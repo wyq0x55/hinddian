@@ -24,10 +24,10 @@ updated: 2026-10-18
 ```mermaid
 flowchart LR
   A[Agent + hooks] -->|白名单会话桶| D[drafts]
-  D --> B[batch DMIT]
+  D --> B[batch vault 主机]
   B --> V[Obsidian 原子笔记]
   A -->|门控 upsert / 修正队列| V
-  V -->|hindsight-sync| H[Hindsight wanwan]
+  V -->|hindsight-sync| H[Hindsight bank]
   A -->|recall| M[hinddian-memory]
   M --> H
   M --> V
@@ -37,14 +37,14 @@ flowchart LR
 
 | 用途 | 地址 |
 |------|------|
-| hinddian-memory 公网 | `http://124.70.90.224/hinddian/mcp` |
-| Hindsight API 本机（华为） | `http://127.0.0.1:8888` |
+| hinddian-memory 公网 | `https://<api-host>:8444/hinddian/mcp` |
+| Hindsight API 本机（API 主机） | `http://127.0.0.1:8888` |
 | Jev / Magpie | 本机或隧道 `127.0.0.1:3425` |
 
 ## 运维
 
 ```bash
-# 华为
+# API 主机
 systemctl status hinddian magpie-tunnel hinddian-hindsight-sync.timer
 # 不要再依赖 hindsight-retain.timer 吃会话原文作为主路径
 ```
