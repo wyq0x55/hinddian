@@ -158,6 +158,90 @@ def test_project_recall_includes_tips_and_one_row_per_note(client, monkeypatch):
     assert first["text"] == "a1" and first["facts"] == 2 and first["scores"]["reranker"] == 0.9
 
 
+
+def test_by_note_merges_by_document_id_and_keeps_best_score():
+    from hinddian.memory_mcp import _by_note
+
+    rows = _by_note([
+        {"id": "f1", "document_id": "n1", "text": "first", "scores": {"reranker": 0.5}},
+        {"id": "f2", "document_id": "n1", "text": "second", "scores": {"reranker": 0.9}},
+        {"id": "f3", "document_id": "n2", "text": "other", "scores": {"reranker": 0.4}},
+    ])
+    assert [r["document_id"] for r in rows] == ["n1", "n2"]
+    assert rows[0]["id"] == "f1" and rows[0]["text"] == "first"
+    assert rows[0]["facts"] == 2 and rows[0]["scores"]["reranker"] == 0.9
+
+
+def test_by_note_drops_fact_rows_that_duplicate_a_returned_note():
+    from hinddian.memory_mcp import _by_note
+
+    # fact-only row can appear before or after its note twin; both should be dropped
+    rows = _by_note([
+        {"id": "fact-before", "text": "same content", "scores": {"final": 0.95}},
+        {"id": "note-a", "document_id": "proj/P/decision/a", "text": "same content",
+         "scores": {"final": 0.9}},
+        {"id": "note-b", "document_id": "proj/P/lesson/b", "text": "  other\ncontent  ",
+         "scores": {"final": 0.8}},
+        {"id": "fact-after", "text": "other content", "scores": {"final": 0.7}},  # whitespace-normalized dup
+        {"id": "orphan", "text": "unique fact only", "scores": {"final": 0.6}},
+    ])
+    assert [r.get("document_id") or r["id"] for r in rows] == [
+        "proj/P/decision/a", "proj/P/lesson/b", "orphan",
+    ]
+    orphan = rows[-1]
+    assert orphan["id"] == "orphan"
+    assert orphan["note_id"] is None and orphan["resolvable"] is False
+    assert "document_id" not in orphan or orphan.get("document_id") in (None, "")
+
+
+def test_by_note_annotates_orphan_facts_without_inventing_document_id():
+    from hinddian.memory_mcp import _by_note
+
+    rows = _by_note([
+        {"id": "f1", "text": "only a fact", "scores": {"final": 0.9}},
+        {"id": "f2", "content": "via content field", "scores": {"final": 0.8}},
+    ])
+    assert len(rows) == 2
+    for r in rows:
+        assert r.get("document_id") in (None, "")
+        assert r["note_id"] is None and r["resolvable"] is False
+        assert r["id"] in ("f1", "f2")  # fact uuid kept; consumers must not call get_note on it
+
+
+def test_by_note_preserves_note_winner_order_when_dropping_dup_facts():
+    from hinddian.memory_mcp import _by_note
+
+    rows = _by_note([
+        {"id": "f-dup", "text": "alpha", "scores": {"final": 0.99}},
+        {"id": "n1", "document_id": "note/1", "text": "alpha", "scores": {"final": 0.9}},
+        {"id": "f-keep", "text": "gamma", "scores": {"final": 0.85}},
+        {"id": "n2", "document_id": "note/2", "text": "beta", "scores": {"final": 0.8}},
+    ])
+    assert [(r.get("document_id"), r["id"], r.get("resolvable")) for r in rows] == [
+        ("note/1", "n1", None),
+        (None, "f-keep", False),
+        ("note/2", "n2", None),
+    ]
+
+
+def test_recall_drops_duplicate_fact_rows_via_by_note(client, monkeypatch):
+    _mock_hindsight(monkeypatch, [
+        {"id": "fact-uuid", "text": "WinAMS stub budget", "metadata": {}, "scores": {"final": 0.95}},
+        {"id": "f-note", "document_id": "proj/P/decision/winams", "text": "WinAMS stub budget",
+         "metadata": {"type": "decision", "project": "P"}, "scores": {"final": 0.9}},
+        {"id": "orphan-uuid", "text": "session-only fact", "metadata": {}, "scores": {"final": 0.7}},
+    ])
+    r = client.post("/api/memory/recall", json={"query": "WinAMS", "project": "P", "type": "decision"},
+                    headers=agent()).json()
+    assert r["via"] == "hindsight"
+    ids = [x["id"] for x in r["results"]]
+    assert "fact-uuid" not in ids
+    assert ids == ["f-note", "orphan-uuid"]
+    assert r["results"][0]["document_id"] == "proj/P/decision/winams"
+    orphan = r["results"][1]
+    assert orphan["note_id"] is None and orphan["resolvable"] is False
+
+
 def test_auto_verdict_merges_into_the_most_similar_note(client, monkeypatch):
     from hinddian import jev, memory_mcp
 
