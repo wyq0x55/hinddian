@@ -8,6 +8,8 @@ CLI (spawned detached by the hooks):  finalize.py [--current SID]
 from __future__ import annotations
 
 import json
+import os
+import socket
 import sys
 import time
 from pathlib import Path
@@ -112,7 +114,7 @@ def _body(val: dict, title: str, typ: str) -> str:
     return f"## DECISIONS{nl}{nl}## LESSONS{nl}{block}{nl}## PREFERENCES{nl}"
 
 
-def finalize_buffer(buf: dict, *, reason: str) -> dict:
+def _finalize_buffer(buf: dict, *, reason: str) -> dict:
     sid = buf.get("session_id") or ""
     corpus = session_buf.session_corpus(buf)
     if not corpus.strip():
@@ -133,7 +135,7 @@ def finalize_buffer(buf: dict, *, reason: str) -> dict:
 
     val = klass.get("value") or {}
     if not isinstance(val, dict) or not val.get("keep"):
-        return _done(sid, reason, "keep_false", source=src, confidence=klass.get("confidence"), error=klass.get("error"))
+        return _done(sid, reason, "keep_false", keep=False, source=src, confidence=klass.get("confidence"), error=klass.get("error"))
 
     title = val.get("title") or val.get("summary") or f"session-{sid[:12]}"
     typ = val.get("type") or "lesson"
@@ -152,9 +154,58 @@ def finalize_buffer(buf: dict, *, reason: str) -> dict:
     try:
         out = req("POST", "/api/memory/push_draft", payload, timeout=30)
     except Exception as e:
-        return _later(sid, reason, f"push_failed: {e}", source=src)
+        return _later(sid, reason, f"push_failed: {e}", source=src, keep=True, confidence=klass.get("confidence"))
     session_buf.mark_finalized(sid, "pushed")
-    return {"ok": True, "pushed": out, "source": src, "session_id": sid, "reason": reason}
+    draft = out.get("path") or out.get("id") if isinstance(out, dict) else None
+    return {"ok": True, "pushed": out, "source": src, "keep": True, "confidence": klass.get("confidence"),
+            "session_id": sid, "reason": reason, "draft_path": draft}
+
+
+REPORT_TIMEOUT = 4.0
+
+
+def client_id() -> str:
+    cid = os.environ.get("HINDDIAN_CLIENT_ID") or str(hookcfg.load_config().get("client_id") or "")
+    return (cid.strip() or socket.gethostname() or "unknown")[:64]
+
+
+def report_decision(buf: dict, result: dict, *, reason: str) -> None:
+    """Tell the dashboard what Jev decided (metadata only, never turn text). Fire-and-forget:
+    any failure is swallowed so reporting can never block or break finalize."""
+    try:
+        if not hookcfg.flag("HINDDIAN_REPORT_JEV", True):
+            return
+        conf = result.get("confidence")
+        body = {
+            "session_id": str(buf.get("session_id") or "")[:128],
+            "project": str(buf.get("project") or "")[:128] or None,
+            "cwd": os.path.basename(str(buf.get("cwd") or "").rstrip("/\\"))[:128] or None,
+            "host": client_id(),
+            "event": "finalize",
+            "finalize_reason": reason,
+            "jev_source": str(result.get("source") or "none"),
+            "keep": result.get("keep"),
+            "confidence": conf if isinstance(conf, (int, float)) else None,
+            "outcome": str(result.get("skipped") or ("pushed" if result.get("pushed") else ("deferred" if result.get("deferred") else "gave_up" if result.get("gave_up") else "")))[:40],
+            "error": str(result.get("error") or "")[:200] or None,
+            "turn_count": len(buf.get("turns") or []),
+            "pushed": bool(result.get("pushed")),
+            "draft_path": str(result.get("draft_path") or "")[:256] or None,
+            "ts": time.time(),
+        }
+        req("POST", "/api/memory/gates/report", body, timeout=REPORT_TIMEOUT)
+    except Exception:
+        pass
+
+
+def finalize_buffer(buf: dict, *, reason: str) -> dict:
+    try:
+        result = _finalize_buffer(buf, reason=reason)
+    except Exception as e:
+        report_decision(buf, {"source": "none", "error": f"finalize_error: {type(e).__name__}: {e}"}, reason=reason)
+        raise
+    report_decision(buf, result, reason=reason)
+    return result
 
 
 def finalize_idle_and_others(*, current_sid: str | None = None, project: str | None = None) -> list[dict]:
