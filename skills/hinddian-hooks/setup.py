@@ -209,10 +209,8 @@ def check() -> bool:
         return False
 
     try:
-        import jev
-
-        info = jev.backend_info()
-        print(f"  [info] Jev 闸门：{json.dumps(info, ensure_ascii=False)[:160]}（可选；不可用时会话草稿会稍后重试）")
+        info = hookcfg.req("GET", "/api/memory/gates/backend", timeout=12)
+        print(f"  [info] 服务端 Jev 闸门：{json.dumps(info, ensure_ascii=False)[:160]}（Jev 在服务端运行；不可用时会话草稿会稍后重试）")
     except Exception as e:  # noqa: BLE001
         print(f"  [info] Jev 闸门未检测：{type(e).__name__}")
     print("全部就绪。新开一个会话即生效。")
