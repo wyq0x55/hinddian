@@ -357,7 +357,25 @@
     setText(countEl, list.length);
     $(el).innerHTML = list.length ? list.map(draftItem).join("") : empty(emptyMsg);
   }
+  const SH = (ts) => ts ? new Date(ts * 1000).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false, month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" }) + " (北京时间)" : "—";
+  function jevItem(r) {
+    const k = r.keep === true ? chip("保留", "decision") : r.keep === false ? chip("丢弃", "ghost") : chip("未判", "ghost");
+    const bits = [r.host, r.project || r.cwd, "来源 " + (r.jev_source || "none"), r.pushed ? "已推草稿" : "未推送", r.finalize_reason ? "原因 " + r.finalize_reason : "", r.outcome || "", r.turn_count != null ? r.turn_count + " 轮" : ""].filter(Boolean);
+    return `<div class="item"><div class="t">${k}<span>${esc(bits.join(" · "))}</span></div>
+      <span class="sc">${esc(SH(r.ts))}</span>${r.error ? `<div class="s">错误：${esc(r.error)}</div>` : ""}</div>`;
+  }
+  async function loadJev() {
+    try {
+      const d = await api("/api/jev-decisions?limit=100"), s = d.summary || {};
+      setText("jev-count", (d.items || []).length);
+      const src = Object.entries(s.by_source_24h || {}).map(([k, v]) => `${k} ${v}`).join(" · ") || "无";
+      const hosts = (s.hosts || []).map((h) => `${h.host}：最后上报 ${SH(h.last_ts)}（24h ${h.count_24h} 次）`).join(" ｜ ") || "还没有客户端上报过——hooks 可能没触发 finalize，或客户端未更新";
+      $("jev-summary").textContent = `近 24 小时 ${s.total_24h || 0} 次：保留 ${s.keep_24h || 0} · 丢弃 ${s.drop_24h || 0} · 推送 ${s.pushed_24h || 0}；按来源：${src}。${hosts}`;
+      $("jev-list").innerHTML = (d.items || []).length ? d.items.map(jevItem).join("") : empty("暂无 Jev 判断记录");
+    } catch (e) { $("jev-summary").textContent = ""; $("jev-list").innerHTML = empty("读不到 Jev 判断记录：" + e.message, true); setText("jev-count", null); }
+  }
   async function loadGate() {
+    loadJev();
     const [gate, pending, processed] = await Promise.allSettled([
       api("/api/gate"),
       api("/api/drafts?status=pending&limit=100"),

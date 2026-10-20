@@ -17,6 +17,7 @@ def hooks(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
     monkeypatch.setenv("HINDDIAN_MEMORY_URL", "https://memory.example/hinddian")
     monkeypatch.setenv("HINDDIAN_CONFIG", str(tmp_path / "cfg" / "hinddian" / "config.json"))
+    monkeypatch.setenv("HINDDIAN_REPORT_JEV", "0")  # tests opt in explicitly
     for k in ("HINDDIAN_MCP_TOKEN", "HINDDIAN_CA_FILE", "HINDDIAN_ALLOW_INSECURE"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.syspath_prepend(str(SCRIPTS))
@@ -347,3 +348,33 @@ def test_routing_block_is_cache_stable(hooks):
     assert a == ss.routing_block(["a", "b"], "a")
     assert not any(ch.isdigit() for ch in a.replace("hinddian", ""))  # no counts / dates in the prefix
     assert ss.match_project("/home/me/work/my-app-api", ["my-app", "my-app-api"]) == "my-app-api"
+
+
+def test_finalize_reports_every_decision_and_never_blocks(hooks, monkeypatch):
+    sb, fin = hooks["session_buf"], hooks["finalize"]
+    monkeypatch.setenv("HINDDIAN_REPORT_JEV", "1")
+    monkeypatch.setattr(fin, "projects_list", lambda: [])
+    sent = []
+
+    def fake_req(m, path, body=None, timeout=0):
+        sent.append((path, body, timeout))
+        if path.endswith("/gates/report"):
+            raise OSError("server down")
+        return {"ok": True}
+
+    monkeypatch.setattr(fin, "req", fake_req)
+    monkeypatch.setattr(fin, "_classify", lambda c, p, cwd="": {"ok": True, "source": "jev:cloud", "confidence": 0.4,
+                                                                 "value": {"keep": False}})
+    r = fin.finalize_buffer(sb.append_turn(session_id="a", turn_text="用户: x\n助手: y"), reason="idle")
+    assert r["skipped"] == "keep_false"  # report failure swallowed
+    rep = [b for p, b, t in sent if p.endswith("/gates/report")]
+    assert rep[0]["keep"] is False and rep[0]["jev_source"] == "jev:cloud" and not rep[0]["pushed"]
+    assert all(t <= fin.REPORT_TIMEOUT for p, b, t in sent if p.endswith("/gates/report"))
+    assert "x" not in str(rep[0].get("error") or "") and "turn" not in rep[0]
+
+    def down(*a, **k):
+        raise RuntimeError("jev down")
+    monkeypatch.setattr(fin, "_classify", down)
+    fin.finalize_buffer(sb.append_turn(session_id="b", turn_text="用户: x\n助手: y"), reason="idle")
+    rep = [b for p, b, t in sent if p.endswith("/gates/report")]
+    assert rep[-1]["jev_source"] == "none" and rep[-1]["keep"] is None and "jev_unavailable" in rep[-1]["error"]

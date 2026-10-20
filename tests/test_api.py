@@ -337,3 +337,41 @@ def test_mcp_tool_descriptions_steer_corrections_away_from_push_draft():
     assert "correct" in pd  # tell agents not to use it for corrections
     assert "push_draft" in sc
     assert "discover" in sc or "outdated" in sc or "wrong" in sc
+
+
+def test_jev_report_validates_appends_and_shows_on_dashboard(client, tmp_path, monkeypatch):
+    log = tmp_path / "jev.jsonl"
+    monkeypatch.setenv("HINDDIAN_JEV_LOG", str(log))
+    url = "/api/memory/gates/report"
+    assert client.post(url, json={"session_id": "s"}).status_code == 401
+    assert client.post(url, json={"session_id": "s"}, headers=dash()).status_code == 403
+    assert client.post(url, json={}, headers=agent()).status_code == 422
+    assert client.post(url, json={"session_id": "s", "keep": "yes"}, headers=agent()).status_code == 422
+    assert client.post(url, json={"session_id": "s", "event": "x"}, headers=agent()).status_code == 422
+    assert client.post(url, json={"session_id": "s", "error": "x" * 5000}, headers=agent()).status_code == 422
+    ok = {"session_id": "s1", "host": "mac", "project": "P", "jev_source": "none", "keep": None,
+          "error": "jev_unavailable token=abc123", "turn_count": 3, "pushed": False, "turn": "secret text"}
+    assert client.post(url, json=ok, headers=agent()).json() == {"ok": True}
+    assert client.post(url, json={**ok, "session_id": "s2", "jev_source": "jev:local", "keep": False, "error": None},
+                       headers=agent()).status_code == 200
+    raw = log.read_text()
+    assert "secret text" not in raw and "abc123" not in raw and raw.count("\n") == 2
+    assert client.get("/api/jev-decisions", headers=agent()).status_code == 403
+    d = client.get("/api/jev-decisions", headers=dash()).json()
+    assert [r["session_id"] for r in d["items"]] == ["s2", "s1"]
+    assert d["summary"]["by_source_24h"] == {"none": 1, "jev:local": 1}
+    assert d["summary"]["hosts"][0]["host"] == "mac" and d["summary"]["drop_24h"] == 1
+
+
+def test_jev_log_rotates(tmp_path, monkeypatch):
+    from hinddian import jev_log
+    monkeypatch.setenv("HINDDIAN_JEV_LOG", str(tmp_path / "j.jsonl"))
+    monkeypatch.setattr(jev_log, "MAX_BYTES", 400)
+    for i in range(20):
+        jev_log.append(jev_log.validate({"session_id": f"s{i}"}))
+    assert (tmp_path / "j.jsonl.1").exists() and (tmp_path / "j.jsonl").stat().st_size <= 400
+    assert jev_log.recent(5)[0]["session_id"] == "s19"
+
+
+def test_jev_backend_alias(client):
+    assert client.get("/api/memory/jev-backend", headers=agent()).status_code == 200

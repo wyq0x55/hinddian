@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from . import classify_remote
+from . import jev_log
 from . import memory_mcp
 from .config import Settings, get_settings
 
@@ -181,6 +182,12 @@ def session_draft(id: str) -> dict:
     if not d:
         raise HTTPException(404, "draft not found")
     return d
+
+
+@app.get("/api/jev-decisions", dependencies=dash)
+def jev_decisions(limit: int = 100) -> dict:
+    """Jev decisions reported by client hooks, newest first, plus a per-host / per-source summary."""
+    return {"items": jev_log.recent(max(1, min(int(limit), 500))), "summary": jev_log.summary()}
 
 
 @app.get("/api/corrections", dependencies=dash)

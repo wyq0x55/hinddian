@@ -32,3 +32,20 @@ Hindsight bank（`HINDSIGHT_BANK`，默认 `hinddian`） 仍由 API 主机 **`hi
 
 - **首选**：Claude / Codex 插件（`plugins/hinddian/`）自带 lifecycle hooks。
 - **可选 Magpie**：WebDAV 不同步 Hooks → [`adapters/magpie/README.md`](../adapters/magpie/README.md)。
+
+## Jev 判断上报（客户端判断，服务端只记录）
+
+Jev 仍在客户端 hooks 里跑（本地 Magpie → 云端；都失败 = `source=none`，不写入，不让 LLM 自动 keep）。
+每次 finalize 判断完（含 `none`、`keep=false`、Jev 不可达被延后、finalize 异常），hook 都会
+**fire-and-forget** 地 `POST /api/memory/gates/report`（Bearer `HINDDIAN_MCP_TOKEN`，超时 4s，失败静默吞掉，绝不阻塞 hook）。
+
+上报字段只含元数据：`session_id, project, cwd(仅目录名), host, event(finalize|turn), finalize_reason,
+jev_source, keep(bool|null), confidence, outcome, error(≤200 字，疑似密钥会脱敏), turn_count, pushed, draft_path, ts`。
+**不含会话正文。** 请求体 >4KB 或字段类型不对返回 422。
+
+服务端追加到 `HINDDIAN_JEV_LOG`（默认 `/var/lib/hinddian/jev-decisions.jsonl`，超 2MB 轮转为 `.1`，只保留一代）。
+面板「草稿」页顶部「Jev 判断记录」读 `GET /api/jev-decisions`（AUTH_TOKEN）：最近记录 + 每台主机最后上报时间 + 24h 按来源计数，
+某台主机长时间不上报即「客户端沉默」。
+
+客户端开关：`HINDDIAN_REPORT_JEV=0` 关闭上报；`HINDDIAN_CLIENT_ID`（或配置文件 `client_id`）覆盖默认主机名。
+`GET /api/memory/jev-backend` 现为 `gates/backend` 的别名。
