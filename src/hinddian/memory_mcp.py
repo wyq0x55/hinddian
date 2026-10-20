@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, Response
 
-from . import __version__, jev
+from . import __version__, jev, jev_log
 from .config import get_settings
 
 router = APIRouter()
@@ -617,6 +617,7 @@ def api_suggest_correction(args: dict):
 
 
 @router.get("/api/memory/gates/backend", dependencies=agent)
+@router.get("/api/memory/jev-backend", dependencies=agent)
 def api_jev_backend():
     return jev.backend_info()
 
@@ -636,3 +637,17 @@ def api_should_recall(args: dict):
 def api_classify_turn(args: dict):
     r = jev.classify_turn(args.get("turn", "") or args.get("text", ""), _project_names(), str(args.get("cwd") or ""))
     return {"ok": r.ok, "value": r.value, "confidence": r.confidence, "source": r.source, "error": r.error}
+
+
+@router.post("/api/memory/gates/report", dependencies=agent)
+def api_gate_report(args: dict):
+    """Client hooks report each Jev decision (metadata only) so the dashboard can show it."""
+    try:
+        rec = jev_log.validate(args)
+    except (jev_log.ReportError, TypeError, ValueError) as e:
+        raise HTTPException(422, str(e)) from e
+    try:
+        jev_log.append(rec)
+    except OSError as e:
+        raise HTTPException(503, f"jev log unavailable: {type(e).__name__}") from e
+    return {"ok": True}
