@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import sys
 import time
 from pathlib import Path
@@ -48,17 +49,16 @@ def test_clip_keeps_head_and_tail(hooks):
     assert out.startswith("ASK") and out.endswith("CONCLUSION") and len(out) < 12100
 
 
-def test_jev_down_keeps_buffer_then_gives_up(hooks, monkeypatch):
+def test_server_down_keeps_buffer_then_gives_up(hooks, monkeypatch):
     sb, fin = hooks["session_buf"], hooks["finalize"]
-    monkeypatch.setattr(fin, "projects_list", lambda: [])
 
     def down(*a, **k):
-        raise RuntimeError("jev down")
+        raise OSError("server down")
 
-    monkeypatch.setattr(fin, "_classify", down)
+    monkeypatch.setattr(fin, "req", down)
     buf = sb.append_turn(session_id="s1", turn_text="用户: hi\n助手: done")
     r = fin.finalize_buffer(buf, reason="idle")
-    assert r["deferred"] is True
+    assert r["deferred"] is True and "server_unreachable" in r["error"]
     b = sb.load("s1")
     assert not b["finalized"] and b["next_try_at"] > time.time()
     assert not sb.due(b)
@@ -69,19 +69,31 @@ def test_jev_down_keeps_buffer_then_gives_up(hooks, monkeypatch):
     assert b["finalized"] and b["outcome"].startswith("gave_up")
 
 
-def test_successful_finalize_pushes_once(hooks, monkeypatch):
+def test_server_retry_flag_defers(hooks, monkeypatch):
     sb, fin = hooks["session_buf"], hooks["finalize"]
-    monkeypatch.setattr(fin, "projects_list", lambda: ["P"])
-    monkeypatch.setattr(fin, "_classify", lambda c, p, cwd="": {"ok": True, "source": "jev:local", "confidence": 0.9,
-                                                         "value": {"keep": True, "title": "T", "type": "lesson", "project": "P"}})
+    monkeypatch.setattr(fin, "req", lambda *a, **k: {"ok": False, "retry": True, "outcome": "jev_unavailable",
+                                                     "error": "jev_unavailable: x", "source": "none"})
+    r = fin.finalize_buffer(sb.append_turn(session_id="s2", turn_text="用户: a\n助手: b"), reason="idle")
+    assert r["deferred"] is True and not sb.load("s2")["finalized"]
+
+
+def test_finalize_posts_buffer_to_server_once(hooks, monkeypatch, tmp_path):
+    sb, fin = hooks["session_buf"], hooks["finalize"]
     sent = []
-    monkeypatch.setattr(fin, "req", lambda m, path, body=None, timeout=0: sent.append((path, body)) or {"ok": True})
-    sb.append_turn(session_id="old", turn_text="用户: a\n助手: b")
+    monkeypatch.setattr(fin, "req", lambda m, path, body=None, timeout=0: sent.append((path, body)) or
+                        {"ok": True, "outcome": "pushed", "pushed": True, "source": "jev:local", "keep": True})
+    repo = tmp_path / "work" / "my-repo"
+    (repo / ".git").mkdir(parents=True)
+    sb.append_turn(session_id="old", turn_text="用户: a\n助手: b", cwd=str(repo / "src"))
     res = fin.finalize_idle_and_others(current_sid="new")
-    assert [r.get("pushed") for r in res] == [{"ok": True}]
-    assert sent[0][0] == "/api/memory/push_draft" and sent[0][1]["session_id"] == "old"
-    assert sent[0][1]["project"] == "P"  # no cwd / repo: Jev's pick
+    assert [r.get("pushed") for r in res] == [True]
+    assert [p for p, _ in sent] == ["/api/memory/finalize"]  # no client-side Jev, no separate report
+    body = sent[0][1]
+    assert body["session_id"] == "old" and body["finalize_reason"] == "session-start"
+    assert body["cwd"] == "src" and body["repo"] == "my-repo" and str(tmp_path) not in json.dumps(body)
+    assert body["turns"] == [{"text": "用户: a\n助手: b"}] and body["client_id"]
     assert fin.finalize_idle_and_others(current_sid="new") == []
+    assert not hasattr(fin, "jev")
 
 
 def test_claim_is_exclusive(hooks):
@@ -192,18 +204,6 @@ def test_recall_skips_cheap_prompts(hooks):
     for p in ("好的", "继续", "ok", "Thanks!", "/hinddian:doctor", "<task-notification>x</task-notification>", "短"):
         assert not w(p), p
     assert w("部署到 API 主机之前要检查什么")
-
-
-def test_draft_project_comes_from_the_directory(hooks, tmp_path):
-    fin = importlib.import_module("finalize")
-    repo = tmp_path / "work" / "new-repo"
-    (repo / ".git").mkdir(parents=True)
-    (repo / "src").mkdir()
-    known = ["hinddian", "my-app"]
-    assert fin.pick_project(str(tmp_path / "x" / "my-app" / "web"), "hinddian", known) == "my-app"   # path beats text
-    assert fin.pick_project(str(repo / "src"), "hinddian", known) == "new-repo"                       # new project bootstraps
-    assert fin.pick_project(str(tmp_path / "loose"), "hinddian", known) == "hinddian"                 # no repo: Jev's pick
-    assert fin.pick_project("", None, known) == "通用-未定"
 
 
 def test_private_blocks_never_buffered_or_queried(hooks, monkeypatch, capsys):
@@ -350,31 +350,3 @@ def test_routing_block_is_cache_stable(hooks):
     assert ss.match_project("/home/me/work/my-app-api", ["my-app", "my-app-api"]) == "my-app-api"
 
 
-def test_finalize_reports_every_decision_and_never_blocks(hooks, monkeypatch):
-    sb, fin = hooks["session_buf"], hooks["finalize"]
-    monkeypatch.setenv("HINDDIAN_REPORT_JEV", "1")
-    monkeypatch.setattr(fin, "projects_list", lambda: [])
-    sent = []
-
-    def fake_req(m, path, body=None, timeout=0):
-        sent.append((path, body, timeout))
-        if path.endswith("/gates/report"):
-            raise OSError("server down")
-        return {"ok": True}
-
-    monkeypatch.setattr(fin, "req", fake_req)
-    monkeypatch.setattr(fin, "_classify", lambda c, p, cwd="": {"ok": True, "source": "jev:cloud", "confidence": 0.4,
-                                                                 "value": {"keep": False}})
-    r = fin.finalize_buffer(sb.append_turn(session_id="a", turn_text="用户: x\n助手: y"), reason="idle")
-    assert r["skipped"] == "keep_false"  # report failure swallowed
-    rep = [b for p, b, t in sent if p.endswith("/gates/report")]
-    assert rep[0]["keep"] is False and rep[0]["jev_source"] == "jev:cloud" and not rep[0]["pushed"]
-    assert all(t <= fin.REPORT_TIMEOUT for p, b, t in sent if p.endswith("/gates/report"))
-    assert "x" not in str(rep[0].get("error") or "") and "turn" not in rep[0]
-
-    def down(*a, **k):
-        raise RuntimeError("jev down")
-    monkeypatch.setattr(fin, "_classify", down)
-    fin.finalize_buffer(sb.append_turn(session_id="b", turn_text="用户: x\n助手: y"), reason="idle")
-    rep = [b for p, b, t in sent if p.endswith("/gates/report")]
-    assert rep[-1]["jev_source"] == "none" and rep[-1]["keep"] is None and "jev_unavailable" in rep[-1]["error"]

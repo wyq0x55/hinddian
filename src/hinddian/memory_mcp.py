@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, Response
 
-from . import __version__, jev, jev_log
+from . import __version__, jev, jev_log, session_finalize
 from .config import get_settings
 
 router = APIRouter()
@@ -637,6 +637,15 @@ def api_should_recall(args: dict):
 def api_classify_turn(args: dict):
     r = jev.classify_turn(args.get("turn", "") or args.get("text", ""), _project_names(), str(args.get("cwd") or ""))
     return {"ok": r.ok, "value": r.value, "confidence": r.confidence, "source": r.source, "error": r.error}
+
+
+@router.post("/api/memory/finalize", dependencies=agent)
+def api_finalize(args: dict):
+    """Hooks POST a finalized session buffer; Jev runs here and the decision is logged for the dashboard."""
+    try:
+        return session_finalize.finalize(args, projects=_project_names, push=lambda pl: call_tool("push_draft", pl))
+    except session_finalize.FinalizeError as e:
+        raise HTTPException(422, str(e)) from e
 
 
 @router.post("/api/memory/gates/report", dependencies=agent)
