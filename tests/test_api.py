@@ -375,3 +375,71 @@ def test_jev_log_rotates(tmp_path, monkeypatch):
 
 def test_jev_backend_alias(client):
     assert client.get("/api/memory/jev-backend", headers=agent()).status_code == 200
+
+
+def _fin_body(**kw):
+    b = {"session_id": "sf1", "cwd": "/home/me/work/my-app/src", "repo": "my-app", "client_id": "mac-mini",
+         "finalize_reason": "idle", "turn_count": 2, "turns": [{"text": "用户: 部署前要备份\n助手: 好的 SECRETTURN"}]}
+    b.update(kw)
+    return b
+
+
+def test_server_finalize_runs_jev_pushes_and_logs(client, tmp_path, monkeypatch):
+    from hinddian import jev, memory_mcp, session_finalize
+    log = tmp_path / "jev.jsonl"
+    monkeypatch.setenv("HINDDIAN_JEV_LOG", str(log))
+    seen = {}
+
+    def classify(text, projects, cwd=""):
+        seen.update(text=text, cwd=cwd)
+        return jev.GateResult(True, {"keep": True, "type": "lesson", "title": "部署前备份", "lesson": ["先备份"],
+                                     "open_question": ["多久一次"]}, 0.9, "jev:local", {})
+
+    monkeypatch.setattr(session_finalize.jev, "classify_turn", classify)
+    pushed = []
+    monkeypatch.setattr(memory_mcp, "call_tool", lambda n, a: pushed.append((n, a)) or
+                        ({"projects": [{"name": "my-app"}]} if n == "routing_global" else {"path": "drafts/my-app/session-sf1.md"}))
+    url = "/api/memory/finalize"
+    assert client.post(url, json=_fin_body()).status_code == 401
+    assert client.post(url, json=_fin_body(), headers=dash()).status_code == 403
+    assert client.post(url, json={"turns": []}, headers=agent()).status_code == 422
+    assert client.post(url, json=_fin_body(turns=[{"text": "x" * 20000}] * 11), headers=agent()).status_code == 422
+    r = client.post(url, json=_fin_body(), headers=agent()).json()
+    assert r["outcome"] == "pushed" and r["retry"] is False and r["source"] == "jev:local"
+    name, pl = [p for p in pushed if p[0] == "push_draft"][0]
+    assert pl["project"] == "my-app" and pl["session_id"] == "sf1" and "- 先备份" in pl["body"] and "OPEN QUESTIONS" in pl["body"]
+    assert seen["cwd"] == "src" and "SECRETTURN" in seen["text"]
+    raw = log.read_text()
+    assert "SECRETTURN" not in raw and "部署前要备份" not in raw
+    d = client.get("/api/jev-decisions", headers=dash()).json()
+    it = d["items"][0]
+    assert it["host"] == "mac-mini" and it["pushed"] is True and it["outcome"] == "pushed" and it["keep"] is True
+
+
+def test_server_finalize_jev_down_writes_nothing_and_asks_retry(client, tmp_path, monkeypatch):
+    from hinddian import jev, memory_mcp, session_finalize
+    monkeypatch.setenv("HINDDIAN_JEV_LOG", str(tmp_path / "jev.jsonl"))
+    calls = []
+    monkeypatch.setattr(memory_mcp, "call_tool", lambda n, a: calls.append(n) or {"projects": []})
+    for res in (jev.GateResult(False, None, None, "none", None, "all endpoints failed"),
+                jev.GateResult(True, {"keep": True}, 0.9, "llm", {})):
+        monkeypatch.setattr(session_finalize.jev, "classify_turn", lambda *a, _r=res, **k: _r)
+        r = client.post("/api/memory/finalize", json=_fin_body(), headers=agent()).json()
+        assert r["pushed"] is False and r["source"] == "none"
+    assert "push_draft" not in calls
+    items = client.get("/api/jev-decisions", headers=dash()).json()["items"]
+    assert {i["outcome"] for i in items} == {"jev_unavailable", "llm_forbidden"}
+    monkeypatch.setattr(session_finalize.jev, "classify_turn",
+                        lambda *a, **k: jev.GateResult(True, {"keep": False}, 0.3, "jev:cloud", {}))
+    r = client.post("/api/memory/finalize", json=_fin_body(), headers=agent()).json()
+    assert r == {**r, "outcome": "keep_false", "retry": False, "keep": False}
+
+
+def test_server_pick_project():
+    from hinddian.session_finalize import pick_project
+    p = {"project": "", "repo": "", "cwd": ""}
+    assert pick_project({**p, "repo": "my-app-api"}, "x", ["my-app", "my-app-api"]) == "my-app-api"
+    assert pick_project({**p, "repo": "new-repo"}, "hinddian", ["hinddian"]) == "new-repo"
+    assert pick_project({**p, "cwd": "loose"}, "hinddian", ["hinddian"]) == "hinddian"
+    assert pick_project({**p, "project": "P"}, None, []) == "P"
+    assert pick_project(p, None, []) == "通用-未定"
