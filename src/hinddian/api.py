@@ -20,6 +20,7 @@ from . import __version__
 from . import classify_remote
 from . import jev_log
 from . import memory_mcp
+from . import oauth
 from .config import Settings, get_settings
 
 WEB_DIR = Path(__file__).resolve().parents[2] / "web"
@@ -32,6 +33,7 @@ async def _lifespan(_app: FastAPI):
 
 app = FastAPI(title="hinddian", version=__version__, description="hinddian memory dashboard", lifespan=_lifespan)
 app.include_router(memory_mcp.router)
+app.include_router(oauth.router)
 
 
 def _settings() -> Settings:

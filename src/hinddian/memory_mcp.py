@@ -501,17 +501,27 @@ def bearer(authorization: str | None) -> str:
 
 
 def require_agent(authorization: str | None = Header(default=None)) -> None:
+    """Static HINDDIAN_MCP_TOKEN (hooks, legacy clients) or an OAuth access token (oauth.py)."""
+    from . import oauth
+
     s = get_settings()
     token = s.hinddian_mcp_token
-    if not token:
+    if not token and not s.oauth_enabled:
         if s.hinddian_allow_no_auth:
             return
         raise HTTPException(503, "HINDDIAN_MCP_TOKEN not configured")
+    hdr = {"WWW-Authenticate": oauth.www_authenticate()} if s.oauth_enabled else None
     got = bearer(authorization)
     if not got:
-        raise HTTPException(401, "Bearer required")
-    if not hmac.compare_digest(got.encode(), token.encode()):
-        raise HTTPException(403, "invalid token")
+        raise HTTPException(401, "Bearer required", headers=hdr)
+    if token and hmac.compare_digest(got.encode(), token.encode()):
+        return
+    if oauth.verify_access_token(got):
+        return
+    if s.oauth_enabled:
+        # 401 (not 403) so MCP clients refresh / re-run the OAuth flow.
+        raise HTTPException(401, "invalid token", headers={"WWW-Authenticate": oauth.www_authenticate("invalid_token")})
+    raise HTTPException(403, "invalid token")
 
 
 # ------------------------------------------------------------------ JSON-RPC
