@@ -12,11 +12,19 @@
 
 	# Agent-only paths (hooks + MCP). Trailing-slash / health* variants included so
 	# clients that normalize URLs differently still match (unmatched → 404, never 410).
-	@agent path /hinddian/mcp /hinddian/mcp/* /hinddian/api/health /hinddian/api/health/* /hinddian/api/memory /hinddian/api/memory/*
+	@agent path /hinddian/mcp /hinddian/mcp/* /hinddian/api/health /hinddian/api/health/* /hinddian/api/memory /hinddian/api/memory/* /hinddian/oauth/* /hinddian/.well-known/*
 	handle @agent {
 		uri strip_prefix /hinddian
 		reverse_proxy 127.0.0.1:8787 {
 			# never let an agent-side request carry the dashboard credential
+			header_up -X-Hinddian-Dashboard
+		}
+	}
+	# MCP OAuth discovery (RFC 8414 / RFC 9728 put .well-known at the origin root,
+	# with the issuer/resource path appended, e.g. /.well-known/oauth-authorization-server/hinddian).
+	@wellknown path /.well-known/oauth-authorization-server* /.well-known/oauth-protected-resource* /.well-known/openid-configuration*
+	handle @wellknown {
+		reverse_proxy 127.0.0.1:8787 {
 			header_up -X-Hinddian-Dashboard
 		}
 	}

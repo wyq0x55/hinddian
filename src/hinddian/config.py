@@ -38,6 +38,21 @@ class Settings(BaseSettings):
     # Local development only: run without tokens.
     hinddian_allow_no_auth: bool = False
 
+    # ---- MCP OAuth (MCP auth spec 2025-06-18). Off unless public URL + GitHub app are set.
+    # Public base of the agent channel as clients see it, e.g. https://124.70.90.224:8444/hinddian
+    hinddian_public_url: str | None = None
+    # GitHub OAuth App used as upstream identity. Its callback URL must be
+    # {hinddian_public_url}/oauth/github/callback.
+    hinddian_gh_client_id: str | None = None
+    hinddian_gh_client_secret: str | None = None
+    # Comma-separated GitHub logins allowed to authorize MCP clients.
+    hinddian_gh_allowed_users: str = ""
+    # Proxy for GitHub egress (e.g. socks5://127.0.0.1:1088 on hosts that cannot reach github.com).
+    hinddian_gh_proxy: str | None = None
+    hinddian_oauth_db: Path = Path("data/oauth.sqlite3")
+    hinddian_oauth_access_ttl: int = 3600
+    hinddian_oauth_refresh_ttl: int = 60 * 60 * 24 * 30
+
 
     @field_validator("vault_root", mode="before")
     @classmethod
@@ -45,6 +60,19 @@ class Settings(BaseSettings):
         if v is None or v == "" or v == "None":
             return None
         return v
+
+    @property
+    def oauth_enabled(self) -> bool:
+        return bool(
+            self.hinddian_public_url
+            and self.hinddian_gh_client_id
+            and self.hinddian_gh_client_secret
+            and self.allowed_gh_users
+        )
+
+    @property
+    def allowed_gh_users(self) -> set[str]:
+        return {u.strip().lower() for u in self.hinddian_gh_allowed_users.split(",") if u.strip()}
 
     @property
     def vault_local(self) -> bool:
