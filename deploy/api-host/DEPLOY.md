@@ -154,7 +154,17 @@ rm -f /tmp/client.pem /tmp/client.key
 
 API 主机 `.env`：`CLASSIFY_SSH_HOST=vault-host`。  
 hinddian 经 SSH（ControlMaster 复用连接，`SSH_CONTROL_PATH`）调 `hinddian-batch` / `hinddian-memory-cli`（含 `search_notes` / `suggest_correction` / `decide_correction`）。
-vault 主机 上同步更新 `/opt/hinddian/src`（`note_format.py` 被 `hinddian-memory-cli` 与 `hinddian_batch.py` 共用）。
+
+vault 主机 同步代码后**必须**重跑安装脚本（刷新 `/usr/local/bin` 包装并对 `hinddian_batch.py` / `hinddian-memory-cli` 做 chmod；否则会出现 `hinddian-batch: Permission denied` / rc=126）：
+
+```bash
+# 在 vault 主机：与 API 主机同步同一份 checkout（git pull 或 rsync 到 /opt/hinddian）
+cd /opt/hinddian && git pull   # 或从本机 rsync 到 vault-host:/opt/hinddian/
+bash /opt/hinddian/classify/deploy/install-vault-host.sh
+hinddian-batch gate --json | head -c 200; echo
+```
+
+`note_format.py` 等 `src/hinddian` 被 `hinddian-memory-cli` 与 `hinddian_batch.py` 共用，一并随 checkout 更新。
 
 > 更省事的形态：hinddian API 直接跑在 vault 主机（设 `VAULT_ROOT`），vault 操作走本地，不再经 SSH。  
 vault 主机 安装见 `classify/README.md`。
