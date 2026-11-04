@@ -238,7 +238,8 @@ def test_recall_filters_and_dedupes(hooks):
     ]
     items = pr.normalize(results)
     assert [i["id"] for i in items] == ["a", "c"]
-    assert items[0]["snippet"] == "先跑门禁"
+    assert "snippet" not in items[0]
+    assert "先跑门禁" not in pr.render(items)
     assert [i["id"] for i in pr.pick_new("s1", items)] == ["a", "c"]
     assert pr.pick_new("s1", items) == []          # already injected this session
     assert [i["id"] for i in pr.pick_new("s2", items)] == ["a", "c"]
@@ -343,10 +344,104 @@ def test_recall_off_switch_and_failure_are_silent(hooks, monkeypatch, capsys):
 
 # ------------------------------------------------------------------ session start
 def test_routing_block_is_cache_stable(hooks):
+    import hashlib
+
     ss = hooks["session_start"]
     a = ss.routing_block(sorted(["b", "a"]), "a")
     assert a == ss.routing_block(["a", "b"], "a")
+    assert hashlib.sha256(a.encode()).hexdigest() == "92d26540062d9d51f4ae214cb420da0699f7e426a21c7459d77a87baddc34dc4"
     assert not any(ch.isdigit() for ch in a.replace("hinddian", ""))  # no counts / dates in the prefix
     assert ss.match_project("/home/me/work/my-app-api", ["my-app", "my-app-api"]) == "my-app-api"
 
 
+def test_recall_title_index_limits_and_score_sources(hooks):
+    pr = hooks["prompt_recall"]
+    rows = [{"id": str(i), "title": f"Title {i}\nextra", "type": "lesson", "date": "2026-01-01",
+             "score": 0.7, "practice": "SHOULD NOT INJECT"} for i in range(10)]
+    fresh = pr.pick_new("index", pr.normalize(rows, "hindsight"))
+    assert 5 <= len(fresh) <= 8
+    text = pr.render(fresh)
+    assert "SHOULD NOT INJECT" not in text and "Title 0 extra" in text
+    assert text.count("get_note") == 1
+    assert pr.pick_new("index", pr.normalize(rows, "hindsight"))[0]["id"] == "6"
+    assert pr.normalize([{**rows[0], "score": 0.4}], "hindsight") == []
+    assert pr.normalize([{**rows[0], "score": 0.4}], "local-fallback")
+    orphan = pr.normalize([{**rows[0], "resolvable": False}], "hindsight")[0]
+    assert not orphan["id"] and orphan["key"] == "0"
+
+
+def test_session_start_appends_recent_after_unchanged_prefix(hooks, monkeypatch, capsys):
+    import io
+
+    ss, sb = hooks["session_start"], hooks["session_buf"]
+    sb.append_turn(session_id="old", cwd="/work/my-app", turn_text="USER:\nask\n\nASSISTANT:\nClosing summary")
+    sb.mark_finalized("old", "pushed")
+    monkeypatch.setattr(ss.hookcfg, "spawn_finalize", lambda *a, **k: True)
+    calls = []
+    def req(method, path, body=None, timeout=0):
+        calls.append((path, timeout))
+        if path == "/api/memory/routing/global":
+            return {"projects": [{"name": "my-app"}]}
+        return [{"title": "Newest", "project": "my-app"}, {"title": "Old", "status": "obsolete"},
+                {"title": "Wrong project", "project": "other"}]
+    monkeypatch.setattr(ss.hookcfg, "req", req)
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({
+        "hook_event_name": "SessionStart", "session_id": "new", "cwd": "/work/my-app"})))
+    ss.main()
+    context = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+    prefix = ss.routing_block(["my-app"], "my-app")
+    assert context.startswith(prefix + "\n<hinddian_recent>")
+    assert "Newest" in context and "Closing summary" in context
+    assert "Wrong project" not in context and "- Old" not in context
+    assert "project=my-app" in calls[1][0]
+    assert calls[0][1] == 5 and 0 < calls[1][1] <= 2
+    assert sb.side_file("new", "project").read_text() == "my-app"
+
+
+def test_session_recent_cap_and_latest_project_closing(hooks, monkeypatch):
+    ss, sb = hooks["session_start"], hooks["session_buf"]
+    for sid, project, text, updated in [
+        ("old", "P", "old summary", 1), ("latest", "P", "Latest <private>secret</private> " + "x" * 3000, 2),
+        ("other", "Q", "other summary", 3), ("current", "P", "current summary", 4),
+    ]:
+        buf = sb.append_turn(session_id=sid, project_hint=project, turn_text="ASSISTANT:\n" + text)
+        buf["updated_at"] = updated
+        sb.save(buf)
+    sb.side_file("bad", "json").write_text("{")
+    sb.side_file("huge", "json").write_text("x" * 512001)
+    assert ss.last_closing_summary("current", "P", ["P", "Q"]).startswith("Latest [private]")
+    monkeypatch.setattr(ss, "RECENT_ITEMS", 20)
+    monkeypatch.setattr(ss.hookcfg, "req", lambda *a, **k: [{"title": "T" * 300}] * 20)
+    text = ss.recent_context("current", "P", ["P", "Q"], time.monotonic() + 5)
+    assert len(text) <= ss.RECENT_CHARS and text.endswith("</hinddian_recent>")
+    assert "secret" not in text and "Latest [private]" in text
+
+
+def test_session_recent_missing_sources_and_deadline(hooks, monkeypatch, capsys):
+    import io
+
+    ss = hooks["session_start"]
+    monkeypatch.setattr(ss.hookcfg, "spawn_finalize", lambda *a, **k: True)
+    def offline(*a, **k):
+        raise TimeoutError
+    monkeypatch.setattr(ss.hookcfg, "req", offline)
+    monkeypatch.setattr("sys.stdin", io.StringIO('{"session_id":"new","cwd":"/work/P"}'))
+    ss.main()
+    assert capsys.readouterr().out == ss.routing_block([], None) + "\n"
+    assert ss.recent_context("new", None, [], time.monotonic() + 5) == ""
+    assert ss.recent_context("new", "P", ["P"], time.monotonic() - 1) == ""
+    assert ss.recent_context("new", "P", ["P"], time.monotonic() + 5) == ""
+
+
+def test_session_closing_without_assistant_is_omitted(hooks):
+    ss, sb = hooks["session_start"], hooks["session_buf"]
+    sb.append_turn(session_id="old", project_hint="P", turn_text="USER:\nonly user text")
+    assert ss.last_closing_summary("new", "P", ["P"]) == ""
+
+
+def test_injected_recent_context_is_not_rebuffered(hooks):
+    import extract
+
+    text = "USER:\nask\n<hinddian_recent>\nold memory\n</hinddian_recent>\nASSISTANT:\nanswer"
+    out = extract.extract_turn_text(text)
+    assert "old memory" not in out and "answer" in out and "ask" in out

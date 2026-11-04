@@ -20,6 +20,7 @@ _ROLE_RE = re.compile(
 _JUNK_BLOCK = re.compile(
     r"(?is)(?:"
     r"<system(?:_reminder)?>.*?</system(?:_reminder)?>|"
+    r"<hinddian_(?:memory|recent|recall)>.*?</hinddian_(?:memory|recent|recall)>|"
     r"```(?:json)?\s*\{[^{}]{0,200}\"?(?:tools?|mcpServers|inputSchema|parameters)\"?.*?\n```|"
     r"(?:^|\n)(?:MCP|Tools?|Skills?|Routing|Route table|Hinddian-memory|Projects:)\s*:?[^\n]*(?:\n(?:[ \t]+|\-|\*).*)*|"
     r"(?:^|\n)(?:Gate should_recall|when_to_recall|PROJECT \w).*|"

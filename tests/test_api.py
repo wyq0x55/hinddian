@@ -151,7 +151,7 @@ def test_project_recall_includes_tips_and_one_row_per_note(client, monkeypatch):
         {"id": "f2", "document_id": "tip/t", "text": "t1", "metadata": {"type": "tip"}, "scores": {"reranker": 0.6}},
         {"id": "f3", "document_id": "proj/P/lesson/a", "text": "a2", "metadata": {"type": "lesson", "project": "P"}, "scores": {"reranker": 0.9}},
     ])
-    r = client.post("/api/memory/recall", json={"query": "部署", "project": "P"}, headers=agent()).json()
+    r = client.post("/api/memory/recall", json={"query": "部署", "project": "P", "format": "full"}, headers=agent()).json()
     assert seen[0]["tags"] == ["project:P", "type:tip"] and seen[0]["tags_match"] == "any_strict"
     assert [x["document_id"] for x in r["results"]] == ["proj/P/lesson/a", "tip/t"]
     first = r["results"][0]
@@ -231,7 +231,7 @@ def test_recall_drops_duplicate_fact_rows_via_by_note(client, monkeypatch):
          "metadata": {"type": "decision", "project": "P"}, "scores": {"final": 0.9}},
         {"id": "orphan-uuid", "text": "session-only fact", "metadata": {}, "scores": {"final": 0.7}},
     ])
-    r = client.post("/api/memory/recall", json={"query": "WinAMS", "project": "P", "type": "decision"},
+    r = client.post("/api/memory/recall", json={"query": "WinAMS", "project": "P", "type": "decision", "format": "full"},
                     headers=agent()).json()
     assert r["via"] == "hindsight"
     ids = [x["id"] for x in r["results"]]
@@ -240,6 +240,112 @@ def test_recall_drops_duplicate_fact_rows_via_by_note(client, monkeypatch):
     assert r["results"][0]["document_id"] == "proj/P/decision/winams"
     orphan = r["results"][1]
     assert orphan["note_id"] is None and orphan["resolvable"] is False
+
+
+def test_recall_index_and_full_local_fallback(client):
+    from hinddian import memory_mcp
+
+    note = N.upsert_note({"type": "lesson", "project": "P", "title": "部署门禁", "practice": "Run gate.sh"})
+    index = memory_mcp.call_tool("recall", {"query": "部署"})["results"]
+    assert index == [{"id": note["id"], "title": "部署门禁", "type": "lesson",
+                      "date": N.today(), "score": index[0]["score"]}]
+    assert index[0]["score"] > 0
+    full = memory_mcp.call_tool("recall", {"query": "部署", "format": "full"})["results"]
+    assert full[0]["practice"] == "Run gate.sh"
+    with pytest.raises(ValueError, match="format"):
+        memory_mcp.call_tool("recall", {"query": "部署", "format": "verbose"})
+
+
+def test_recall_index_merges_and_enriches_hindsight_notes(client, monkeypatch):
+    note = N.upsert_note({"type": "lesson", "project": "P", "title": "部署门禁"})
+    _mock_hindsight(monkeypatch, [
+        {"id": "f1", "document_id": note["id"], "text": "large body", "scores": {"reranker": 0.6}},
+        {"id": "f2", "document_id": note["id"], "text": "other body", "scores": {"reranker": 0.9}},
+        {"id": "orphan", "text": "orphan body", "scores": {"final": 0.8}},
+        {"id": "retired", "document_id": "old", "metadata": {"status": "superseded"}},
+    ])
+    result = client.post("/api/memory/recall", json={"query": "部署"}, headers=agent()).json()
+    assert result["results"] == [
+        {"id": note["id"], "title": "部署门禁", "type": "lesson", "date": N.today(), "score": 0.9},
+        {"id": "orphan", "title": "orphan", "type": "", "date": None, "score": 0.8, "resolvable": False},
+    ]
+
+
+def test_recall_index_survives_unavailable_vault(client, monkeypatch):
+    from hinddian import memory_mcp
+
+    _mock_hindsight(monkeypatch, [{"document_id": "note", "metadata": {
+        "title": "Title", "type": "lesson", "updated": "2026-10-01"}, "scores": {"final": 0.8}}])
+    monkeypatch.setattr(memory_mcp, "vault", lambda *a, **k: (_ for _ in ()).throw(OSError("offline")))
+    result = memory_mcp.call_tool("recall", {"query": "test"})
+    assert result["via"] == "hindsight"
+    assert result["results"][0] == {"id": "note", "title": "Title", "type": "lesson",
+                                    "date": "2026-10-01", "score": 0.8}
+
+
+def test_recall_index_filters_retired_notes_even_with_stale_index(client, monkeypatch):
+    note = N.upsert_note({"type": "lesson", "project": "P", "title": "Retired"})
+    N.upsert_note({"action": "obsolete", "id": note["id"]})
+    _mock_hindsight(monkeypatch, [{"document_id": note["id"], "metadata": {"status": "active"}}])
+    result = client.post("/api/memory/recall", json={"query": "Retired"}, headers=agent()).json()
+    assert result["via"] == "hindsight" and result["results"] == []
+
+
+def test_get_note_single_and_batch_via_mcp(client):
+    import json
+
+    note = N.upsert_note({"type": "lesson", "title": "One", "practice": "Detail"})
+    def call(ids):
+        result = rpc(client, "tools/call", {"name": "get_note", "arguments": {"id": ids}}).json()["result"]
+        assert not result["isError"]
+        return json.loads(result["content"][0]["text"])
+    assert call(note["id"])["practice"] == "Detail"
+    batch = call([note["id"], "missing", note["id"]])
+    assert batch[0] == batch[2] and batch[0]["practice"] == "Detail"
+    assert batch[1] == {"error": "not_found", "id": "missing"}
+    assert call("missing") == {"error": "not_found", "id": "missing"}
+    for ids in ([], [""], ["a"] * 21):
+        assert rpc(client, "tools/call", {"name": "get_note", "arguments": {"id": ids}}).json()["result"]["isError"]
+
+
+def test_timeline_and_recent_notes_agent_channel(client, monkeypatch):
+    import json
+
+    from hinddian import memory_mcp
+    ids = []
+    for title, date, project in [("Z oldest", "2026-01-01", "P"), ("M anchor", "2026-01-02", "P"),
+                                  ("A latest", "2026-01-03", "P"), ("Q neighbor", "2026-01-02", "Q")]:
+        monkeypatch.setattr(N, "today", lambda date=date: date)
+        ids.append(N.upsert_note({"type": "lesson", "project": project, "title": title,
+                                  "force_new": True})["id"])
+    recent = client.get("/api/memory/notes", params={"project": "P", "limit": 2}, headers=agent()).json()
+    assert [r["id"] for r in recent] == [ids[2], ids[1]]
+    assert client.get("/api/memory/notes", headers=dash()).status_code == 403
+    response = rpc(client, "tools/call", {"name": "timeline", "arguments": {
+        "anchor_id": ids[1], "before": 1, "after": 1}}).json()["result"]
+    result = json.loads(response["content"][0]["text"])
+    assert result["project"] == "P" and [r["id"] for r in result["results"]] == ids[:3]
+    assert all(set(row) == {"id", "title", "type", "date", "score"} for row in result["results"])
+    assert memory_mcp.call_tool("timeline", {"anchor_id": "missing"})["error"] == "not_found"
+    with pytest.raises(ValueError):
+        memory_mcp.call_tool("timeline", {"anchor_id": ids[1], "before": -1})
+
+
+def test_new_tools_use_one_ssh_call_each(client, monkeypatch):
+    from types import SimpleNamespace
+    from hinddian import memory_mcp
+
+    monkeypatch.setattr(memory_mcp, "get_settings", lambda: SimpleNamespace(vault_local=False))
+    calls = []
+    monkeypatch.setattr(memory_mcp, "_ssh_cli", lambda cmd, payload=None: calls.append((cmd, payload)) or [])
+    assert memory_mcp.call_tool("get_note", {"id": ["a", "b"]}) == []
+    memory_mcp.vault("timeline", anchor_id="a", before=0, after=2)
+    memory_mcp.call_tool("list_notes", {"project": "P", "order": "recent"})
+    assert calls == [
+        (["get_notes"], {"ids": ["a", "b"], "summary": False}),
+        (["timeline", "--id", "a", "--before", "0", "--after", "2"], None),
+        (["list_notes", "--limit=50", "--status=active", "--project", "P", "--order", "recent"], None),
+    ]
 
 
 def test_auto_verdict_merges_into_the_most_similar_note(client, monkeypatch):

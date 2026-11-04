@@ -140,11 +140,11 @@ def note(id: str) -> dict:
 
 @app.post("/api/recall", dependencies=dash)
 def recall(payload: dict = Body(...)) -> dict:
-    """The same recall the agent gets — lets you check what auto-recall would inject."""
+    """Use the same retrieval as the agent, retaining full snippets for the dashboard."""
     query = str(payload.get("query") or "").strip()
     if not query:
         raise HTTPException(400, "query required")
-    return memory_mcp.call_tool("recall", {"query": query[:500], "project": payload.get("project") or "", "budget": "low"})
+    return memory_mcp.call_tool("recall", {"query": query[:500], "project": payload.get("project") or "", "budget": "low", "format": "full"})
 
 
 @app.get("/api/gate", dependencies=dash)
