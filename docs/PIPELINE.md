@@ -5,7 +5,9 @@
 1. **开会话（session-start）**
    - Finalize 上一会话 / 空闲缓冲：Jev `keep` → 一次 `push_draft`（或丢弃）
    - 注入固定的记忆路由块（不含数量/日期，保证提示词缓存前缀稳定）
-   - 之后每条用户消息由 UserPromptSubmit hook 自动 recall，命中才附 ≤3 条短摘要（`HINDDIAN_AUTO_RECALL=0` 关闭）
+   - 路由块之后附最近 6 条项目 active 笔记标题（按 updated 降序），以及本地上一会话最终助手回复作为结语；总计 ≤2400 字符（约 800 tokens）
+   - `HINDDIAN_SESSION_RECENT_ITEMS` 可调标题数（0 关闭标题，最多 20）；无项目 / 无来源则省略。远程读取与路由共用 5s 预算，最近笔记请求最多 2s；本地扫描最多 200 个文件 / 50ms，缓冲仍按原规则清理
+   - 之后每条用户消息由 UserPromptSubmit hook 自动 recall，命中才附 ≤6 条标题索引，并提示 `get_note(id)` 取详情（`HINDDIAN_RECALL_MAX_ITEMS` 可调；`HINDDIAN_AUTO_RECALL=0` 关闭）
 
 2. **每回合结束（turn-end）**
    - 白名单：用户话 + 最终助手回复

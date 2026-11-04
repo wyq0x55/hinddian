@@ -155,7 +155,10 @@ def export_routing() -> dict:
 
 
 def get_note(note_id: str) -> dict | None:
-    notes = load_notes(include_inactive=True)
+    return _note_detail(load_notes(include_inactive=True), note_id)
+
+
+def _note_detail(notes: dict, note_id: str) -> dict | None:
     n = notes.get(note_id)
     if not n:
         return None
@@ -178,8 +181,14 @@ def get_note(note_id: str) -> dict | None:
     }
 
 
+def get_notes(ids: list[str], *, summary: bool = False) -> list[dict]:
+    notes = load_notes()
+    return [(_summary(notes[nid]) if summary else _note_detail(notes, nid))
+            if nid in notes else {"error": "not_found", "id": nid} for nid in ids]
+
+
 def _summary(n: dict) -> dict:
-    return {"id": n["id"], "title": n["title"], "type": n["type"], "project": n["project"], "status": n["status"], "path": n["path"]}
+    return {"id": n["id"], "title": n["title"], "type": n["type"], "project": n["project"], "status": n["status"], "path": n["path"], "updated": n["updated"]}
 
 
 def _match(n: dict, project: str | None, type_: str | None, status: str) -> bool:
@@ -190,10 +199,30 @@ def _match(n: dict, project: str | None, type_: str | None, status: str) -> bool
     return not (type_ and n["type"] != type_)
 
 
-def list_notes(*, project: str | None = None, type_: str | None = None, status: str = "active", limit: int = 50) -> list[dict]:
+def list_notes(*, project: str | None = None, type_: str | None = None, status: str = "active", limit: int = 50, order: str = "title") -> list[dict]:
     notes = load_notes(include_inactive=(status != "active"))
     out = sorted((_summary(n) for n in notes.values() if _match(n, project, type_, status)), key=lambda x: x["title"])
+    if order == "recent":
+        out.sort(key=lambda n: (n["updated"], n["id"]), reverse=True)
     return out[: max(0, int(limit))]
+
+
+def timeline(anchor_id: str, *, before: int = 3, after: int = 3) -> dict:
+    """Active neighbors by updated date within the anchor's exact project; include the anchor."""
+    notes = load_notes()
+    anchor = notes.get(anchor_id)
+    if not anchor:
+        return {"error": "not_found", "id": anchor_id}
+    if not anchor["updated"]:
+        return {"error": "undated", "id": anchor_id}
+    rows = sorted(
+        (n for n in notes.values() if n["project"] == anchor["project"] and n["updated"]
+         and (n["status"] == "active" or n["id"] == anchor_id)),
+        key=lambda n: (n["updated"], n["id"]),
+    )
+    pos = next(i for i, n in enumerate(rows) if n["id"] == anchor_id)
+    return {"anchor_id": anchor_id, "project": anchor["project"],
+            "results": [_summary(n) for n in rows[max(0, pos - before):pos + after + 1]]}
 
 
 def search_notes(query: str, *, project: str | None = None, type_: str | None = None, limit: int = 12) -> list[dict]:

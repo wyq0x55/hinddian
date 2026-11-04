@@ -1,6 +1,6 @@
 """hinddian-memory MCP (HTTP JSON-RPC) + REST helpers for host hooks — the *agent channel*.
 
-Tools: routing_global, routing_project, recall, get_note, upsert_note, suggest_correction, list_notes, push_draft
+Tools: routing_global, routing_project, recall, timeline, get_note, upsert_note, suggest_correction, list_notes, push_draft
 Transport: HTTP POST /mcp (JSON-RPC). REST under /api/memory/* for host lifecycle hooks.
 Auth: Bearer HINDDIAN_MCP_TOKEN. Nothing here can approve a correction — that lives on the
 dashboard channel (api.py, AUTH_TOKEN).
@@ -42,7 +42,7 @@ TOOLS = [
     },
     {
         "name": "recall",
-        "description": "Semantic recall of active atomic notes via Hindsight (local bigram search if Hindsight is down). Filters non-active by default. Prefer after routing_project says to read.",
+        "description": "Search active notes via Hindsight (local fallback). Returns a compact id/title/type/date/score index; use timeline for context and get_note for details. format=full preserves the legacy summaries.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -50,17 +50,31 @@ TOOLS = [
                 "project": {"type": "string"},
                 "type": {"type": "string", "description": "decision|lesson|tip"},
                 "budget": {"type": "string", "description": "low|mid|high", "default": "mid"},
+                "format": {"type": "string", "enum": ["index", "full"], "default": "index"},
             },
             "required": ["query"],
         },
     },
     {
         "name": "get_note",
-        "description": "Fetch one atomic note by id (full text + related links + status).",
+        "description": "Fetch full text, links and status. A string id returns one note; an array of up to 20 ids returns a list in request order, including not_found entries.",
         "inputSchema": {
             "type": "object",
-            "properties": {"id": {"type": "string"}},
+            "properties": {"id": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 20}]}},
             "required": ["id"],
+        },
+    },
+    {
+        "name": "timeline",
+        "description": "Active notes adjacent in updated-date order in the anchor's exact project, including the anchor (even if retired). Ties sort by id; undated neighbors are omitted.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "anchor_id": {"type": "string"},
+                "before": {"type": "integer", "minimum": 0, "maximum": 20, "default": 3},
+                "after": {"type": "integer", "minimum": 0, "maximum": 20, "default": 3},
+            },
+            "required": ["anchor_id"],
         },
     },
     {
@@ -73,6 +87,7 @@ TOOLS = [
                 "type": {"type": "string"},
                 "status": {"type": "string", "default": "active"},
                 "limit": {"type": "integer", "default": 50},
+                "order": {"type": "string", "enum": ["title", "recent"], "default": "title"},
             },
         },
     },
@@ -201,8 +216,12 @@ def vault(op: str, **kw: Any) -> Any:
             return n.routing_project(kw["project"])
         if op == "get_note":
             return n.get_note(kw["id"])
+        if op == "get_notes":
+            return n.get_notes(kw["ids"], summary=kw.get("summary", False))
+        if op == "timeline":
+            return n.timeline(kw["anchor_id"], before=kw["before"], after=kw["after"])
         if op == "list_notes":
-            return n.list_notes(project=kw.get("project"), type_=kw.get("type"), status=kw.get("status", "active"), limit=kw.get("limit", 50))
+            return n.list_notes(project=kw.get("project"), type_=kw.get("type"), status=kw.get("status", "active"), limit=kw.get("limit", 50), order=kw.get("order", "title"))
         if op == "search_notes":
             return n.search_notes(kw["query"], project=kw.get("project"), type_=kw.get("type"), limit=kw.get("limit", 12))
         if op == "upsert_note":
@@ -228,12 +247,19 @@ def vault(op: str, **kw: Any) -> Any:
         return _ssh_cli([op, "--project", kw["project"]])
     if op == "get_note":
         return _ssh_cli([op, "--id", kw["id"]])
+    if op == "get_notes":
+        return _ssh_cli([op], {"ids": kw["ids"], "summary": kw.get("summary", False)})
+    if op == "timeline":
+        return _ssh_cli([op, "--id", kw["anchor_id"], "--before", str(kw["before"]), "--after", str(kw["after"])])
     if op in ("list_notes", "search_notes"):
-        cmd = [op, f"--limit={int(kw.get('limit') or 50)}", f"--status={kw.get('status', 'active')}"]
+        limit = kw.get("limit") if kw.get("limit") is not None else 50
+        cmd = [op, f"--limit={int(limit)}", f"--status={kw.get('status', 'active')}"]
         if kw.get("project"):
             cmd += ["--project", kw["project"]]
         if kw.get("type"):
             cmd += ["--type", kw["type"]]
+        if op == "list_notes" and kw.get("order") == "recent":
+            cmd += ["--order", "recent"]
         if op == "search_notes":
             cmd += ["--query", kw["query"]]
         return _ssh_cli(cmd)
@@ -269,9 +295,24 @@ def call_tool(name: str, args: dict) -> Any:
         return vault("routing_project", project=proj)
 
     if name == "get_note":
+        if isinstance(args.get("id"), list):
+            ids = args["id"]
+            if not 1 <= len(ids) <= 20 or any(not isinstance(nid, str) or not nid.strip() for nid in ids):
+                raise ValueError("id must contain 1..20 nonempty string ids")
+            return vault("get_notes", ids=ids)
         nid = str(args.get("id") or "")
         n = vault("get_note", id=nid)
         return n or {"error": "not_found", "id": nid}
+
+    if name == "timeline":
+        anchor = str(args.get("anchor_id") or "")
+        before, after = int(args.get("before", 3)), int(args.get("after", 3))
+        if not anchor or not (0 <= before <= 20 and 0 <= after <= 20):
+            raise ValueError("anchor_id required; before/after must be 0..20")
+        data = vault("timeline", anchor_id=anchor, before=before, after=after)
+        if "results" in data:
+            data["results"] = _compact_index(data["results"])
+        return data
 
     if name == "list_notes":
         return vault(
@@ -279,7 +320,8 @@ def call_tool(name: str, args: dict) -> Any:
             project=args.get("project"),
             type=args.get("type"),
             status=args.get("status") or "active",
-            limit=int(args.get("limit") or 50),
+            limit=int(args.get("limit") if args.get("limit") is not None else 50),
+            order=args.get("order") or "title",
         )
 
     if name == "upsert_note":
@@ -385,6 +427,9 @@ def _recall(args: dict) -> dict:
     project = str(args.get("project") or "")
     typ = str(args.get("type") or "")
     budget = str(args.get("budget") or "mid")
+    fmt = args.get("format", "index")
+    if fmt not in ("index", "full"):
+        raise ValueError("format must be index or full")
     try:
         if project and not typ:
             # this project's notes OR global tips (tips carry no project tag, so AND would drop them);
@@ -395,11 +440,50 @@ def _recall(args: dict) -> dict:
             if project and typ != "tip":
                 tags.append(f"project:{project}")
         items = _hindsight_recall(query, budget, tags, match)
-        return {"ok": True, "via": "hindsight", "query": query, "results": _by_note(_filter_active(items, project, typ))}
+        results = _by_note(_filter_active(items, project, typ))
     except Exception as e:  # noqa: BLE001 — any Hindsight failure falls back to the vault itself
         err = f"{type(e).__name__}: {str(e)[:200]}"
-    results = vault("search_notes", query=query, project=project or None, type=typ or None, limit=12)
-    return {"ok": True, "via": "local-fallback", "error": err, "query": query, "results": results}
+        results = vault("search_notes", query=query, project=project or None, type=typ or None, limit=12)
+        return {"ok": True, "via": "local-fallback", "error": err, "query": query,
+                "results": results if fmt == "full" else _compact_index(results)}
+    if fmt == "index":
+        # One metadata-only vault read supplies dates absent from older Hindsight indexes.
+        # The index remains usable when the vault host is unavailable.
+        try:
+            ids = list(dict.fromkeys(r["document_id"] for r in results
+                                    if isinstance(r, dict) and r.get("document_id")))[:20]
+            metadata = {n["id"]: n for n in vault("get_notes", ids=ids, summary=True)
+                        if not n.get("error")} if ids else {}
+        except Exception:  # noqa: BLE001
+            metadata = {}
+        results = _compact_index(
+            [r for r in results if not isinstance(r, dict)
+             or metadata.get(r.get("document_id"), {}).get("status", "active") == "active"],
+            metadata,
+        )
+    return {"ok": True, "via": "hindsight", "query": query, "results": results}
+
+
+def _compact_index(items: Any, notes: dict | None = None) -> list[dict]:
+    out = []
+    for row in items if isinstance(items, list) else []:
+        if not isinstance(row, dict):
+            continue
+        nid = row.get("document_id") or row.get("id")
+        meta = {**(row.get("metadata") or {}), **((notes or {}).get(nid) or {})}
+        scores = row.get("scores") or {}
+        score = scores.get("reranker", scores.get("final", row.get("score")))
+        item = {
+            "id": nid,
+            "title": str(meta.get("title") or row.get("title") or row.get("context") or nid or "")[:160],
+            "type": meta.get("type") or row.get("type") or "",
+            "date": meta.get("updated") or row.get("updated") or row.get("date") or None,
+            "score": score,
+        }
+        if row.get("resolvable") is False:
+            item["resolvable"] = False
+        out.append(item)
+    return out
 
 
 def _row_text(it: dict) -> str:
@@ -609,6 +693,11 @@ def api_routing_project(project: str):
 @router.post("/api/memory/recall", dependencies=agent)
 def api_recall(args: dict):
     return call_tool("recall", args)
+
+
+@router.get("/api/memory/notes", dependencies=agent)
+def api_list_notes(project: str | None = None, limit: int = 6, order: str = "recent"):
+    return call_tool("list_notes", {"project": project, "limit": min(50, max(0, limit)), "order": order})
 
 
 @router.post("/api/memory/push_draft", dependencies=agent)

@@ -21,7 +21,7 @@ import hookcfg  # noqa: E402
 import session_buf  # noqa: E402
 
 MIN_CHARS = int(os.environ.get("HINDDIAN_RECALL_MIN_CHARS", "8"))
-MAX_ITEMS = int(os.environ.get("HINDDIAN_RECALL_MAX_ITEMS", "3"))
+MAX_ITEMS = int(os.environ.get("HINDDIAN_RECALL_MAX_ITEMS", "6"))
 MIN_SCORE = float(os.environ.get("HINDDIAN_RECALL_MIN_SCORE", "0.5"))  # Hindsight reranker (0..1)
 LOCAL_MIN_SCORE = 0.3  # server's local bigram fallback: share of query bigrams matched
 # Note types worth injecting (hub / project-state pages are not). Without metadata a Hindsight
@@ -70,6 +70,8 @@ def note_id(r: dict) -> str:
     A Hindsight row without `document_id` is fact-level: `get_note(<fact id>)` answers
     not_found, so it must not be advertised as resolvable.
     """
+    if r.get("resolvable") is False:
+        return ""
     if r.get("document_id"):
         return str(r["document_id"])
     if "scores" in r or "chunk_id" in r:  # Hindsight row: its `id` is a fact id, not a note id
@@ -77,8 +79,8 @@ def note_id(r: dict) -> str:
     return str(r.get("id") or "")  # local-fallback note row (search_notes)
 
 
-def normalize(results: list) -> list[dict]:
-    """Hindsight results and the local-fallback rows → [{key, id, title, snippet}], relevance-filtered.
+def normalize(results: list, via: str = "") -> list[dict]:
+    """Compact indexes, older Hindsight results and local rows → title-only entries.
 
     `key` identifies the row for the this-session de-dupe (fact id or note id); `id` is the note
     id, or "" for fact-level rows the agent cannot fetch."""
@@ -93,14 +95,14 @@ def normalize(results: list) -> list[dict]:
         rel = scores.get("reranker", scores.get("final"))
         if rel is not None and float(rel) < MIN_SCORE:
             continue
-        score = r.get("score")  # local-fallback rows only; Hindsight rows may send a null one
-        if isinstance(score, (int, float)) and not isinstance(score, bool) and float(score) < LOCAL_MIN_SCORE:
+        score = r.get("score")
+        threshold = MIN_SCORE if via == "hindsight" else LOCAL_MIN_SCORE
+        if isinstance(score, (int, float)) and not isinstance(score, bool) and float(score) < threshold:
             continue
         nid = note_id(r)
         title = meta.get("title") or r.get("title") or r.get("context") or _snippet(r.get("text", ""), 30)
-        body = r.get("text") or (r.get("practice") or "") + " " + (r.get("scene") or "")
         key = nid or str(r.get("id") or "")
-        out.append({"key": key, "id": nid, "title": str(title), "snippet": _snippet(body)})
+        out.append({"key": key, "id": nid, "title": re.sub(r"\s+", " ", str(title)).strip()[:160]})
     return out
 
 
@@ -136,7 +138,7 @@ def render(items: list[dict]) -> str:
         # printing an id that get_note would answer with not_found.
         head = f"[{i['id']}] " if i["id"] else ""
         tail = "" if i["id"] else "（Hindsight 事实条目，无笔记全文）"
-        lines.append(f"- {head}{i['title']}{tail}" + (f" — {i['snippet']}" if i["snippet"] else ""))
+        lines.append(f"- {head}{i['title']}{tail}")
     if any(i["id"] for i in items):
         lines.append("需要全文用 get_note(id)。")
     lines.append("</hinddian_recall>")
@@ -158,7 +160,7 @@ def main() -> None:
     if not worth_recalling(query):  # nothing left but a paste
         return
     sid = session_buf.stable_session_id(raw.get("session_id"), raw.get("cwd") or "", "new")
-    body = {"query": query, "budget": "low"}
+    body = {"query": query, "budget": "low", "format": "index"}
     project = session_project(sid)
     if project:  # this project's notes + global tips, not every project's
         body["project"] = project
@@ -166,7 +168,7 @@ def main() -> None:
         r = hookcfg.req("POST", "/api/memory/recall", body, timeout=TIMEOUT)
     except Exception:  # noqa: BLE001 — never block or fail the user's turn
         return
-    items = pick_new(sid, normalize(r.get("results") if isinstance(r, dict) else []))
+    items = pick_new(sid, normalize(r.get("results"), r.get("via", ""))) if isinstance(r, dict) else []
     if items:
         hookcfg.emit_context("UserPromptSubmit", render(items), raw)
 

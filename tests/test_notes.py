@@ -42,6 +42,29 @@ def test_id_and_path_collisions_get_suffix(vault):
     assert len(N.list_notes(project="P")) == 2
 
 
+def test_timeline_dates_ties_retired_anchor_and_project_scope(vault, monkeypatch):
+    ids = []
+    for title, date, project in [
+        ("First", "2026-01-01", "P"), ("Anchor", "2026-01-02", "P"),
+        ("Same day", "2026-01-02", "P"), ("Last", "2026-01-03", "P"),
+        ("Elsewhere", "2026-01-02", "Q"),
+    ]:
+        monkeypatch.setattr(N, "today", lambda date=date: date)
+        ids.append(N.upsert_note({"type": "lesson", "project": project, "title": title})["id"])
+    initial = N.timeline(ids[1], before=20, after=20)["results"]
+    assert [r["id"] for r in initial] == sorted(ids[:4], key=lambda nid: (N.get_note(nid)["updated"], nid))
+    # Retired anchors can still explain history; retired neighbors do not appear.
+    N.upsert_note({"action": "obsolete", "id": ids[1]})
+    N.upsert_note({"action": "obsolete", "id": ids[2]})
+    path = vault / (N.get_note(ids[1])["path"] + ".md")
+    rows = N.timeline(ids[1], before=20, after=20)["results"]
+    assert {r["id"] for r in rows} == {ids[0], ids[1], ids[3]}
+    assert rows == sorted(rows, key=lambda r: (r["updated"], r["id"]))
+    assert N.timeline(ids[1], before=0, after=0)["results"][0]["id"] == ids[1]
+    path.write_text(path.read_text().replace("updated: 2026-01-02", "updated: "))
+    assert N.timeline(ids[1]) == {"error": "undated", "id": ids[1]}
+
+
 def test_chinese_titles_get_distinct_ids(vault):
     a = _lesson("部署前先跑门禁")
     b = _lesson("日志轮转")

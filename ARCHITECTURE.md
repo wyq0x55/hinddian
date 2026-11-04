@@ -10,7 +10,8 @@
 Agent 会话
   ├─ session-start：finalize 上一会话缓冲 → Jev(keep) → 一次 push_draft
   │                 注入固定的记忆路由块（规则 + 项目名；逐字节稳定，不破坏提示词缓存）
-  ├─ user-prompt：按本条消息自动 recall，命中的 ≤3 条短摘要附在该消息末尾（去重、3s 超时、短消息跳过）
+  │                 随后附当前项目最近 6 条 active 笔记标题 + 本地上一会话结语（合计 ≤2400 字符）
+  ├─ user-prompt：按本条消息自动 recall，命中的 ≤6 条标题索引附在该消息末尾（去重、3s 超时、短消息跳过）
   └─ turn-end：白名单抽取（用户 + 最终回复）→ 本机会话缓冲（不远程写）
                        ↓（空闲 ~30min / 换项目 也会 finalize）
               /var/lib/hinddian/drafts/<project>/session-*.md
@@ -65,8 +66,9 @@ Agent 会话
 | 工具 | 作用 |
 |------|------|
 | `routing_global` / `routing_project` | 路由表 |
-| `recall` | 检索（默认过滤非 active）；经 Hindsight，失败可本地笔记兜底 |
-| `get_note` / `list_notes` | 读笔记 |
+| `recall` | 默认返回 id/title/type/date/score 索引；`format="full"` 保留原摘要；经 Hindsight，失败可本地笔记兜底 |
+| `timeline` | 围绕 anchor_id 返回同项目按 updated 排序的相邻 active 笔记索引 |
+| `get_note` / `list_notes` | 读笔记；get_note 的 id 可为字符串或最多 20 个 id 的数组 |
 | `upsert_note` | 门控四态：add / update / supersede / noop |
 | `suggest_correction` | 入仪表盘「Agent 修正」队列 |
 | `push_draft` | **仅 hooks** 会话 finalize 推草稿；Agent 纠正勿用 |

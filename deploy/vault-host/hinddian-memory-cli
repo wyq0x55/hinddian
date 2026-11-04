@@ -32,7 +32,7 @@ def _payload(arg: str | None) -> dict:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=[
-        "routing_global", "routing_project", "get_note", "list_notes", "search_notes",
+        "routing_global", "routing_project", "get_note", "get_notes", "timeline", "list_notes", "search_notes",
         "upsert_note", "push_draft", "export_routing",
         "suggest_correction", "list_corrections", "decide_correction",
         "list_drafts", "get_draft",
@@ -42,6 +42,9 @@ def main():
     ap.add_argument("--type")
     ap.add_argument("--status", default="active")
     ap.add_argument("--limit", type=int, default=50)
+    ap.add_argument("--order", choices=["title", "recent"], default="title")
+    ap.add_argument("--before", type=int, default=3)
+    ap.add_argument("--after", type=int, default=3)
     ap.add_argument("--json", dest="payload", default=None, help="JSON payload (or pass via stdin)")
     ap.add_argument("--approve", action="store_true")
     ap.add_argument("--reject", action="store_true")
@@ -54,8 +57,18 @@ def main():
         out = notes.routing_project(a.project or "")
     elif a.cmd == "get_note":
         out = notes.get_note(a.id or "")
+    elif a.cmd == "get_notes":
+        payload = _payload(a.payload)
+        ids = payload.get("ids") or []
+        if not 1 <= len(ids) <= 20 or any(not isinstance(nid, str) or not nid.strip() for nid in ids):
+            ap.error("ids must contain 1..20 nonempty string ids")
+        out = notes.get_notes(ids, summary=bool(payload.get("summary")))
+    elif a.cmd == "timeline":
+        if not a.id or not (0 <= a.before <= 20 and 0 <= a.after <= 20):
+            ap.error("--id required; --before/--after must be 0..20")
+        out = notes.timeline(a.id, before=a.before, after=a.after)
     elif a.cmd == "list_notes":
-        out = notes.list_notes(project=a.project, type_=a.type, status=a.status, limit=a.limit)
+        out = notes.list_notes(project=a.project, type_=a.type, status=a.status, limit=a.limit, order=a.order)
     elif a.cmd == "search_notes":
         out = notes.search_notes(a.query, project=a.project, type_=a.type, limit=a.limit)
     elif a.cmd == "upsert_note":

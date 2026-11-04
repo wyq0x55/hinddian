@@ -24,9 +24,18 @@ Hindsight bank（`HINDSIGHT_BANK`，默认 `hinddian`） 仍由 API 主机 **`hi
 
 `recall` 的行为：
 
-- 每条笔记只返回一行（Hindsight 按事实召回，同一笔记的多条事实合并，`facts` 为命中数，分数取最高）。
+- 默认返回紧凑索引：`id, title, type, date, score`；不含正文。Hindsight 同一笔记多条事实合并，分数取最高。日期来自 vault 的 `updated`（一次批量元数据读取，最多 20 条）；vault 不可用时尽力取索引日期，缺失为 `null`。
+- `recall(query, project, format="full")` 保留原摘要格式（Hindsight 的 `text/metadata/scores/facts` 或本地的 `scene/practice/score`）。仪表盘继续使用此格式显示摘要。
+- 未关联笔记的 Hindsight 事实保留 `resolvable: false`，其 id 不能传给 `get_note`。
 - 带 `project` 不带 `type`：返回该项目笔记 **+ 全局技巧**（`tags_match: any_strict`）；带 `type` 时按类型严格过滤。
-- 插件的自动召回会带上会话开始时从 cwd 匹配到的项目。
+- 插件的自动召回会带上会话开始时从 cwd 匹配到的项目，默认附最多 6 条标题（不附摘要）。
+
+逐层读取：`recall` 找相关标题 → `timeline(anchor_id, before=3, after=3)` 看同项目时间上下文 → `get_note(id)` 取全文。
+`timeline` 按 `updated` 升序、同日按 id 排序；前后各 0–20 条 active 邻居，并包含锚点（锚点可已退役）。
+无锚点返回 `not_found`；锚点无日期返回 `undated`，无日期的邻居省略。
+`get_note(id="…")` 保持单对象返回；`get_note(id=["…", "…"])` 一次取最多 20 条，按请求顺序返回数组，缺失项为 `{error: "not_found", id}`。
+`list_notes(order="recent")` 按 `updated` 降序；默认仍按标题排序。hooks 的 `GET /api/memory/notes?project=…&limit=6&order=recent` 使用同一 Agent 鉴权。
+使用 SSH vault 的安装需要同时更新 `hinddian-memory-cli`；旧客户端仍可单条读取及使用 `format="full"`。
 
 ## Host hooks
 
