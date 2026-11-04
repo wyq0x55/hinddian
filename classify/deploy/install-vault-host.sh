@@ -18,6 +18,9 @@ chmod 755 "$BATCH_PY" "$CLI_PY" "$REPO/classify/deploy/install-vault-host.sh"
 
 install_py_wrapper() {
   local dest="$1" target="$2"
+  # Older installs left $dest as a symlink to $target; writing through it would replace the
+  # Python script itself with this wrapper. Remove the link first.
+  rm -f "$dest"
   cat >"$dest" <<EOF
 #!/bin/bash
 exec python3 "$target" "\$@"
