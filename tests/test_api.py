@@ -261,13 +261,13 @@ def test_recall_index_merges_and_enriches_hindsight_notes(client, monkeypatch):
     _mock_hindsight(monkeypatch, [
         {"id": "f1", "document_id": note["id"], "text": "large body", "scores": {"reranker": 0.6}},
         {"id": "f2", "document_id": note["id"], "text": "other body", "scores": {"reranker": 0.9}},
-        {"id": "orphan", "text": "orphan body", "scores": {"final": 0.8}},
+        {"id": "orphan", "text": "orphan  body", "scores": {"reranker": None, "final": 0.8}},
         {"id": "retired", "document_id": "old", "metadata": {"status": "superseded"}},
     ])
     result = client.post("/api/memory/recall", json={"query": "部署"}, headers=agent()).json()
     assert result["results"] == [
         {"id": note["id"], "title": "部署门禁", "type": "lesson", "date": N.today(), "score": 0.9},
-        {"id": "orphan", "title": "orphan", "type": "", "date": None, "score": 0.8, "resolvable": False},
+        {"id": "orphan", "title": "orphan body", "type": "", "date": None, "score": 0.8, "resolvable": False},
     ]
 
 

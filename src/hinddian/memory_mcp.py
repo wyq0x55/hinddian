@@ -472,10 +472,13 @@ def _compact_index(items: Any, notes: dict | None = None) -> list[dict]:
         nid = row.get("document_id") or row.get("id")
         meta = {**(row.get("metadata") or {}), **((notes or {}).get(nid) or {})}
         scores = row.get("scores") or {}
-        score = scores.get("reranker", scores.get("final", row.get("score")))
+        # Hindsight sends "reranker": null when it skipped reranking; fall through to the next score
+        score = next((v for v in (scores.get("reranker"), scores.get("final"), row.get("score")) if v is not None), None)
+        # Fact-level rows have no title; their text is the only readable label
+        text = " ".join(_row_text(row).split())[:80]
         item = {
             "id": nid,
-            "title": str(meta.get("title") or row.get("title") or row.get("context") or nid or "")[:160],
+            "title": str(meta.get("title") or row.get("title") or row.get("context") or text or nid or "")[:160],
             "type": meta.get("type") or row.get("type") or "",
             "date": meta.get("updated") or row.get("updated") or row.get("date") or None,
             "score": score,

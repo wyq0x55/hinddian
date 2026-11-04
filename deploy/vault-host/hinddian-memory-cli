@@ -10,7 +10,7 @@ from pathlib import Path
 
 # Prefer /opt/hinddian/src over classify copy
 _paths = ["/opt/hinddian/src", str(Path(__file__).resolve().parents[2] / "src"), "/opt/hinddian-classify/src"]
-for _p in _paths:
+for _p in reversed(_paths):  # insert(0) puts the last one first, so go in reverse
     if _p not in sys.path and Path(_p).is_dir():
         sys.path.insert(0, _p)
 
