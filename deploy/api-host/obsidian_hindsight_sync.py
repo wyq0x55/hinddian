@@ -3,7 +3,7 @@
 
 Pulls the atomic-note export from the vault host (`ssh vault-host hinddian-batch export-notes --json`), then:
   new / changed active note  -> retain (document_id = frontmatter id, upsert)
-  deleted or superseded note -> DELETE document
+  deleted or non-active note -> DELETE document
 State: /var/lib/hinddian/hindsight-sync.json ; status for dashboard: /var/lib/hinddian/hindsight-sync-status.json
 Secrets are read from /opt/hindsight/secrets.env at runtime and never printed.
 """
@@ -58,20 +58,25 @@ def main():
     todo = [n for i, n in want.items() if state.get(i) != n["sha"]][:MAX_RETAIN]
     gone = [i for i in state if i not in want]
     stats = {"retained": 0, "forgotten": 0, "errors": [], "notes": len(want)}
+    if not dry:
+        STATE.parent.mkdir(parents=True, exist_ok=True)
     def status(running=True):
         synced = sum(1 for i, n in want.items() if state.get(i) == n["sha"])
         STATUS.write_text(json.dumps({"at": dt.datetime.now().astimezone().isoformat(timespec="seconds"), "running": running,
                                       "synced": synced, "pending": len(want) - synced, **stats}, ensure_ascii=False))
     if not dry: status()
+    # Retirements/deletions must not wait behind slow retains (each may take minutes).
+    for i in gone:
+        if dry: print("forget", i); continue
+        try: forget(i); state.pop(i, None); stats["forgotten"] += 1
+        except Exception as e: stats["errors"].append(f"forget {i}: {str(e)[:120]}")
+    if not dry:
+        STATE.write_text(json.dumps(state, ensure_ascii=False, indent=1)); status()
     for n in todo:
         if dry: print("retain", n["id"]); continue
         try: retain(n); state[n["id"]] = n["sha"]; stats["retained"] += 1
         except Exception as e: stats["errors"].append(f"{n['id']}: {str(e)[:120]}")
         STATE.write_text(json.dumps(state, ensure_ascii=False, indent=1)); status()
-    for i in gone:
-        if dry: print("forget", i); continue
-        try: forget(i); state.pop(i, None); stats["forgotten"] += 1
-        except Exception as e: stats["errors"].append(f"forget {i}: {str(e)[:120]}")
     if not dry:
         STATE.parent.mkdir(parents=True, exist_ok=True)
         STATE.write_text(json.dumps(state, ensure_ascii=False, indent=1))

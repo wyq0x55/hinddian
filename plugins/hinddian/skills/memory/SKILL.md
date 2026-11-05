@@ -36,11 +36,13 @@ Tools may be deferred: if a hinddian tool "doesn't exist", load it with ToolSear
 Sessions are turned into drafts automatically by **hooks** (`push_draft` → batch distill). Agents must
 **not** call `push_draft` by hand — it is not a review queue and empty distill ops leave no notes.
 
-Write with gated tools when the user asks to remember/correct **or** you discover a wrong/outdated note:
+Write directly to Obsidian when the user asks to remember/correct **or** you discover a wrong/outdated note:
 
 | Kind | Tool |
 |------|------|
 | tip / preference / lesson | `upsert_note` (add or update; `auto_verdict: true` lets Jev pick add/update/supersede) |
-| anything that creates, changes, supersedes or retires a **decision** | `suggest_correction` — waits in dashboard 「Agent 修正」; no flag bypasses this |
+| decision (add/update/supersede/obsolete) | `upsert_note` or `suggest_correction` — writes directly, no approval needed |
+
+Use a proposition as title; fill project (except tips), scene, practice and reason. Updates may reuse existing fields. Obsidian is the human management surface; dashboard review is optional. Read routing_project for grouped titles/ids/updated, then get_note only for relevant full notes.
 
 Never hard-delete (use `supersede` / `obsolete`). Never write secrets. Never `push_draft` for corrections.

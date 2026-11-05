@@ -153,6 +153,7 @@ PROMPT = """你是用户的笔记库维护员。任务：把一批会话提炼�
 - 只保留可长期复用的知识（工程约定=decision、踩坑经验=lesson、跨项目通用的 agent 使用技巧=tip）。一次性排障、某个 issue 的进度、文件行号、寒暄、子 agent 执行流水一律丢弃。
 - 草稿内容与已有笔记同主题 → op=update，给出该笔记 id 和**合并后的完整**场景/做法/理由（保留旧要点，补充新要点，删除被推翻的说法）。
 - 真正的新主题（最好 ≥2 份草稿出现）→ op=create，slug 用英文小写连字符、描述性。
+- 标题即命题，明确表达决定或经验；每条笔记填齐场景/做法/理由，不写成无分段的文本堆，不编造缺失事实。
 - 新结论推翻了旧笔记 → op=create 新笔记并在 supersedes 填旧 id。
 - related 填相关笔记的 id（已有 id 或本批新建的 "new:<slug>"）。
 - 宁少勿滥：本批最多 {maxops} 个 op；没有值得记的就返回空 ops。
@@ -258,7 +259,7 @@ def _apply(project, files, data, idx, dry, review_decisions=False):
         olds = [o for o in op.get("supersedes", []) if o in notes and o != nid]
         if review_decisions and (typ == "decision" or notes.get(nid, {}).get("type") == "decision"
                                  or any(notes[o]["type"] == "decision" for o in olds)):
-            # incremental runs are unattended: decision changes wait in the dashboard queue
+            # Optional review explicitly requested by this caller.
             q = _queue_decision(project, nid, typ, op, srcs, rel, olds, notes, len(files), dry)
             result.append({"action": "queued", "id": nid, "title": op.get("title") or notes.get(nid, {}).get("title", ""), "suggestion_id": q})
             continue
@@ -343,9 +344,9 @@ def cmd_run(force_below: bool = False):
             if p["state"] in ("incremental", "auto-tips") and p["drafts"]:
                 # tips: wait for a handful so the model sees >1 session (unless force timer)
                 if p["state"] == "auto-tips" and p["drafts"] < 5 and not force_below: continue
-                run_project(p["project"], RUN_MAX_BATCHES, review_decisions=True)
+                run_project(p["project"], RUN_MAX_BATCHES)
             elif force_below and p["state"] == "incremental" and p["drafts"]:
-                run_project(p["project"], RUN_MAX_BATCHES, review_decisions=True)
+                run_project(p["project"], RUN_MAX_BATCHES)
 
 def cmd_approve(project, now_=False):
     g = load_gate(); g.setdefault(project, {}).update(approved=True, approved_at=now()); save_gate(g)

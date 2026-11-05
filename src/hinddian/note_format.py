@@ -249,11 +249,13 @@ def split_body(body: str) -> tuple[str | None, list[str], list[tuple[str, str]]]
     return title, pre, sections
 
 
-def parse_note(p: pathlib.Path, vault: pathlib.Path) -> dict | None:
-    try:
-        t = p.read_text(encoding="utf-8", errors="ignore")
-    except OSError:
-        return None
+def parse_note(p: pathlib.Path, vault: pathlib.Path, *, text: str | None = None) -> dict | None:
+    if text is None:
+        try:
+            text = p.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            return None
+    t = text
     parsed = parse_frontmatter(t)
     if not parsed:
         return None
@@ -440,10 +442,14 @@ def write_note_file(vault: pathlib.Path, rel: str, text: str, *, owner: str | No
 
 
 class NoteCache:
-    """Parse each note file once; re-parse only when its (mtime, size) changes."""
+    """Read vault files every scan; cache parsing by content fingerprint.
+
+    mtime/size alone miss same-size edits on coarse filesystems or sync clients
+    that preserve timestamps. The content is always authoritative.
+    """
 
     def __init__(self) -> None:
-        self._c: dict[pathlib.Path, tuple[tuple[int, int], dict | None]] = {}
+        self._c: dict[pathlib.Path, tuple[bytes, dict | None]] = {}
         self._lock = threading.Lock()
 
     def load(self, vault: pathlib.Path) -> dict[str, dict]:
@@ -456,15 +462,15 @@ class NoteCache:
                 if any(x in p.parts for x in SKIP_DIRS):
                     continue
                 try:
-                    st = p.stat()
+                    text = p.read_text(encoding="utf-8", errors="ignore")
                 except OSError:
                     continue
-                key = (st.st_mtime_ns, st.st_size)
+                key = hashlib.sha256(text.encode("utf-8")).digest()
                 hit = self._c.get(p)
                 if hit and hit[0] == key:
                     n = hit[1]
                 else:
-                    n = parse_note(p, vault)
+                    n = parse_note(p, vault, text=text)
                     self._c[p] = (key, n)
                 seen.add(p)
                 if n:

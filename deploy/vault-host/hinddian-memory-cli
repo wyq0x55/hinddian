@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Vault-host CLI for hinddian-memory vault ops (called via SSH from the API host).
 
-upsert_note here is the *agent* path (gated). decide_correction is only invoked by the
-dashboard endpoints on the API-host side and is the one trusted write.
+upsert_note / suggest_correction write all types directly. decide_correction is only
+invoked by dashboard endpoints for explicitly queued / legacy pending items.
 """
 from __future__ import annotations
 import argparse, json, os, sys
@@ -74,9 +74,7 @@ def main():
     elif a.cmd == "upsert_note":
         out = notes.upsert_note(_payload(a.payload))
     elif a.cmd == "suggest_correction":
-        pl = _payload(a.payload)
-        pl["mode"] = "suggest"
-        out = notes.enqueue_correction(pl)
+        out = notes.suggest_correction(_payload(a.payload))
     elif a.cmd == "list_corrections":
         out = notes.list_corrections(status=a.status or "pending", limit=a.limit)
     elif a.cmd == "decide_correction":

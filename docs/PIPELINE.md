@@ -24,8 +24,7 @@
 
 5. **蒸馏 / 批处理（vault 主机）**
    - 新项目：满阈值（默认 20 会话草稿）+ 仪表盘批准
-   - 已批准：增量自动；技巧可自动。**增量运行里涉及决策的改动**（新建 / 改写 / 取代决策）不直接写，
-     进仪表盘「Agent 修正」（标「批处理增量」）等你批准；经验、技巧照旧自动写。首次批量（你点「开始」）可直接写决策
+   - 已批准：增量自动；技巧可自动。增量运行里的决策、经验、技巧均直接写入 Obsidian。显式选择 `review_decisions=True` 的调用仍可入可选审阅队列；默认不排队
    - 产出原子笔记（add/update/supersede）；新建遇到同 id 自动加后缀，不会覆盖已有笔记
 
 6. **索引**
@@ -36,7 +35,7 @@
 
 ## 显式旁路
 
-- `upsert_note`（门控）或 `suggest_correction` → 仪表盘「Agent 修正」（用户纠正或 Agent 自发现都走这里；**不要**用手调 `push_draft` 代替）
+- `upsert_note` 或 `suggest_correction` → 直接写 Obsidian（含 decision；仪表盘审阅仅可选/旧队列兼容，**不要**用手调 `push_draft` 代替）
 - `upsert_note` 新增时若已有相近笔记（同类型、同项目，标题/做法 bigram 相似度 ≥ `HINDDIAN_DEDUPE`，默认 0.40），
   返回 `similar_exists` + `candidates`，由 Agent 改用 `update` 合并，确是新主题再带 `force_new: true`
 - Obsidian 仍为 SoT；Hindsight 跟同步

@@ -6,11 +6,11 @@
 
 | 名 | URL | 用途 |
 |----|-----|------|
-| **`hinddian-memory`** | `https://<api-host>:8444/hinddian/mcp`（Bearer `HINDDIAN_MCP_TOKEN`） | Agent **唯一**记忆入口：路由 / recall / 门控写入 / push_draft |
+| **`hinddian-memory`** | `https://<api-host>:8444/hinddian/mcp`（Bearer `HINDDIAN_MCP_TOKEN`） | Agent **唯一**记忆入口：路由 / recall / 直接写入 / push_draft |
 
 Header：`Authorization: Bearer <HINDDIAN_MCP_TOKEN>`（常与 Hindsight tenant key 同源；只放 secrets，勿进笔记）。
 
-写入分工：记住/纠正用 `upsert_note`（tip/preference/lesson）或 `suggest_correction`（decision）；**不要**用手调 `push_draft` 代替纠正——草稿只进批处理蒸馏，不进「Agent 修正」队列，空 ops 时面板上看不到改动。
+写入：记住/纠正用 `upsert_note` 或兼容名 `suggest_correction`，所有类型（包括 decision）的 add/update/supersede/obsolete 均直写 Obsidian，不进入 pending 队列。仪表盘审批是可选审阅/旧队列兼容功能；**不要**用手调 `push_draft` 代替纠正——草稿只进批处理蒸馏，不进「Agent 修正」队列，空 ops 时面板上看不到改动。
 
 ## 禁止 / 已移除
 
@@ -24,8 +24,8 @@ Hindsight bank（`HINDSIGHT_BANK`，默认 `hinddian`） 仍由 API 主机 **`hi
 
 `recall` 的行为：
 
-- 默认返回紧凑索引：`id, title, type, date, score`；不含正文。Hindsight 同一笔记多条事实合并，分数取最高。日期来自 vault 的 `updated`（一次批量元数据读取，最多 20 条）；vault 不可用时尽力取索引日期，缺失为 `null`。
-- `recall(query, project, format="full")` 保留原摘要格式（Hindsight 的 `text/metadata/scores/facts` 或本地的 `scene/practice/score`）。仪表盘继续使用此格式显示摘要。
+- 默认返回紧凑索引：`id, title, type, date, score`；不含正文。Hindsight 同一笔记多条事实合并，分数取最高。日期来自 vault 的 `updated`（每批最多 20 条，超过继续分批）。候选用 vault 校验存在性、status、project/type，删除/退役立即被滤掉；vault 不可用时返回索引数据并标 `vault_verified: false`，日期缺失为 `null`。
+- `recall(query, project, format="full")` 保留原结果结构（Hindsight 的 `text/metadata/scores/facts` 或本地的 `scene/practice/score`），关联笔记的正文/元数据取当前 vault 文件。仪表盘继续使用此格式显示摘要。
 - 未关联笔记的 Hindsight 事实保留 `resolvable: false`，其 id 不能传给 `get_note`。
 - 带 `project` 不带 `type`：返回该项目笔记 **+ 全局技巧**（`tags_match: any_strict`）；带 `type` 时按类型严格过滤。
 - 插件的自动召回会带上会话开始时从 cwd 匹配到的项目，默认附最多 6 条标题（不附摘要）。
@@ -36,6 +36,39 @@ Hindsight bank（`HINDSIGHT_BANK`，默认 `hinddian`） 仍由 API 主机 **`hi
 `get_note(id="…")` 保持单对象返回；`get_note(id=["…", "…"])` 一次取最多 20 条，按请求顺序返回数组，缺失项为 `{error: "not_found", id}`。
 `list_notes(order="recent")` 按 `updated` 降序；默认仍按标题排序。hooks 的 `GET /api/memory/notes?project=…&limit=6&order=recent` 使用同一 Agent 鉴权。
 使用 SSH vault 的安装需要同时更新 `hinddian-memory-cli`；旧客户端仍可单条读取及使用 `format="full"`。
+
+## Obsidian 直接管理记忆
+
+改 Obsidian = 管记忆：正文/frontmatter 修改、`status != active`、删除文件均以 vault 为准。
+`get_note`、`list_notes`、本地 recall fallback 每次读取文件并按内容指纹复用解析结果，不从 Hindsight 读取正文。
+同长度编辑或同步客户端保留 mtime 也能被识别。
+软退役保留全文供历史查阅，但不会出现在 active 列表/召回；删文件后 get_note 返回 not_found。
+
+API 主机的 timer 使用 `OnCalendar=*:0/2`、`AccuracySec=1s`，无随机延迟。
+选择日历周期是为了让人工文件改动在正常空闲时最多两分钟开始对齐；`OnUnitActiveSec` 可能被频繁 kick 重置。
+索引可见延迟通常在两分钟内，但完成还需导出/索引处理时间；长任务、积压及服务故障不保证两分钟完成。
+同步优先删除 gone（含非 active）文档，再 retain 新/改笔记；失败项保留待同步状态供下轮重试。
+
+MCP/REST 直写成功后，API 主机通过后台线程执行
+`systemctl --no-block start hinddian-hindsight-sync.service`，请求不等待索引。
+此能力由部署的 `hinddian.service` 设置 `HINDDIAN_SYNC_KICK=1`；开发默认关闭。
+kick 失败或同步已在运行时由 timer 补齐。直接运行 vault CLI/批处理和人在 Obsidian 改文件同样由 timer 捕获。
+无需给 Agent 提供 Hindsight retain 或服务控制工具。
+
+## 双可读笔记契约
+
+人读的正文与 Agent 展开的全文是同一份 Obsidian 原子笔记，不维护另一份摘要数据库。
+
+- **标题即命题**：如“部署前先跑 gate.sh”，标题本身说明规则/决定，避免“部署相关”这样的空标题。
+- **frontmatter**：稳定 `id`，`type: decision|lesson|tip`，`project`（技巧为 `global`），`status: active|superseded|obsolete`，`updated`。Agent 写入自动生成这些字段，preference 归一为 tip + preference 标签。
+- **正文**：`## 场景`、`## 做法`、`## 理由`。Agent 新建/取代必须填齐 title/scene/practice/reason 和项目（tip 除外）；更新可沿用已有非空字段，缺失返回 `incomplete_note` + fields；软退役只需 id。不知道的事实应先澄清，不编造理由。
+- **人写扩展**：非托管 frontmatter 键、段落、引用及悬空链接继续 round-trip 保留；不要求人把自由笔记迁移成机器专用文件。
+
+Agent 的 memory map：SessionStart 固定前缀仅包含规则和排序项目名；
+易变部分随后附当前项目最近标题。`routing_project` 返回当前状态，以及 decision/lesson 分组的
+`id/title/updated`（各最多 40 条，附总数）；更多标题用 list_notes/recall，相关正文再 get_note。
+compact recall 的 `date` 是 vault 的 `updated`，保留已有字段名以兼容客户端。
+人工编辑后可同步更新 `updated`，未改日期也会按正文变化重新建索引；不引入会话版本缓存。
 
 ## Host hooks
 

@@ -10,7 +10,7 @@ def _text(vault, res):
 
 
 def _lesson(title, **kw):
-    return N.upsert_note({"action": "add", "type": "lesson", "project": "P", "title": title, "scene": "s", **kw})
+    return N.upsert_note({"practice": title, "reason": "测试理由", "action": "add", "type": "lesson", "project": "P", "title": title, "scene": "s", **kw})
 
 
 # ------------------------------------------------------------------ links
@@ -26,7 +26,7 @@ def test_update_keeps_related_links(vault):
 
 def test_supersede_banner_survives_rerender(vault):
     old = _lesson("Old")
-    new = N.upsert_note({"action": "supersede", "type": "lesson", "project": "P", "title": "New", "supersedes": [old["id"]]})
+    new = N.upsert_note({"scene": "测试场景", "practice": "New", "reason": "测试理由", "action": "supersede", "type": "lesson", "project": "P", "title": "New", "supersedes": [old["id"]]})
     assert "已被 [[项目/P/经验/New|New]] 取代" in _text(vault, old)
     N.upsert_note({"action": "update", "id": old["id"], "practice": "touched"})
     t = _text(vault, old)
@@ -50,7 +50,7 @@ def test_timeline_dates_ties_retired_anchor_and_project_scope(vault, monkeypatch
         ("Elsewhere", "2026-01-02", "Q"),
     ]:
         monkeypatch.setattr(N, "today", lambda date=date: date)
-        ids.append(N.upsert_note({"type": "lesson", "project": project, "title": title})["id"])
+        ids.append(N.upsert_note({"scene": "测试场景", "practice": title, "reason": "测试理由", "type": "lesson", "project": project, "title": title})["id"])
     initial = N.timeline(ids[1], before=20, after=20)["results"]
     assert [r["id"] for r in initial] == sorted(ids[:4], key=lambda nid: (N.get_note(nid)["updated"], nid))
     # Retired anchors can still explain history; retired neighbors do not appear.
@@ -83,19 +83,20 @@ def test_agent_add_flags_near_duplicates(vault):
     assert N.upsert_note({"action": "add", "type": "lesson", "project": "P", "title": "部署前先跑门禁脚本"}, trusted=True)["ok"]
 
 
-# ------------------------------------------------------------------ gate
-def test_agent_cannot_write_decision_with_flags(vault):
-    for flags in ({"_from_dashboard": True}, {"user_confirmed": True}, {"face_correction": True}, {"confirmed": True}):
-        r = N.upsert_note({"action": "add", "type": "decision", "project": "P", "title": "D", **flags})
-        assert r["action"] == "suggested", flags
-    assert N.list_notes(project="P", type_="decision") == []
-    q = N.list_corrections()
-    assert len(q) == 4
-    assert all("_from_dashboard" not in c["payload"] for c in q)
+# ------------------------------------------------------------------ direct writes / optional legacy review
+def test_agent_writes_decisions_without_approval(vault):
+    for i, flags in enumerate(({}, {"_from_dashboard": True}, {"user_confirmed": True},
+                               {"face_correction": True}, {"mode": "suggest"}, {"mode": "queue"})):
+        r = N.upsert_note({"scene": "部署", "practice": "HTTPS", "reason": "传输加密",
+                           "type": "decision", "project": "P", "title": f"D{i}", "force_new": True, **flags})
+        assert r["ok"] and r["action"] == "add" and r["gated"] == "auto", flags
+        assert N.get_note(r["id"])["type"] == "decision"
+    assert len(N.list_notes(project="P", type_="decision")) == 6
+    assert N.list_corrections(status="all") == []
 
 
 def _approved_decision(vault):
-    N.upsert_note({"action": "add", "type": "decision", "project": "P", "title": "D"})
+    N.enqueue_correction({"action": "add", "type": "decision", "project": "P", "title": "D"})
     cid = N.list_corrections()[0]["id"]
     r = N.decide_correction(cid, approve=True)
     assert r["ok"] and r["result"]["gated"] == "dashboard"
@@ -108,22 +109,84 @@ def test_dashboard_approval_writes_decision(vault):
     assert N.decide_correction(N.list_corrections(status="all")[0]["id"], approve=True)["error"] == "not_pending"
 
 
-def test_decision_note_cannot_be_relabeled_or_retired_by_agent(vault):
-    did = _approved_decision(vault)
-    before = N.get_note(did)["text"]
-    for payload in (
-        {"action": "update", "id": did, "type": "lesson", "practice": "hijack"},
-        {"action": "obsolete", "id": did, "type": "tip"},
-        {"action": "supersede", "type": "lesson", "project": "P", "title": "X", "supersedes": [did]},
-    ):
-        assert N.upsert_note(payload)["action"] == "suggested", payload
-    assert N.get_note(did)["text"] == before
-    assert N.get_note(did)["status"] == "active"
+def test_agent_updates_retires_and_supersedes_decisions(vault):
+    did = N.upsert_note({"type": "decision", "project": "P", "title": "D",
+                        "scene": "部署", "practice": "HTTPS", "reason": "安全"})["id"]
+    result = N.suggest_correction({"action": "update", "id": did, "type": "lesson", "practice": "TLS"})
+    assert result["ok"] and result["action"] == "update"
+    assert N.get_note(did)["type"] == "decision"  # update cannot relabel a note
+    assert N.get_note(did)["practice"] == "TLS"
+    assert N.suggest_correction({"action": "obsolete", "id": did})["ok"]
+    assert N.get_note(did)["status"] == "obsolete"
+    replacement = N.suggest_correction({"action": "supersede", "supersedes": [did],
+                                       "type": "decision", "project": "P", "title": "New",
+                                       "scene": "部署", "practice": "TLS v2", "reason": "升级"})
+    assert replacement["ok"]
+    assert N.get_note(did)["status"] == "superseded"
+    assert N.get_note(did)["superseded_by"] == replacement["id"]
+    assert N.list_corrections(status="all") == []
+
+
+def test_atomic_note_contract_rejects_incomplete_writes(vault):
+    for write in (N.upsert_note, N.suggest_correction):
+        result = write({"type": "decision", "title": "命题"})
+        assert result["error"] == "incomplete_note"
+        assert set(result["fields"]) == {"project", "scene", "practice", "reason"}
+        assert write({"action": "hard_delete", "id": "x"})["error"] == "hard_delete_forbidden"
+        assert write({"type": "tip", "title": "命题", "scene": "场景",
+                      "practice": "做法", "reason": "（待补）"})["fields"] == ["reason"]
+    assert N.list_notes(status="all") == []
+
+
+def test_human_edits_are_visible_and_survive_agent_update(vault):
+    note = _lesson("部署前跑检查", practice="gate.sh")
+    path = vault / (note["path"] + ".md")
+    path.write_text(path.read_text().replace("status: active", "human_key: keep\nstatus: active")
+                    .replace("gate.sh", "human-check.sh")
+                    .replace(f"updated: {N.today()}", "updated: 2026-11-06")
+                    + "\n## 我的补充\n保留这段\n", encoding="utf-8")
+    assert N.get_note(note["id"])["practice"] == "human-check.sh"
+    assert N.list_notes(project="P")[0]["updated"] == "2026-11-06"
+    assert N.search_notes("human-check")[0]["practice"] == "human-check.sh"
+    assert N.upsert_note({"action": "update", "id": note["id"], "reason": "修订理由"})["ok"]
+    assert "human_key: keep" in path.read_text() and "## 我的补充\n保留这段" in path.read_text()
+    path.write_text(path.read_text().replace("status: active", "status: obsolete"))
+    assert N.get_note(note["id"])["status"] == "obsolete"
+    assert N.list_notes(project="P") == [] and N.search_notes("human-check") == []
+    path.unlink()
+    assert N.get_note(note["id"]) is None and N.list_notes(status="all") == []
+
+
+def test_same_length_human_edit_with_preserved_mtime_is_visible(vault):
+    import os
+
+    note = _lesson("部署检查", practice="command-A")
+    path = vault / (note["path"] + ".md")
+    original = path.stat()
+    assert N.get_note(note["id"])["practice"] == "command-A"  # populate parse cache
+    path.write_text(path.read_text().replace("command-A", "command-B"))
+    os.utime(path, ns=(original.st_atime_ns, original.st_mtime_ns))
+    assert path.stat().st_size == original.st_size
+    assert N.get_note(note["id"])["practice"] == "command-B"
+    assert "command-B" in N.search_notes("command-B")[0]["practice"]
+
+
+def test_project_map_groups_titles_ids_and_updated(vault):
+    lesson = _lesson("检查前提", practice="gate.sh")
+    decision = N.upsert_note({"type": "decision", "project": "P", "title": "只使用 TLS",
+                             "scene": "部署", "practice": "TLS", "reason": "加密"})
+    routing = N.routing_project("P")
+    for key, note in (("decisions", decision), ("lessons", lesson)):
+        detail = N.get_note(note["id"])
+        assert routing[key] == [{"id": detail["id"], "title": detail["title"], "updated": detail["updated"]}]
+    N.upsert_note({"action": "obsolete", "id": decision["id"]})
+    assert N.routing_project("P")["decisions"] == []
+    assert N.routing_global()["projects"][0]["name"] == "P"
 
 
 def test_lessons_and_tips_write_directly(vault):
     assert _lesson("L")["gated"] == "auto"
-    t = N.upsert_note({"action": "add", "type": "preference", "title": "Pref"})
+    t = N.upsert_note({"scene": "测试场景", "practice": "Pref", "reason": "测试理由", "action": "add", "type": "preference", "title": "Pref"})
     assert t["gated"] == "auto" and t["id"].startswith("tip/")
 
 
@@ -133,7 +196,7 @@ def test_hard_delete_forbidden(vault):
 
 # ------------------------------------------------------------------ paths
 def test_project_traversal_stays_in_vault(vault, tmp_path):
-    r = N.upsert_note({"action": "add", "type": "lesson", "project": "../../escape", "title": "X"})
+    r = N.upsert_note({"scene": "测试场景", "practice": "X", "reason": "测试理由", "action": "add", "type": "lesson", "project": "../../escape", "title": "X"})
     assert r["ok"]
     assert (vault / (r["path"] + ".md")).is_file()
     assert not (tmp_path / "escape").exists()
@@ -157,7 +220,7 @@ def test_routing_project_rejects_traversal(vault, tmp_path):
 
 # ------------------------------------------------------------------ search
 def test_search_notes_chinese(vault):
-    N.upsert_note({"action": "add", "type": "lesson", "project": "P", "title": "部署门禁", "scene": "API 主机 部署"})
+    N.upsert_note({"practice": "部署门禁", "reason": "测试理由", "action": "add", "type": "lesson", "project": "P", "title": "部署门禁", "scene": "API 主机 部署"})
     _lesson("无关")
     hits = N.search_notes("部署时注意什么")
     assert hits and hits[0]["title"] == "部署门禁"
@@ -165,8 +228,8 @@ def test_search_notes_chinese(vault):
 
 def test_project_search_includes_global_tips(vault):
     _lesson("部署门禁", practice="gate.sh")
-    N.upsert_note({"action": "add", "type": "tip", "title": "部署前清缓存", "practice": "rm -rf .cache"})
-    N.upsert_note({"action": "add", "type": "lesson", "project": "Q", "title": "部署别的项目", "scene": "s"})
+    N.upsert_note({"scene": "测试场景", "reason": "测试理由", "action": "add", "type": "tip", "title": "部署前清缓存", "practice": "rm -rf .cache"})
+    N.upsert_note({"practice": "部署别的项目", "reason": "测试理由", "action": "add", "type": "lesson", "project": "Q", "title": "部署别的项目", "scene": "s"})
     hits = {h["type"] for h in N.search_notes("部署", project="P")}
     assert hits == {"lesson", "tip"}
     assert all(h["project"] != "Q" for h in N.search_notes("部署", project="P"))

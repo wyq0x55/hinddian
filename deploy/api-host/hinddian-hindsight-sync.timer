@@ -1,9 +1,9 @@
 [Unit]
-Description=hinddian Obsidian → Hindsight sync every 10 min
+Description=hinddian Obsidian → Hindsight sync every 2 min
 
 [Timer]
-OnCalendar=*:0/10
-RandomizedDelaySec=30
+OnCalendar=*:0/2
+AccuracySec=1s
 Persistent=true
 
 [Install]

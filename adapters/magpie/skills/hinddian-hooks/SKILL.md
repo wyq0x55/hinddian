@@ -63,10 +63,10 @@ magpie webdav now
 - **Jev**：本机 Magpie `127.0.0.1:3425/v1/systemone` → 可选云端 → 都失败则不写（`source=none`）
 
 
-## Agent 修正记忆（门控 upsert）
+## Agent 直接管理记忆
 
-- **可直写**：`tip` / `preference` / `lesson` → `upsert_note`（可用 `auto_verdict`）
-- **须仪表盘批准**：凡新增、修改、取代或作废 `decision` 的写入（用户纠正或 Agent 自发现），一律 `suggest_correction` 进「Agent 修正」队列；`user_confirmed` / `face_correction` 只作说明，不能绕过
+- **全类型直写**：`tip` / `preference` / `lesson` / `decision` → `upsert_note` 或 `suggest_correction`；仪表盘审批可选，兼容旧队列
+- **双可读**：标题即命题，填齐 project（tip 除外）、场景/做法/理由；先看 routing_project 标题地图（id/updated），再 get_note 全文
 - **禁止**：手调 `push_draft` 当纠正/审阅（那是 hooks 会话蒸馏）；硬删、Hindsight `retain`；只用 `supersede` / `obsolete`
 - Obsidian 为真相源；同步层跟随笔记状态
 
