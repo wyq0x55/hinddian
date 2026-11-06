@@ -349,7 +349,9 @@ def test_routing_block_is_cache_stable(hooks):
     ss = hooks["session_start"]
     a = ss.routing_block(sorted(["b", "a"]), "a")
     assert a == ss.routing_block(["a", "b"], "a")
-    assert hashlib.sha256(a.encode()).hexdigest() == "92d26540062d9d51f4ae214cb420da0699f7e426a21c7459d77a87baddc34dc4"
+    assert hashlib.sha256(a.encode()).hexdigest() == "9da295af05a8962112d9cf024586f0049c2d9bb3f137be2ebb49e9c0bf148c76"
+    assert "decision 均用 upsert_note 直写" in a
+    assert "suggest_correction 同样直写" in a and "仪表盘审批可选" in a
     assert not any(ch.isdigit() for ch in a.replace("hinddian", ""))  # no counts / dates in the prefix
     assert ss.match_project("/home/me/work/my-app-api", ["my-app", "my-app-api"]) == "my-app-api"
 

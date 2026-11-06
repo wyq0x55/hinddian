@@ -1,11 +1,10 @@
-"""Atomic Obsidian notes: load / upsert (4-state, gated) / routing export / correction queue / drafts.
+"""Atomic Obsidian notes: load / direct upsert / routing export / optional correction queue / drafts.
 
 Runs where the vault is (vault host, or any host with VAULT_ROOT). File format lives in note_format.py,
 shared with the batch engine. Secrets are redacted on write.
 
-Gate: callers on the agent channel (MCP / hooks) are untrusted — whatever flags they send,
-decision notes (and anything that retires a decision) go to the correction queue. Only
-decide_correction(), reached from the dashboard, writes with trusted=True.
+Agents can write every note type. Obsidian is the human management surface.
+The dashboard queue remains available for explicit review and legacy pending items.
 """
 from __future__ import annotations
 
@@ -27,7 +26,6 @@ OWNER = os.environ.get("HC_OWNER", "obsidian")
 UNKNOWN_PROJECT = "通用-未定"
 HARD_DELETE_ACTIONS = {"delete", "remove", "purge", "hard_delete", "forget", "erase"}
 SOFT_RETIRE_ACTIONS = {"obsolete", "retire", "archive"}
-SUGGEST_MODES = {"suggest", "suggestion", "queue"}
 _META_KEY = re.compile(r"^[a-z][a-z0-9_]{0,40}$")
 
 _cache = nf.NoteCache()
@@ -108,9 +106,10 @@ def routing_global() -> dict:
         "guidance": (
             "稳定前缀：本路由表。易变 recall 结果放对话后部。"
             "先 match 项目；再看项目路由的 when_to_recall；不需要就跳过。"
-            "写入：禁止 Hindsight retain。优先 hooks→草稿。"
-            "门控 upsert：tip/preference/lesson 可直接 upsert_note；"
-            "decision/架构定论一律进仪表盘「Agent 修正」由用户批准（Agent 侧无法绕过）；"
+            "写入：禁止 Hindsight retain。会话整理由 hooks→草稿；记住/纠正直接写笔记。"
+            "tip/preference/lesson/decision 均可直接 upsert_note；suggest_correction 同样直写。"
+            "人在 Obsidian 改删即管理记忆；仪表盘审批可选。"
+            "标题即命题，填写场景/做法/理由；先标题地图，再 get_note 全文。"
             "禁止硬删，只用 supersede/obsolete。"
         ),
     }
@@ -133,8 +132,8 @@ def routing_project(name: str) -> dict:
             f"涉及 {name} 架构、门禁、测试、部署或已知坑时调用 recall(project={name})；"
             "纯寒暄/无关任务可跳过。默认只召回 status=active。"
         ),
-        "decisions": [{"id": n["id"], "title": n["title"]} for n in dec[:40]],
-        "lessons": [{"id": n["id"], "title": n["title"]} for n in les[:40]],
+        "decisions": [{"id": n["id"], "title": n["title"], "updated": n["updated"]} for n in dec[:40]],
+        "lessons": [{"id": n["id"], "title": n["title"], "updated": n["updated"]} for n in les[:40]],
         "decision_count": len(dec),
         "lesson_count": len(les),
     }
@@ -240,7 +239,7 @@ def search_notes(query: str, *, project: str | None = None, type_: str | None = 
     return scored[: max(0, int(limit))]
 
 
-# ------------------------------------------------------------------ gate
+# ------------------------------------------------------------------ writes / optional review
 def _norm_type(raw: str | None) -> tuple[str, list[str]]:
     """Map preference→tip+tag; unknown→lesson."""
     t = (raw or "lesson").strip().lower()
@@ -249,15 +248,6 @@ def _norm_type(raw: str | None) -> tuple[str, list[str]]:
     if t not in nf.NOTE_TYPES:
         return "lesson", []
     return t, []
-
-
-def _needs_review(typ: str, *, target: str, supersedes: list[str], notes: dict, mode: str) -> bool:
-    """Untrusted (agent) writes that must wait for a human in the dashboard."""
-    if mode in SUGGEST_MODES or typ == "decision":
-        return True
-    if target in notes and notes[target]["type"] == "decision":
-        return True
-    return any(notes.get(o, {}).get("type") == "decision" for o in supersedes)
 
 
 def _untrusted(payload: dict) -> dict:
@@ -273,7 +263,10 @@ def _str_list(v: Any) -> list[str]:
 
 
 def enqueue_correction(payload: dict) -> dict:
-    """Queue an Agent correction for dashboard approval (no silent decision write)."""
+    """Explicit optional review, also used to read/apply legacy pending corrections.
+
+    Agent MCP/CLI tools use suggest_correction instead; they never enter this queue.
+    """
     payload = _untrusted(payload)
     CORRECTIONS.mkdir(parents=True, exist_ok=True)
     now = dt.datetime.now()
@@ -318,8 +311,13 @@ def enqueue_correction(payload: dict) -> dict:
         "action": "suggested",
         "queued": True,
         "suggestion_id": cid,
-        "hint": "decision/架构类已入仪表盘「Agent 修正」队列；用户在仪表盘批准后才写 Obsidian。",
+        "hint": "已选择可选审阅：在仪表盘批准后写入 Obsidian；Agent 默认工具直接写入。",
     }
+
+
+def suggest_correction(payload: dict) -> dict:
+    """Compatibility name for the same direct write contract as upsert_note."""
+    return upsert_note(payload)
 
 
 def list_corrections(*, status: str = "pending", limit: int = 50) -> list[dict]:
@@ -340,7 +338,7 @@ def list_corrections(*, status: str = "pending", limit: int = 50) -> list[dict]:
 
 
 def decide_correction(cid: str, *, approve: bool, reason: str = "") -> dict:
-    """Dashboard-only: the one trusted write path."""
+    """Dashboard-only compatibility path for explicitly queued / legacy corrections."""
     cid = "".join(c for c in (cid or "") if c.isalnum() or c in "-_")
     path = CORRECTIONS / f"{cid}.json"
     with nf.vault_lock():
@@ -394,10 +392,10 @@ def _similar(title: str, practice: str, typ: str, project: str, notes: dict, k: 
 
 
 def upsert_note(payload: dict, *, trusted: bool = False) -> dict:
-    """Gated 4-state write: add | update | supersede | obsolete | noop.  No hard delete.
+    """Direct write: add | update | supersede | obsolete | noop. No hard delete.
 
-    trusted=False (agent channel): tip / preference / lesson write directly; anything that
-    creates, changes or retires a decision is queued for the dashboard.
+    Agent writes require complete atomic-note content; updates may reuse existing fields.
+    trusted=True preserves compatibility when applying incomplete legacy review payloads.
     """
     if not trusted:
         payload = _untrusted(payload)
@@ -429,7 +427,6 @@ def upsert_note(payload: dict, *, trusted: bool = False) -> dict:
         title = safe_title(payload.get("title") or (target or {}).get("title") or "未命名")
         supersedes = [s for s in _str_list(payload.get("supersedes")) if s in notes]
         fields = {k: nf.guard_field(nf.unwiki(str(payload.get(k) or ""))) for k in ("scene", "practice", "reason")}
-        mode = str(payload.get("mode") or "").strip().lower()
 
         if action == "obsolete" and not target:
             return {"ok": False, "error": "obsolete_needs_id", "hint": "Pass id of note to mark obsolete"}
@@ -442,11 +439,17 @@ def upsert_note(payload: dict, *, trusted: bool = False) -> dict:
                     "candidates": similar,
                     "hint": "已有相近笔记：要补充就用 action=update + id 合并；确是新主题再带 force_new=true 重试。",
                 }
-        if not trusted and _needs_review(typ, target=target_id, supersedes=supersedes, notes=notes, mode=mode):
-            pl = dict(payload, type=typ, tags=tags, project=project, title=title, action=action, supersedes=supersedes)
-            if target_id:
-                pl["id"] = target_id
-            return enqueue_correction(pl)
+        if not trusted and action != "obsolete":
+            existing = target if action == "update" and target else {}
+            missing = [k for k in ("scene", "practice", "reason")
+                       if (fields[k].strip() or existing.get(k, "").strip()) in ("", "（待补）")]
+            if not (payload.get("title") or existing.get("title") or "").strip():
+                missing.insert(0, "title")
+            if typ != "tip" and not (payload.get("project") or existing.get("project") or "").strip():
+                missing.append("project")
+            if missing:
+                return {"ok": False, "error": "incomplete_note", "fields": missing,
+                        "hint": "标题即命题；填写 project（项目笔记）及 scene/practice/reason，可沿用已有字段。"}
 
         origin = str(payload.get("origin") or "upsert")[:80]
         gated = "dashboard" if trusted else "auto"
@@ -465,6 +468,7 @@ def upsert_note(payload: dict, *, trusted: bool = False) -> dict:
 
         if action == "update":
             n = target
+            n["title"] = title
             for k, v in fields.items():
                 if v:
                     n[k] = v

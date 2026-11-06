@@ -24,7 +24,7 @@ Agent 会话
               Obsidian（人读 SoT）→ hinddian-hindsight-sync.timer → Hindsight（检索索引）
 ```
 
-旁路：**门控** `upsert_note` / `suggest_correction`（仪表盘「Agent 修正」）直接动 vault；索引仍靠同步。
+旁路：`upsert_note` / `suggest_correction` 对所有类型直接写 vault；成功后 API 主机异步 kick 现有 sync service。人在 Obsidian 直接改删同样管理记忆；两分钟 timer 捕获文件变化。
 
 **禁止**：Agent 调 Hindsight `retain`；静默硬删笔记。
 
@@ -69,8 +69,8 @@ Agent 会话
 | `recall` | 默认返回 id/title/type/date/score 索引；`format="full"` 保留原摘要；经 Hindsight，失败可本地笔记兜底 |
 | `timeline` | 围绕 anchor_id 返回同项目按 updated 排序的相邻 active 笔记索引 |
 | `get_note` / `list_notes` | 读笔记；get_note 的 id 可为字符串或最多 20 个 id 的数组 |
-| `upsert_note` | 门控四态：add / update / supersede / noop |
-| `suggest_correction` | 入仪表盘「Agent 修正」队列 |
+| `upsert_note` | 全类型直写：add / update / supersede / obsolete / noop |
+| `suggest_correction` | 与 upsert_note 相同的直写兼容入口 |
 | `push_draft` | **仅 hooks** 会话 finalize 推草稿；Agent 纠正勿用 |
 
 任何宿主 **只挂**本 MCP，不挂原生 Hindsight MCP 给 Agent。
@@ -79,27 +79,36 @@ Agent 会话
 
 | 通道 | 路由 | 凭据 | 能做什么 |
 |------|------|------|----------|
-| Agent | `/mcp`、`/api/memory/*` | `HINDDIAN_MCP_TOKEN` | 读、门控写、推草稿、提修正建议 |
+| Agent | `/mcp`、`/api/memory/*` | `HINDDIAN_MCP_TOKEN` | 读、直写笔记、推草稿、应用修正 |
 | 仪表盘 | `/`、`/api/*` | `AUTH_TOKEN`（≠ MCP token；:8443 mTLS 后由 Caddy 注入） | 批准 / 拒绝修正、批准项目批处理 |
 
 两把钥匙缺一或相同 → 503（fail closed）。批准接口只在仪表盘通道。
 
 `recall`：Hindsight 原样查询，项目 / 类型作 tag 过滤（不拼进查询文本）；Hindsight 不可用时退回 vault 本地 bigram 检索（中文可用）。
 
-### 门控 upsert 政策
+### 直接写入政策
 
 | 类型 | 策略 |
 |------|------|
 | `tip` / `preference` / `lesson` | 可直写 `upsert_note` |
-| 新增 / 修改 / 取代 / 作废 `decision` | **一律**入队 → 仪表盘批准；`user_confirmed` / `face_correction` 只是给审批人的说明，服务端不信任 |
+| 新增 / 修改 / 取代 / 作废 `decision` | 与其它类型一样直写；不需要用户批准，旧确认标记不影响路径 |
 | 删除 | **禁止硬删**；用 `supersede` / `obsolete` |
 | Hindsight | **禁止** Agent `retain` |
 
-修正队列落盘：vault 主机 `/var/lib/hinddian/agent_corrections/`（`HB_CORRECTIONS`）。
+可选审阅/旧修正队列落盘：vault 主机 `/var/lib/hinddian/agent_corrections/`（`HB_CORRECTIONS`）。
 
-并发：MCP 门控写与 vault 主机 batch 共用 `$HB_BASE/vault.lock`（`HINDDIAN_VAULT_LOCK` 可改）。batch 的 LLM 调用在锁外，落盘前在锁内重读 vault 再应用；batch 互斥锁被占时以退出码 75 报 busy，不再静默成功。
+并发：MCP 直写与 vault 主机 batch 共用 `$HB_BASE/vault.lock`（`HINDDIAN_VAULT_LOCK` 可改）。batch 的 LLM 调用在锁外，落盘前在锁内重读 vault 再应用；batch 互斥锁被占时以退出码 75 报 busy，不再静默成功。
 
-格式：重渲染只改受管字段与段落；人在 Obsidian 里加的 frontmatter 键、段落、引用行、悬空链接原样保留。
+格式：Agent 新建/取代必须提供命题标题、项目（tip 除外）及场景/做法/理由；更新可沿用已有字段，软退役只需 id。frontmatter 自动填 type/project/status。重渲染只改受管字段与段落；人在 Obsidian 里加的 frontmatter 键、段落、引用行、悬空链接原样保留。
+
+标题地图：全局项目列表 + routing_project 按 decision/lesson 分组的 id/title/updated；
+稳定规则前缀不含易变日期，先索引、再按需全文。compact recall 的 date 沿用 vault updated。
+get_note/list_notes/本地 recall 始终从 vault 文件读；Hindsight 命中也用 vault 校验删除、退役和类型/项目，并在 full 模式取当前正文。
+vault 暂时不可达时 Hindsight 结果标 vault_verified=false。
+
+索引同步：日历 timer 每两分钟（AccuracySec=1s，无随机延迟），MCP 写入成功另由 API 后台 kick
+现有 sync service；人工改删/CLI/批处理靠 timer。正常空闲时最多两分钟开始同步，
+完成还需导出/索引时间；积压与故障看同步状态。gone（含所有非 active）优先 DELETE，再 retain。
 
 ## OTLP
 
@@ -111,7 +120,7 @@ Agent 会话
 |------|------|
 | `src/hinddian/memory_mcp.py` | Agent 通道：MCP + hook REST |
 | `src/hinddian/api.py` | 仪表盘通道 + 挂载 Agent 通道 |
-| `src/hinddian/notes.py` | 原子笔记 / 路由 / 四态门控 / 修正队列 / 草稿 |
+| `src/hinddian/notes.py` | 原子笔记 / 标题地图 / 直写 / 可选修正队列 / 草稿 |
 | `src/hinddian/note_format.py` | 笔记文件格式（frontmatter / 段落往返保真）、路径安全、vault 锁、解析缓存；notes.py 与 batch 共用 |
 | `hooks/` | hook 运行时源码；`tools/sync_hooks.py` 生成 plugin / skill 副本 |
 | `src/hinddian/jev.py` | System One 闸门（核心，宿主无关） |

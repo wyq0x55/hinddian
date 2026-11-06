@@ -16,6 +16,6 @@ description: Save something to hinddian long-term memory right now. Trigger: /hi
      (Jev merges into an existing note instead of duplicating it). If it answers
      `similar_exists`, look at `candidates`: same topic → `upsert_note` with `action: "update"` and
      that `id`; genuinely new → repeat the add with `force_new: true`.
-   - decision → `suggest_correction`. Tell the user it waits for their approval in the dashboard
-     「Agent 修正」.
-4. Report what was saved (or queued) and its id in one line.
+   - decision → `upsert_note` or `suggest_correction`, which writes directly to Obsidian.
+     Use a proposition as title and fill project, scene, practice and reason; do not invent missing facts.
+4. Report what was saved and its id in one line.

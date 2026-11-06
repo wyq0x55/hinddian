@@ -30,7 +30,8 @@ RULES = """\
 - 自动召回：用户消息若命中相关笔记，会以 <hinddian_recall> 附在该消息后。可能不相关，自行判断；不必向用户复述。
 - 需要更多：recall(query, project) 搜索；get_note(id) 看全文；routing_project(project) 看项目现状与决策/经验列表。
 - 工具可能是延迟加载的：首次调用找不到时，先用 ToolSearch 搜 "hinddian" 加载，不要因此当作没有记忆。
-- 写入：会话由 hooks 自动整理成草稿（push_draft），Agent 不要手调 push_draft。用户要记住、或你发现记忆有误时：tip/preference/lesson → upsert_note；decision/架构纠正 → suggest_correction（仪表盘「Agent 修正」批准）。不硬删（supersede/obsolete），不写密钥。
+- 写入：会话由 hooks 自动整理成草稿（push_draft），Agent 不要手调 push_draft。用户要记住、或你发现记忆有误时：tip/preference/lesson/decision 均用 upsert_note 直写；suggest_correction 同样直写。人在 Obsidian 改删即管理记忆，仪表盘审批可选。不硬删（supersede/obsolete），不调 Hindsight retain，不写密钥。
+- 双可读笔记：标题即命题，填写 type/project/status 与场景/做法/理由；先看项目标题地图，再 get_note 展开全文，updated 表示笔记更新时间。
 - 长期记忆以 hinddian 为准：要记住的内容按上面写入，不要另写进 Agent 自带的记忆（Claude 的 MEMORY.md、Codex memories）。"""
 
 

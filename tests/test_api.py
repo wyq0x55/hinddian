@@ -50,9 +50,8 @@ def test_dashboard_token_cannot_be_used_as_agent_and_vice_versa(client):
 
 
 def test_agent_cannot_self_approve(client):
-    r = rpc(client, "tools/call", {"name": "upsert_note", "arguments": {
-        "action": "add", "type": "decision", "project": "P", "title": "D", "user_confirmed": True, "_from_dashboard": True}})
-    assert '"suggested"' in r.json()["result"]["content"][0]["text"]
+    # Approval remains dashboard-only for explicit/legacy pending items.
+    N.enqueue_correction({"type": "decision", "project": "P", "title": "D"})
     cid = N.list_corrections()[0]["id"]
     # the old agent-side approval routes are gone
     assert client.post(f"/api/memory/corrections/{cid}/approve", headers=agent()).status_code in (404, 405)
@@ -85,7 +84,7 @@ def test_missing_tokens_fail_closed(client, monkeypatch):
 
 
 def test_recall_falls_back_to_local_search(client):
-    N.upsert_note({"action": "add", "type": "lesson", "project": "P", "title": "部署门禁", "scene": "API 主机"})
+    N.upsert_note({"practice": "部署门禁", "reason": "测试理由", "action": "add", "type": "lesson", "project": "P", "title": "部署门禁", "scene": "API 主机"})
     r = client.post("/api/memory/recall", json={"query": "部署"}, headers=agent())
     body = r.json()
     assert body["via"] == "local-fallback"
@@ -146,6 +145,10 @@ def _mock_hindsight(monkeypatch, results):
 
 
 def test_project_recall_includes_tips_and_one_row_per_note(client, monkeypatch):
+    note = N.upsert_note({"type": "lesson", "project": "P", "title": "A", "slug": "a",
+                          "scene": "s", "practice": "current lesson", "reason": "r"})
+    N.upsert_note({"type": "tip", "title": "T", "slug": "t",
+                   "scene": "s", "practice": "current tip", "reason": "r"})
     seen = _mock_hindsight(monkeypatch, [
         {"id": "f1", "document_id": "proj/P/lesson/a", "text": "a1", "metadata": {"type": "lesson", "project": "P"}, "scores": {"reranker": 0.7}},
         {"id": "f2", "document_id": "tip/t", "text": "t1", "metadata": {"type": "tip"}, "scores": {"reranker": 0.6}},
@@ -155,7 +158,8 @@ def test_project_recall_includes_tips_and_one_row_per_note(client, monkeypatch):
     assert seen[0]["tags"] == ["project:P", "type:tip"] and seen[0]["tags_match"] == "any_strict"
     assert [x["document_id"] for x in r["results"]] == ["proj/P/lesson/a", "tip/t"]
     first = r["results"][0]
-    assert first["text"] == "a1" and first["facts"] == 2 and first["scores"]["reranker"] == 0.9
+    assert first["text"] == N.get_note(note["id"])["text"]
+    assert first["facts"] == 2 and first["scores"]["reranker"] == 0.9
 
 
 
@@ -225,6 +229,8 @@ def test_by_note_preserves_note_winner_order_when_dropping_dup_facts():
 
 
 def test_recall_drops_duplicate_fact_rows_via_by_note(client, monkeypatch):
+    N.upsert_note({"type": "decision", "project": "P", "title": "WinAMS", "slug": "winams",
+                   "scene": "s", "practice": "WinAMS stub budget", "reason": "r"})
     _mock_hindsight(monkeypatch, [
         {"id": "fact-uuid", "text": "WinAMS stub budget", "metadata": {}, "scores": {"final": 0.95}},
         {"id": "f-note", "document_id": "proj/P/decision/winams", "text": "WinAMS stub budget",
@@ -245,7 +251,7 @@ def test_recall_drops_duplicate_fact_rows_via_by_note(client, monkeypatch):
 def test_recall_index_and_full_local_fallback(client):
     from hinddian import memory_mcp
 
-    note = N.upsert_note({"type": "lesson", "project": "P", "title": "部署门禁", "practice": "Run gate.sh"})
+    note = N.upsert_note({"scene": "测试场景", "reason": "测试理由", "type": "lesson", "project": "P", "title": "部署门禁", "practice": "Run gate.sh"})
     index = memory_mcp.call_tool("recall", {"query": "部署"})["results"]
     assert index == [{"id": note["id"], "title": "部署门禁", "type": "lesson",
                       "date": N.today(), "score": index[0]["score"]}]
@@ -257,7 +263,7 @@ def test_recall_index_and_full_local_fallback(client):
 
 
 def test_recall_index_merges_and_enriches_hindsight_notes(client, monkeypatch):
-    note = N.upsert_note({"type": "lesson", "project": "P", "title": "部署门禁"})
+    note = N.upsert_note({"scene": "测试场景", "practice": "部署门禁", "reason": "测试理由", "type": "lesson", "project": "P", "title": "部署门禁"})
     _mock_hindsight(monkeypatch, [
         {"id": "f1", "document_id": note["id"], "text": "large body", "scores": {"reranker": 0.6}},
         {"id": "f2", "document_id": note["id"], "text": "other body", "scores": {"reranker": 0.9}},
@@ -278,23 +284,95 @@ def test_recall_index_survives_unavailable_vault(client, monkeypatch):
         "title": "Title", "type": "lesson", "updated": "2026-10-01"}, "scores": {"final": 0.8}}])
     monkeypatch.setattr(memory_mcp, "vault", lambda *a, **k: (_ for _ in ()).throw(OSError("offline")))
     result = memory_mcp.call_tool("recall", {"query": "test"})
-    assert result["via"] == "hindsight"
+    assert result["via"] == "hindsight" and result["vault_verified"] is False
     assert result["results"][0] == {"id": "note", "title": "Title", "type": "lesson",
                                     "date": "2026-10-01", "score": 0.8}
 
 
-def test_recall_index_filters_retired_notes_even_with_stale_index(client, monkeypatch):
-    note = N.upsert_note({"type": "lesson", "project": "P", "title": "Retired"})
+@pytest.mark.parametrize("fmt", ["index", "full"])
+def test_recall_filters_retired_notes_even_with_stale_index(client, monkeypatch, fmt):
+    note = N.upsert_note({"scene": "测试场景", "practice": "Retired", "reason": "测试理由", "type": "lesson", "project": "P", "title": "Retired"})
     N.upsert_note({"action": "obsolete", "id": note["id"]})
     _mock_hindsight(monkeypatch, [{"document_id": note["id"], "metadata": {"status": "active"}}])
-    result = client.post("/api/memory/recall", json={"query": "Retired"}, headers=agent()).json()
+    result = client.post("/api/memory/recall", json={"query": "Retired", "format": fmt}, headers=agent()).json()
     assert result["via"] == "hindsight" and result["results"] == []
+
+
+@pytest.mark.parametrize("fmt", ["index", "full"])
+def test_recall_verifies_human_edits_scope_and_deletion(client, vault, monkeypatch, fmt):
+    note = N.upsert_note({"type": "decision", "project": "P", "title": "部署选择",
+                          "scene": "部署", "practice": "HTTPS", "reason": "安全"})
+    path = vault / (note["path"] + ".md")
+    _mock_hindsight(monkeypatch, [{"document_id": note["id"], "text": "stale",
+                                 "metadata": {"title": "Old title", "project": "P", "type": "decision"}}])
+    path.write_text(path.read_text().replace("HTTPS", "mTLS").replace("# 部署选择", "# 部署使用 mTLS")
+                    .replace(f"updated: {N.today()}", "updated: 2026-11-06"))
+    from hinddian import memory_mcp
+    result = memory_mcp.call_tool("recall", {"query": "部署", "project": "P", "format": fmt})
+    assert result["vault_verified"] is True
+    row = result["results"][0]
+    if fmt == "index":
+        assert row["title"] == "部署使用 mTLS" and row["date"] == "2026-11-06"
+    else:
+        assert "mTLS" in row["text"] and row["metadata"]["title"] == "部署使用 mTLS"
+    path.write_text(path.read_text().replace("project: P", "project: Q"))
+    assert memory_mcp.call_tool("recall", {"query": "部署", "project": "P", "format": fmt})["results"] == []
+    path.unlink()
+    assert memory_mcp.call_tool("recall", {"query": "部署", "format": fmt})["results"] == []
+
+
+def test_recall_verifies_all_candidates_beyond_one_cli_batch(client, monkeypatch):
+    from hinddian import memory_mcp
+
+    notes = [N.upsert_note({"type": "decision", "project": "P", "title": f"Rule {i}",
+                            "scene": "s", "practice": f"Action {i}", "reason": "r", "force_new": True})
+             for i in range(21)]
+    N.upsert_note({"action": "obsolete", "id": notes[-1]["id"]})
+    _mock_hindsight(monkeypatch, [{"document_id": note["id"], "metadata": {"status": "active"}} for note in notes])
+    real_vault, batches = memory_mcp.vault, []
+    def read(op, **kw):
+        if op == "get_notes":
+            batches.append(len(kw["ids"]))
+        return real_vault(op, **kw)
+    monkeypatch.setattr(memory_mcp, "vault", read)
+    result = memory_mcp.call_tool("recall", {"query": "Rule"})
+    assert batches == [20, 1]
+    assert [r["id"] for r in result["results"]] == [note["id"] for note in notes[:-1]]
+
+
+def test_agent_mcp_decision_and_correction_write_directly(client, monkeypatch):
+    import json
+    from hinddian import index_sync
+
+    kicks = []
+    monkeypatch.setattr(index_sync, "kick", lambda: kicks.append(True))
+    payload = {"type": "decision", "project": "P", "title": "只使用 TLS",
+               "scene": "部署", "practice": "TLS", "reason": "安全"}
+    response = rpc(client, "tools/call", {"name": "upsert_note", "arguments": payload})
+    added = json.loads(response.json()["result"]["content"][0]["text"])
+    assert added["action"] == "add" and N.get_note(added["id"])["type"] == "decision"
+    corrected = client.post("/api/memory/suggest_correction", headers=agent(),
+                            json={"action": "update", "id": added["id"], "practice": "mTLS"}).json()
+    assert corrected["action"] == "update" and N.get_note(added["id"])["practice"] == "mTLS"
+    assert N.list_corrections(status="all") == [] and len(kicks) == 2
+
+
+def test_agent_cannot_hard_delete_or_retain_even_with_auto_verdict(client, monkeypatch):
+    from hinddian import memory_mcp
+
+    monkeypatch.setattr(memory_mcp, "_apply_jev_verdict", lambda p: pytest.fail("hard delete must not ask Jev"))
+    for name in ("upsert_note", "suggest_correction"):
+        result = memory_mcp.call_tool(name, {"action": "hard_delete", "id": "x", "auto_verdict": True})
+        assert result["error"] == "hard_delete_forbidden"
+    assert "retain" not in {tool["name"] for tool in memory_mcp.TOOLS}
+    with pytest.raises(ValueError, match="unknown tool"):
+        memory_mcp.call_tool("retain", {"content": "x"})
 
 
 def test_get_note_single_and_batch_via_mcp(client):
     import json
 
-    note = N.upsert_note({"type": "lesson", "title": "One", "practice": "Detail"})
+    note = N.upsert_note({"project": "P", "scene": "测试场景", "reason": "测试理由", "type": "lesson", "title": "One", "practice": "Detail"})
     def call(ids):
         result = rpc(client, "tools/call", {"name": "get_note", "arguments": {"id": ids}}).json()["result"]
         assert not result["isError"]
@@ -316,7 +394,7 @@ def test_timeline_and_recent_notes_agent_channel(client, monkeypatch):
     for title, date, project in [("Z oldest", "2026-01-01", "P"), ("M anchor", "2026-01-02", "P"),
                                   ("A latest", "2026-01-03", "P"), ("Q neighbor", "2026-01-02", "Q")]:
         monkeypatch.setattr(N, "today", lambda date=date: date)
-        ids.append(N.upsert_note({"type": "lesson", "project": project, "title": title,
+        ids.append(N.upsert_note({"scene": "测试场景", "practice": title, "reason": "测试理由", "type": "lesson", "project": project, "title": title,
                                   "force_new": True})["id"])
     recent = client.get("/api/memory/notes", params={"project": "P", "limit": 2}, headers=agent()).json()
     assert [r["id"] for r in recent] == [ids[2], ids[1]]
@@ -348,11 +426,12 @@ def test_new_tools_use_one_ssh_call_each(client, monkeypatch):
     ]
 
 
-def test_auto_verdict_merges_into_the_most_similar_note(client, monkeypatch):
+@pytest.mark.parametrize("typ", ["lesson", "decision"])
+def test_auto_verdict_merges_into_the_most_similar_note(client, monkeypatch, typ):
     from hinddian import jev, memory_mcp
 
-    N.upsert_note({"action": "add", "type": "lesson", "project": "P", "title": "日志轮转", "practice": "logrotate"})
-    gate = N.upsert_note({"action": "add", "type": "lesson", "project": "P", "title": "部署前先跑门禁", "practice": "gate.sh"})
+    N.upsert_note({"scene": "测试场景", "reason": "测试理由", "action": "add", "type": typ, "project": "P", "title": "日志轮转", "practice": "logrotate"})
+    gate = N.upsert_note({"scene": "测试场景", "reason": "测试理由", "action": "add", "type": typ, "project": "P", "title": "部署前先跑门禁", "practice": "gate.sh"})
     seen = {}
 
     def verdict(digest, cands):
@@ -360,7 +439,7 @@ def test_auto_verdict_merges_into_the_most_similar_note(client, monkeypatch):
         return jev.GateResult(True, "update", 0.9, "jev:local", {"answers": {"g": {"choice": "update"}}})
 
     monkeypatch.setattr(memory_mcp.jev, "write_verdict", verdict)
-    r = memory_mcp.call_tool("upsert_note", {"action": "add", "type": "lesson", "project": "P", "title": "部署门禁要先跑",
+    r = memory_mcp.call_tool("upsert_note", {"action": "add", "type": typ, "project": "P", "title": "部署门禁要先跑",
                                              "practice": "部署前 gate.sh --strict", "auto_verdict": True})
     assert seen["cands"][0]["id"] == gate["id"] and "practice" in seen["cands"][0]
     assert r["action"] == "update" and r["id"] == gate["id"]
@@ -382,25 +461,25 @@ def dash_client(client, monkeypatch, tmp_path, vault):
     classify_remote.invalidate()
     (vault / "项目" / "my-app").mkdir(parents=True)
     (vault / "项目" / "my-app" / "README.md").write_text("---\nid: proj/my-app/readme\ntype: state\n---\n# my-app\n", encoding="utf-8")
-    N.upsert_note({"action": "add", "type": "lesson", "project": "my-app", "title": "部署前先跑门禁", "practice": "gate.sh"})
-    N.upsert_note({"action": "add", "type": "decision", "project": "my-app", "title": "只走 HTTPS"})  # → queued
+    N.upsert_note({"scene": "测试场景", "reason": "测试理由", "action": "add", "type": "lesson", "project": "my-app", "title": "部署前先跑门禁", "practice": "gate.sh"})
+    N.upsert_note({"scene": "测试场景", "practice": "只走 HTTPS", "reason": "测试理由", "action": "add", "type": "decision", "project": "my-app", "title": "只走 HTTPS"})
     return client
 
 
 def test_overview_counts(dash_client):
     o = dash_client.get("/api/overview", headers=dash()).json()
-    assert o["vault"] == {"ok": True, "error": None, "projects": 1, "decisions": 0, "lessons": 1, "tips": 0}
-    assert o["corrections"]["pending"] == 1
+    assert o["vault"] == {"ok": True, "error": None, "projects": 1, "decisions": 1, "lessons": 1, "tips": 0}
+    assert o["corrections"]["pending"] == 0
     assert o["drafts"]["ok"] and o["drafts"]["total"] == 3 and o["drafts"]["ready"] == 0
 
 
 def test_notes_list_hides_hub_pages_and_searches(dash_client):
     rows = dash_client.get("/api/notes", headers=dash()).json()
-    assert [r["type"] for r in rows] == ["lesson"]
+    assert {r["type"] for r in rows} == {"lesson", "decision"}
     hits = dash_client.get("/api/notes", params={"q": "门禁"}, headers=dash()).json()
     assert hits and hits[0]["title"] == "部署前先跑门禁"
     assert dash_client.get("/api/note", params={"id": "nope"}, headers=dash()).status_code == 404
-    nid = rows[0]["id"]
+    nid = hits[0]["id"]
     assert dash_client.get("/api/note", params={"id": nid}, headers=dash()).json()["practice"] == "gate.sh"
 
 

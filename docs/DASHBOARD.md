@@ -6,12 +6,16 @@
 深色 / 浅色跟随系统。手机优先：iPhone 上底部四个页签，所有按钮 ≥44pt，输入框 16px（Safari 不会自动放大）。
 Safari「分享 → 添加到主屏幕」后像 App 一样全屏打开（带图标）。
 
+Obsidian 是人管理记忆的入口：改正文/frontmatter、软退役或删文件即可生效。
+Agent 可直接写所有笔记类型，仪表盘审批只用于可选审阅和旧队列。
+索引每两分钟对齐，正常空闲时最多两分钟开始同步，完成还需索引处理时间；MCP 写入另异步 kick sync。
+
 ## 页签
 
 | 页签 | 内容 |
 |------|------|
 | **流水线**（默认） | 节点 + 连线图：会话 hooks → Jev 过滤 → 草稿·按项目 → 分析（批量 / 增量 / 技巧三路）→ Obsidian → Hindsight，另有「Agent 修正」直连 Obsidian。连线上是数量：稀疏虚线 = 空闲，流动虚线 = 有积压在走，琥珀色长虚线 = 等你批准。点节点跳到对应页签；某段读不到时在图上方标红。 |
-| **待批准** | **Agent 修正**：涉及 decision 的新增 / 修改 / 取代 / 作废都排在这里；卡片显示改动字段，修改已有笔记时同时显示旧值（删除线）；「Agent 称用户已确认」只是说明，不能代替你批准。「批准写入」会再确认一次，「拒绝」可填原因。<br>**等待批量分析的项目**：新项目攒够阈值（默认 20 份会话草稿）后点「开始」，之后新草稿自动增量合并。 |
+| **待批准** | **可选审阅 / 旧 Agent 修正队列**：仅显示显式排队或升级前遗留的修正；Agent 的 upsert_note/suggest_correction（含 decision）现在直接写 Obsidian，默认不会出现在这里。旧卡片仍可「批准写入」或「拒绝」，保留兼容。<br>**等待批量分析的项目**：新项目攒够阈值（默认 20 份会话草稿）后点「开始」，之后新草稿自动增量合并。 |
 | **笔记** | 按类型（决策 / 经验 / 技巧）和项目浏览原子笔记；搜索框走和 Agent 自动召回**同一套检索**（Hindsight，不可用时本地检索），可以直接检验召回效果。点开看全文、取代关系和相关笔记。 |
 | **草稿** | 每个项目的会话草稿：积累中（进度条 / 阈值）、等你批准、自动增量、只提技巧。 |
 
@@ -26,7 +30,7 @@ Safari「分享 → 添加到主屏幕」后像 App 一样全屏打开（带图�
 | `GET /api/note?id=` | 单条笔记 |
 | `POST /api/recall` | 与 Agent 相同的 recall |
 | `GET /api/gate` · `POST /api/gate/{project}/approve` | 批处理闸门 |
-| `GET /api/corrections` · `POST /api/corrections/{id}/approve|reject` | Agent 修正队列 |
+| `GET /api/corrections` · `POST /api/corrections/{id}/approve|reject` | 可选审阅/旧修正队列 |
 
 写操作需要 `X-Hinddian: 1` 头（防 CSRF）。vault 在本机（设了 `VAULT_ROOT`）时全部本地执行，否则经 SSH 到 vault 主机。
 

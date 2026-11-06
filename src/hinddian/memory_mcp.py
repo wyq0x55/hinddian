@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, Response
 
-from . import __version__, jev, jev_log, session_finalize
+from . import __version__, index_sync, jev, jev_log, session_finalize
 from .config import get_settings
 
 router = APIRouter()
@@ -33,7 +33,7 @@ TOOLS = [
     },
     {
         "name": "routing_project",
-        "description": "Project routing table: current state, decision/lesson titles+ids, when_to_recall guidance.",
+        "description": "Project memory map: current state and decision/lesson titles grouped by type, with ids and updated dates. Expand only relevant notes with get_note.",
         "inputSchema": {
             "type": "object",
             "properties": {"project": {"type": "string", "description": "Project folder name"}},
@@ -42,7 +42,7 @@ TOOLS = [
     },
     {
         "name": "recall",
-        "description": "Search active notes via Hindsight (local fallback). Returns a compact id/title/type/date/score index; use timeline for context and get_note for details. format=full preserves the legacy summaries.",
+        "description": "Search active notes via Hindsight (vault local fallback). Returns a compact id/title/type/date/score index verified against current vault files; date is updated. Use timeline for context and get_note for details. format=full includes current vault text.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -57,7 +57,7 @@ TOOLS = [
     },
     {
         "name": "get_note",
-        "description": "Fetch full text, links and status. A string id returns one note; an array of up to 20 ids returns a list in request order, including not_found entries.",
+        "description": "Fetch current vault full text, links, status and updated. A string id returns one note; an array of up to 20 ids returns a list in request order, including not_found entries.",
         "inputSchema": {
             "type": "object",
             "properties": {"id": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 20}]}},
@@ -94,9 +94,9 @@ TOOLS = [
     {
         "name": "upsert_note",
         "description": (
-            "Gated write to Obsidian (SoT). Actions: add|update|supersede|noop|obsolete. "
-            "tip/preference/lesson write directly. Anything that creates, changes or retires a decision "
-            "is queued for the user's dashboard approval — no flag bypasses this. "
+            "Direct write to Obsidian (SoT), including decision. Actions: add|update|supersede|noop|obsolete. "
+            "No dashboard approval required. Use a proposition as title and fill scene/practice/reason "
+            "plus project for project notes; updates can reuse existing fields. "
             "Hard delete forbidden — use supersede or obsolete. Never Hindsight retain. No secrets."
         ),
         "inputSchema": {
@@ -106,7 +106,7 @@ TOOLS = [
                 "id": {"type": "string"},
                 "type": {"type": "string", "description": "decision|lesson|tip|preference"},
                 "project": {"type": "string"},
-                "title": {"type": "string"},
+                "title": {"type": "string", "description": "Proposition; required for add/supersede, optional for update/obsolete"},
                 "slug": {"type": "string"},
                 "scene": {"type": "string"},
                 "practice": {"type": "string"},
@@ -117,20 +117,20 @@ TOOLS = [
                 "sources": {"type": "array", "items": {"type": "string"}},
                 "auto_verdict": {"type": "boolean", "description": "Let Jev pick add/update/supersede/noop against existing notes"},
                 "force_new": {"type": "boolean", "description": "add only: write even though similar notes exist (an add that looks like a duplicate returns similar_exists + candidates)"},
-                "face_correction": {"type": "boolean", "description": "User explicitly corrected a wrong memory in this turn (shown to the reviewer)"},
-                "user_confirmed": {"type": "boolean", "description": "User confirmed in chat (shown to the reviewer; decisions still need dashboard approval)"},
-                "mode": {"type": "string", "description": "suggest = force queue to dashboard"},
+                "face_correction": {"type": "boolean", "description": "Legacy context flag; does not change the direct write path"},
+                "user_confirmed": {"type": "boolean", "description": "Legacy context flag; no approval needed"},
+                "mode": {"type": "string", "description": "Legacy flag; all modes use direct writes"},
                 "correction_reason": {"type": "string"},
             },
-            "required": ["title"],
         },
     },
     {
         "name": "suggest_correction",
         "description": (
-            "Queue a memory correction for dashboard approval. Use when the user corrects memory "
-            "or you discover a wrong/outdated note (preferred for decision/architecture). "
-            "Does not write Obsidian until approved. Never use push_draft for corrections."
+            "Apply a memory correction directly to Obsidian, including decision/architecture. "
+            "Same actions and atomic-note contract as upsert_note; no pending queue. "
+            "Use when the user corrects memory or you discover a wrong/outdated note. "
+            "Never use push_draft for corrections."
         ),
         "inputSchema": {
             "type": "object",
@@ -147,7 +147,6 @@ TOOLS = [
                 "tags": {"type": "array", "items": {"type": "string"}},
                 "correction_reason": {"type": "string"},
             },
-            "required": ["title"],
         },
     },
     {
@@ -207,6 +206,15 @@ def _ssh_cli(args: list[str], payload: dict | None = None) -> Any:
 
 
 def vault(op: str, **kw: Any) -> Any:
+    result = _vault(op, **kw)
+    if (isinstance(result, dict) and result.get("ok")
+            and ((op in ("upsert_note", "suggest_correction") and result.get("action") != "noop")
+                 or (op == "decide_correction" and result.get("status") == "applied"))):
+        index_sync.kick()
+    return result
+
+
+def _vault(op: str, **kw: Any) -> Any:
     """Run one vault op locally (VAULT_ROOT mounted) or on the vault host via the memory CLI."""
     if get_settings().vault_local:
         n = _notes_mod()
@@ -227,7 +235,7 @@ def vault(op: str, **kw: Any) -> Any:
         if op == "upsert_note":
             return n.upsert_note(kw["payload"])
         if op == "suggest_correction":
-            return n.enqueue_correction(kw["payload"])
+            return n.suggest_correction(kw["payload"])
         if op == "push_draft":
             p = kw["payload"]
             return n.push_draft(project=p["project"], title=p["title"], body=p["body"], meta=p["meta"])
@@ -324,14 +332,12 @@ def call_tool(name: str, args: dict) -> Any:
             order=args.get("order") or "title",
         )
 
-    if name == "upsert_note":
+    if name in ("upsert_note", "suggest_correction"):
         payload = dict(args)
-        if payload.pop("auto_verdict", None) and (payload.get("type") or "").lower() != "decision":
+        auto = payload.pop("auto_verdict", None)
+        if auto and str(payload.get("action") or payload.get("verdict") or "add").lower() in ("add", "create"):
             _apply_jev_verdict(payload)
-        return vault("upsert_note", payload=payload)
-
-    if name == "suggest_correction":
-        return vault("suggest_correction", payload=dict(args, mode="suggest"))
+        return vault(name, payload=payload)
 
     if name == "push_draft":
         meta = {k: args[k] for k in DRAFT_META_KEYS if args.get(k) is not None}
@@ -353,8 +359,7 @@ def call_tool(name: str, args: dict) -> Any:
 
 
 def _apply_jev_verdict(payload: dict) -> None:
-    """Let Jev choose add/update/supersede/noop against the most similar existing notes. Decisions
-    skip this: they are queued for the dashboard whatever the verdict."""
+    """Let Jev choose add/update/supersede/noop against similar notes of any type."""
     query = " ".join(str(payload.get(k) or "") for k in ("title", "practice", "scene")).strip()[:400]
     hits = vault("search_notes", query=query, project=payload.get("project") or None, type=payload.get("type") or None, limit=8) if query else []
     cands = [{"id": h["id"], "title": h["title"], "scene": (h.get("scene") or "")[:200], "practice": (h.get("practice") or "")[:300]}
@@ -440,37 +445,51 @@ def _recall(args: dict) -> dict:
             if project and typ != "tip":
                 tags.append(f"project:{project}")
         items = _hindsight_recall(query, budget, tags, match)
-        results = _by_note(_filter_active(items, project, typ))
+        results = _by_note(items)
     except Exception as e:  # noqa: BLE001 — any Hindsight failure falls back to the vault itself
         err = f"{type(e).__name__}: {str(e)[:200]}"
         results = vault("search_notes", query=query, project=project or None, type=typ or None, limit=12)
         return {"ok": True, "via": "local-fallback", "error": err, "query": query,
                 "results": results if fmt == "full" else _compact_index(results)}
+    # Hindsight ranks candidates; the vault decides existence, scope and current content.
+    # Read in batches of 20 for the SSH CLI; do not mistake omitted ids for active notes.
+    verified = True
+    try:
+        ids = list(dict.fromkeys(r["document_id"] for r in results
+                                if isinstance(r, dict) and r.get("document_id")))
+        current = {}
+        for pos in range(0, len(ids), 20):
+            current.update({n["id"]: n for n in vault("get_notes", ids=ids[pos:pos + 20], summary=fmt == "index")
+                            if not n.get("error")})
+        fresh = []
+        for row in results:
+            if not isinstance(row, dict) or not row.get("document_id"):
+                fresh.append(row)
+                continue
+            note = current.get(row["document_id"])
+            if not note:
+                continue  # deleted in Obsidian, even if Hindsight still has the document
+            meta = {k: note[k] for k in ("id", "title", "type", "project", "status", "path", "updated")}
+            row = dict(row, metadata={**(row.get("metadata") or {}), **meta})
+            if fmt == "full":
+                row["text"] = note["text"]
+            fresh.append(row)
+        results = fresh
+    except Exception:  # noqa: BLE001 — retain degraded recall if the vault host is offline
+        verified = False
+    results = _filter_active(results, project, typ)
     if fmt == "index":
-        # One metadata-only vault read supplies dates absent from older Hindsight indexes.
-        # The index remains usable when the vault host is unavailable.
-        try:
-            ids = list(dict.fromkeys(r["document_id"] for r in results
-                                    if isinstance(r, dict) and r.get("document_id")))[:20]
-            metadata = {n["id"]: n for n in vault("get_notes", ids=ids, summary=True)
-                        if not n.get("error")} if ids else {}
-        except Exception:  # noqa: BLE001
-            metadata = {}
-        results = _compact_index(
-            [r for r in results if not isinstance(r, dict)
-             or metadata.get(r.get("document_id"), {}).get("status", "active") == "active"],
-            metadata,
-        )
-    return {"ok": True, "via": "hindsight", "query": query, "results": results}
+        results = _compact_index(results)
+    return {"ok": True, "via": "hindsight", "vault_verified": verified, "query": query, "results": results}
 
 
-def _compact_index(items: Any, notes: dict | None = None) -> list[dict]:
+def _compact_index(items: Any) -> list[dict]:
     out = []
     for row in items if isinstance(items, list) else []:
         if not isinstance(row, dict):
             continue
         nid = row.get("document_id") or row.get("id")
-        meta = {**(row.get("metadata") or {}), **((notes or {}).get(nid) or {})}
+        meta = row.get("metadata") or {}
         scores = row.get("scores") or {}
         # Hindsight sends "reranker": null when it skipped reranking; fall through to the next score
         score = next((v for v in (scores.get("reranker"), scores.get("final"), row.get("score")) if v is not None), None)

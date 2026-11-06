@@ -1,13 +1,13 @@
 # hinddian
 
-Host-agnostic memory product: **Obsidian 原子笔记**为人读唯一真相源（SoT）；Agent 只经 **hinddian-memory MCP** 路由 / 召回 / 门控写入；**Hindsight** 只做最后一层检索索引（定时同步喂入，Agent **禁止** `retain`）。
+Host-agnostic memory product: **Obsidian 原子笔记**为人和 Agent 共用的唯一真相源（SoT）；Agent 经 **hinddian-memory MCP** 路由 / 召回 / 直接写入；**Hindsight** 只做最后一层检索索引（定时同步喂入，Agent **禁止** `retain`）。
 
 **与 Magpie 无关。** Magpie 若仍在用，见可选适配器 [`adapters/magpie/`](adapters/magpie/README.md)。
 
 | 层 | 职责 |
 |----|------|
 | Host hooks（Claude / Codex / 可选 Magpie adapter） | 会话桶缓冲 + Jev keep → `push_draft` |
-| hinddian-memory MCP | 路由、recall、门控 `upsert_note` / `suggest_correction` |
+| hinddian-memory MCP | 路由、recall、直接 `upsert_note` / `suggest_correction` |
 | vault 主机 批处理 | 草稿 → 原子笔记（新项目需仪表盘批准） |
 | Obsidian vault | 人读 SoT |
 | Hindsight bank（`HINDSIGHT_BANK`，默认 `hinddian`） | 索引；`hinddian-hindsight-sync.timer` 对齐 |
@@ -16,7 +16,7 @@ Host-agnostic memory product: **Obsidian 原子笔记**为人读唯一真相源�
 
 | 文档 | 内容 |
 |------|------|
-| [`ARCHITECTURE.md`](ARCHITECTURE.md) | 流水线、Jev、会话桶、门控、组件 |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | 流水线、Jev、会话桶、直写、组件 |
 | [`docs/DASHBOARD.md`](docs/DASHBOARD.md) | 仪表盘：图谱 / 批准项目 / Agent 修正 |
 | [`docs/MEMORY-MCP.md`](docs/MEMORY-MCP.md) | Agent 只挂 hinddian-memory（现行） |
 | [`docs/PIPELINE.md`](docs/PIPELINE.md) | 一轮会话如何进笔记 |
@@ -73,7 +73,7 @@ uvicorn hinddian.api:app --host 127.0.0.1 --port 8787
 
 ```bash
 pip install -e '.[dev]'
-pytest                          # 门控 / 路径 / 笔记格式往返 / hooks / API 双通道
+pytest                          # 直写 / 路径 / 笔记格式往返 / hooks / API 双通道
 python tools/sync_hooks.py      # 改了 hooks/ 或 src/hinddian/jev.py 后重新生成各副本（CI 用 --check 校验）
 ```
 
@@ -90,7 +90,9 @@ python tools/sync_hooks.py      # 改了 hooks/ 或 src/hinddian/jev.py 后重�
 2. **session-start / 空闲约 30 分钟 / 换项目**：Jev keep → 一次 `push_draft`（`session-<id>`）。
 3. **Jev 写路径**：本机 System One（`JEV_BASE_URL`，默认 `127.0.0.1:3425/v1/systemone`）→ 可选云端 TypeSafe → 都失败则**暂不记、退避重试**（不会用松弛 LLM 自动保留）。
 4. **批处理**：新项目草稿满阈值（默认 20 **会话草稿**）→ 仪表盘批准；已批准增量自动；技巧可自动。
-5. **Agent 修正（门控 upsert）**：`tip`/`preference`/`lesson` 可直写；凡涉及 `decision` 的写入一律进仪表盘 **「Agent 修正」**，只有你能批准（Agent 的 token 调不到批准接口）；禁止硬删（`supersede`/`obsolete`）；禁止 Hindsight `retain`。
+5. **Agent 直写**：`upsert_note` / `suggest_correction` 均直接写入 Obsidian，涵盖所有类型（包括 decision）的新增、修改、取代和作废。仪表盘审批只用于可选审阅及旧队列；禁止 Agent 硬删（用 `supersede`/`obsolete`）和 Hindsight `retain`。
+6. **人在 Obsidian 管记忆**：改正文/frontmatter、软退役或删文件，读取立即以 vault 文件为准。索引每两分钟对齐，MCP 写入另异步 kick sync；正常空闲时最多两分钟开始同步，完成还需索引处理时间，积压/故障看同步状态。
+7. **人读 ↔ Agent 读**：标题即命题，正文分场景/做法/理由；Agent 先看项目列表和类型分组的标题地图（id/updated），按需 get_note 展开。详见 [双可读笔记契约](docs/MEMORY-MCP.md#双可读笔记契约)。
 
 仪表盘：[`docs/DASHBOARD.md`](docs/DASHBOARD.md)。
 

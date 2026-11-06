@@ -14,7 +14,7 @@
 | Hindsight `:8888` | bank（`HINDSIGHT_BANK`，默认 `hinddian`）；**仅同步层写入**，不对 Agent 暴露 retain |
 | `hinddian-hindsight-sync.timer` | Obsidian active 笔记 → Hindsight 索引对齐 |
 | 会话草稿 | hooks → `push_draft` → vault 主机 `/var/lib/hinddian/drafts`（经 MCP/SSH） |
-| Agent 修正队列 | vault 主机 `/var/lib/hinddian/agent_corrections`；仪表盘确认/拒绝 |
+| 可选审阅/旧修正队列 | vault 主机 `/var/lib/hinddian/agent_corrections`；仪表盘确认/拒绝 |
 
 Vault / batch 在 **vault 主机**；API 主机 通过已有 root SSH（`CLASSIFY_SSH_HOST=vault-host`）调 `hinddian-memory-cli` / `hinddian-classify`。
 
@@ -75,6 +75,25 @@ curl -s http://127.0.0.1:8787/api/health
 ```
 
 若用本机 :3425 闸门，确保隧道服务与 `hinddian-hindsight-sync.timer` 已 enable。
+
+升级直管记忆时，需要一并更新两个主机上的 checkout 和 vault 主机 CLI；刷新 API service 与 sync timer：
+
+```bash
+cp /opt/hinddian/deploy/api-host/hinddian-hindsight-sync.service /etc/systemd/system/
+cp /opt/hinddian/deploy/api-host/hinddian-hindsight-sync.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl restart hinddian.service
+systemctl enable --now hinddian-hindsight-sync.timer
+systemctl restart hinddian-hindsight-sync.timer
+systemctl list-timers hinddian-hindsight-sync.timer --no-pager
+```
+
+timer 改为 `OnCalendar=*:0/2`（两分钟，AccuracySec=1s，无随机延迟）。
+`hinddian.service` 中 `HINDDIAN_SYNC_KICK=1` 使 MCP 写入后异步启动现有 sync service；
+API 仍按既有部署用 root 运行，因此无需新增 sudo/反向 SSH/HTTP 权限。
+自定义非 systemd 部署可不启用 kick，继续靠 timer。无需修改 LLM 配置或其它服务。
+同步运行中再次 kick 会合并到现有任务；timer 负责补齐期间新发生的变化。
+两分钟是正常空闲时开始同步的等待上限，完成还需索引处理时间；观察同步状态里的 pending/errors。
 
 ## 5. mTLS CA（仅公钥）
 
