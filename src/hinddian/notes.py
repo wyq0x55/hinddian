@@ -275,13 +275,14 @@ def enqueue_correction(payload: dict) -> dict:
     clean = {
         k: payload[k]
         for k in (
-            "action", "verdict", "id", "target_id", "type", "project", "title", "slug",
+            "action", "verdict", "id", "target_id", "successor_id", "type", "project", "title", "slug",
             "scene", "practice", "reason", "supersedes", "tags", "sources", "related",
             "origin", "correction_reason",
         )
         if k in payload and payload[k] is not None
     }
-    clean["action"] = str(clean.get("action") or clean.get("verdict") or "update").lower()
+    has_target = bool(str(clean.get("id") or clean.get("target_id") or "").strip())
+    clean["action"] = str(clean.get("action") or clean.get("verdict") or ("update" if has_target else "add")).lower()
     doc = {
         "id": cid,
         "status": "pending",
@@ -395,8 +396,11 @@ def upsert_note(payload: dict, *, trusted: bool = False) -> dict:
     """Direct write: add | update | supersede | obsolete | noop. No hard delete.
 
     Agent writes require complete atomic-note content; updates may reuse existing fields.
-    trusted=True preserves compatibility when applying incomplete legacy review payloads.
+    supersedes adds bidirectional links; successor_id reuses an active note for supersede.
+    trusted=True preserves compatibility for incomplete legacy review payloads and treats an id-less update as add.
     """
+    if not isinstance(payload, dict):
+        return {"ok": False, "error": "invalid_payload"}
     if not trusted:
         payload = _untrusted(payload)
     action = str(payload.get("action") or payload.get("verdict") or "add").lower()
@@ -406,6 +410,10 @@ def upsert_note(payload: dict, *, trusted: bool = False) -> dict:
             "error": "hard_delete_forbidden",
             "hint": "Use action=supersede (with supersedes=[old_id]) or action=obsolete. Never delete.",
         }
+    if "successor_id" in payload and action != "supersede":
+        return {"ok": False, "error": "successor_id_requires_supersede"}
+    if "supersedes" in payload and action in ("noop", "ignore"):
+        return {"ok": False, "error": "supersedes_not_supported", "action": action}
     if action in ("noop", "ignore"):
         return {"ok": True, "action": "noop", "reason": payload.get("reason", "noop")}
     if action == "create":
@@ -417,15 +425,47 @@ def upsert_note(payload: dict, *, trusted: bool = False) -> dict:
 
     with nf.vault_lock():
         notes = load_notes(include_inactive=True)
-        typ, extra_tags = _norm_type(payload.get("type"))
-        target_id = str(payload.get("id") or payload.get("target_id") or "")
+        target_id = payload.get("id", payload.get("target_id", ""))
+        if not isinstance(target_id, str) or target_id != target_id.strip():
+            return {"ok": False, "error": "invalid_id"}
         target = notes.get(target_id)
+        if action == "update" and not target:
+            if trusted and not target_id:
+                action = "add"  # legacy queued updates had no note id; agent writes stay rejected
+            else:
+                return {"ok": False, "error": "update_needs_existing_id", "id": target_id}
+        successor_id = payload.get("successor_id")
+        if "successor_id" in payload:
+            if not isinstance(successor_id, str) or not successor_id.strip() or successor_id != successor_id.strip():
+                return {"ok": False, "error": "invalid_successor_id"}
+            if successor_id not in notes:
+                return {"ok": False, "error": "successor_not_found", "id": successor_id}
+            unsupported = [key for key in ("id", "target_id", "type", "project", "title", "slug", "scene",
+                                           "practice", "reason", "related", "tags", "sources") if key in payload]
+            if unsupported:
+                return {"ok": False, "error": "successor_link_only", "fields": unsupported,
+                        "hint": "Use a separate update to edit the existing successor"}
+        if "supersedes" in payload and action == "obsolete":
+            return {"ok": False, "error": "supersedes_not_supported", "action": action}
+        try:
+            supersedes = nf.validate_supersedes(successor_id or target_id, payload.get("supersedes", []), notes)
+        except nf.SupersessionError as exc:
+            return exc.result
+        if action == "supersede" and not supersedes:
+            return {"ok": False, "error": "supersede_needs_predecessors"}
+        gated = "dashboard" if trusted else "auto"
+        if successor_id:
+            successor = notes[successor_id]
+            for changed in nf.apply_supersedes(successor, supersedes, notes, updated=today()):
+                _write(changed, notes)
+            return {"ok": True, "action": "supersede", "id": successor_id,
+                    "path": successor["path"], "gated": gated}
+        typ, extra_tags = _norm_type(payload.get("type"))
         if action in ("update", "obsolete") and target:
             typ = target["type"] or typ  # a note's type can't be changed by relabeling the payload
         tags = list(dict.fromkeys(_str_list(payload.get("tags")) + extra_tags))
         project = "" if typ == "tip" else nf.safe_project(payload.get("project") or (target or {}).get("project"))
         title = safe_title(payload.get("title") or (target or {}).get("title") or "未命名")
-        supersedes = [s for s in _str_list(payload.get("supersedes")) if s in notes]
         fields = {k: nf.guard_field(nf.unwiki(str(payload.get(k) or ""))) for k in ("scene", "practice", "reason")}
 
         if action == "obsolete" and not target:
@@ -452,16 +492,12 @@ def upsert_note(payload: dict, *, trusted: bool = False) -> dict:
                         "hint": "标题即命题；填写 project（项目笔记）及 scene/practice/reason，可沿用已有字段。"}
 
         origin = str(payload.get("origin") or "upsert")[:80]
-        gated = "dashboard" if trusted else "auto"
 
         if action == "obsolete":
             target["status"] = "obsolete"
             target["updated"] = today()
             _write(target, notes)
             return {"ok": True, "action": "obsolete", "id": target_id, "path": target["path"], "gated": gated}
-
-        if action == "update" and not target:
-            action = "add"
 
         related = [r for r in _str_list(payload.get("related")) if r in notes]
         sources = _str_list(payload.get("sources"))
@@ -477,7 +513,8 @@ def upsert_note(payload: dict, *, trusted: bool = False) -> dict:
             n["tags"] = list(dict.fromkeys(n["tags"] + tags))
             n["sources"] = list(dict.fromkeys(n["sources"] + sources))
             n["related"] = list(dict.fromkeys(n["related"] + [r for r in related if r != n["id"]]))
-            _write(n, notes)
+            for changed in nf.apply_supersedes(n, supersedes, notes, updated=today()):
+                _write(changed, notes)
             return {"ok": True, "action": "update", "id": n["id"], "path": n["path"], "gated": gated}
 
         slug = slugify(payload.get("slug") or title)
@@ -495,17 +532,8 @@ def upsert_note(payload: dict, *, trusted: bool = False) -> dict:
             related=[r for r in related if r != nid], title=title, updated=today(), origin=origin, **fields,
         )
         notes[nid] = n
-        if action == "supersede":
-            for old in supersedes:
-                if old == nid:
-                    continue
-                notes[old]["status"] = "superseded"
-                notes[old]["superseded_by"] = nid
-                notes[old]["updated"] = today()
-                n["supersedes"].append(old)
-        _write(n, notes)
-        for old in n["supersedes"]:
-            _write(notes[old], notes)
+        for changed in nf.apply_supersedes(n, supersedes, notes, updated=today()):
+            _write(changed, notes)
         return {"ok": True, "action": action, "id": nid, "path": path, "gated": gated}
 
 

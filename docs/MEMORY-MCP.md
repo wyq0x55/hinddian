@@ -12,6 +12,17 @@ Header：`Authorization: Bearer <HINDDIAN_MCP_TOKEN>`（常与 Hindsight tenant 
 
 写入：记住/纠正用 `upsert_note` 或兼容名 `suggest_correction`，所有类型（包括 decision）的 add/update/supersede/obsolete 均直写 Obsidian，不进入 pending 队列。仪表盘审批是可选审阅/旧队列兼容功能；**不要**用手调 `push_draft` 代替纠正——草稿只进批处理蒸馏，不进「Agent 修正」队列，空 ops 时面板上看不到改动。
 
+## 维护取代关系
+
+`upsert_note` 和 `suggest_correction` 共用以下接口：
+
+- `action="update", id="现行笔记 id", supersedes=["旧笔记 id"]`：追加并去重前驱，保留原有 `supersedes`；同步设置旧笔记的 `status: superseded` 和 `superseded_by`。省略 `supersedes` 或传 `[]` 均保留已有关系，不表示撤销退役。
+- `action="supersede", successor_id="已有现行笔记 id", supersedes=["旧笔记 id"]`：复用已有 active 笔记作为继任者，不新建笔记。此模式只连接关系，不传 `id`、`target_id` 或正文、分类等字段；正文修改另用 update。
+- 不传 `successor_id` 的 supersede 仍按原方式新建继任笔记，需填写完整原子笔记字段。两种 supersede 都要求非空 `supersedes`。
+- 重新指定后继时，旧继任者的 `supersedes` 会移除对应旧笔记，避免残留反向关系。
+
+所有关系请求在写入前校验。错误返回 `ok: false` 和明确的 `error`，包括 `invalid_supersedes`、`supersedes_not_found`（附缺失 ids）、`self_supersession`、`supersession_cycle`、`successor_not_active`、`successor_not_found`、`invalid_successor_id`、`successor_id_requires_supersede`、`successor_link_only`、`supersede_needs_predecessors`。update 的目标不存在时返回 `update_needs_existing_id`，不再隐式新增笔记。非法 id 类型返回 `invalid_id`；obsolete/noop 不接受 `supersedes`，返回 `supersedes_not_supported`。
+
 ## 禁止 / 已移除
 
 | 项 | 说明 |

@@ -97,6 +97,8 @@ TOOLS = [
             "Direct write to Obsidian (SoT), including decision. Actions: add|update|supersede|noop|obsolete. "
             "No dashboard approval required. Use a proposition as title and fill scene/practice/reason "
             "plus project for project notes; updates can reuse existing fields. "
+            "supersedes adds predecessor ids and updates both directions; invalid ids or cycles fail. "
+            "For supersede, successor_id links to an existing active successor without creating a note. "
             "Hard delete forbidden — use supersede or obsolete. Never Hindsight retain. No secrets."
         ),
         "inputSchema": {
@@ -106,12 +108,15 @@ TOOLS = [
                 "id": {"type": "string"},
                 "type": {"type": "string", "description": "decision|lesson|tip|preference"},
                 "project": {"type": "string"},
-                "title": {"type": "string", "description": "Proposition; required for add/supersede, optional for update/obsolete"},
+                "title": {"type": "string", "description": "Proposition; required for add/new supersede, optional for update/obsolete; omit with successor_id"},
                 "slug": {"type": "string"},
                 "scene": {"type": "string"},
                 "practice": {"type": "string"},
                 "reason": {"type": "string"},
-                "supersedes": {"type": "array", "items": {"type": "string"}},
+                "supersedes": {"type": "array", "items": {"type": "string", "minLength": 1},
+                               "description": "Existing predecessor ids to add, preserving existing links; [] preserves links. Required non-empty for supersede. Updates each predecessor's status/superseded_by; reparenting removes the previous reverse link."},
+                "successor_id": {"type": "string", "minLength": 1,
+                                 "description": "supersede only: existing active successor. Supply supersedes; omit id and content fields. No new note is created; edit content in a separate update."},
                 "related": {"type": "array", "items": {"type": "string"}},
                 "tags": {"type": "array", "items": {"type": "string"}},
                 "sources": {"type": "array", "items": {"type": "string"}},
@@ -129,6 +134,8 @@ TOOLS = [
         "description": (
             "Apply a memory correction directly to Obsidian, including decision/architecture. "
             "Same actions and atomic-note contract as upsert_note; no pending queue. "
+            "supersedes adds predecessor ids with bidirectional links; invalid ids or cycles fail. "
+            "supersede with successor_id reuses an existing active successor without creating a note. "
             "Use when the user corrects memory or you discover a wrong/outdated note. "
             "Never use push_draft for corrections."
         ),
@@ -143,7 +150,11 @@ TOOLS = [
                 "scene": {"type": "string"},
                 "practice": {"type": "string"},
                 "reason": {"type": "string"},
-                "supersedes": {"type": "array", "items": {"type": "string"}},
+                "supersedes": {"type": "array", "items": {"type": "string", "minLength": 1},
+                               "description": "Existing predecessor ids to add, preserving existing links; [] preserves links. Required non-empty for supersede. Updates status/superseded_by and removes stale reverse links when reparenting."},
+                "successor_id": {"type": "string", "minLength": 1,
+                                 "description": "supersede only: existing active successor. Supply supersedes; omit id and content fields. No new note is created; edit content separately."},
+                "related": {"type": "array", "items": {"type": "string"}},
                 "tags": {"type": "array", "items": {"type": "string"}},
                 "correction_reason": {"type": "string"},
             },

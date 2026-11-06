@@ -55,6 +55,61 @@ class UnsafePath(ValueError):
     pass
 
 
+class SupersessionError(ValueError):
+    def __init__(self, error: str, **details: Any):
+        super().__init__(error)
+        self.result = {"ok": False, "error": error, **details}
+
+
+def validate_supersedes(successor_id: str, predecessors: Any, notes: dict[str, dict]) -> list[str]:
+    if not isinstance(predecessors, list) or any(
+        not isinstance(note_id, str) or not note_id.strip() or note_id != note_id.strip()
+        for note_id in predecessors
+    ):
+        raise SupersessionError("invalid_supersedes", hint="Pass an array of non-empty note ids")
+    predecessors = list(dict.fromkeys(predecessors))
+    missing = [note_id for note_id in predecessors if note_id not in notes]
+    if missing:
+        raise SupersessionError("supersedes_not_found", ids=missing)
+    if successor_id in predecessors:
+        raise SupersessionError("self_supersession", id=successor_id)
+    if predecessors and successor_id in notes and notes[successor_id]["status"] != "active":
+        raise SupersessionError("successor_not_active", id=successor_id)
+    children = {note_id: set(note.get("supersedes") or []) for note_id, note in notes.items()}
+    for note_id, note in notes.items():
+        parent = note.get("superseded_by")
+        if parent in children:
+            children[parent].add(note_id)
+    pending = list(predecessors)
+    visited = set()
+    while pending:
+        note_id = pending.pop()
+        if note_id == successor_id:
+            raise SupersessionError("supersession_cycle", id=successor_id)
+        if note_id not in visited:
+            visited.add(note_id)
+            pending.extend(children.get(note_id, set()))
+    return predecessors
+
+
+def apply_supersedes(successor: dict, predecessors: list[str], notes: dict[str, dict], *, updated: str) -> list[dict]:
+    changed = {successor["id"]: successor}
+    successor["supersedes"] = list(dict.fromkeys([*successor.get("supersedes", []), *predecessors]))
+    for note_id in predecessors:
+        predecessor = notes[note_id]
+        previous = notes.get(predecessor.get("superseded_by"))
+        if previous and previous["id"] != successor["id"]:
+            previous["supersedes"] = [old_id for old_id in previous.get("supersedes", []) if old_id != note_id]
+            previous["updated"] = updated
+            changed[previous["id"]] = previous
+        predecessor["status"] = "superseded"
+        predecessor["superseded_by"] = successor["id"]
+        predecessor["updated"] = updated
+        changed[note_id] = predecessor
+    successor["updated"] = updated
+    return list(changed.values())
+
+
 # ------------------------------------------------------------------ text helpers
 # <private>…</private> in a conversation never leaves the user's machine (the hooks strip it);
 # stripped again here in case an older hook copy sent it. Unclosed → to the end.
