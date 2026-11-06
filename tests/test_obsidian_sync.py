@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -108,7 +109,7 @@ def test_vault_cli_suggest_and_upsert_share_direct_write_contract(vault, monkeyp
                "scene": "部署", "practice": "TLS", "reason": "安全"}
     cli = str(ROOT / "deploy/vault-host/hinddian-memory-cli")
     def call(op, data):
-        out = subprocess.run([str(ROOT / ".venv/bin/python"), cli, op], input=json.dumps(data),
+        out = subprocess.run([sys.executable, cli, op], input=json.dumps(data),
                              text=True, capture_output=True, check=True)
         return json.loads(out.stdout)
     added = call("suggest_correction", payload)
