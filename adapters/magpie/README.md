@@ -1,6 +1,6 @@
 # Magpie 会话采集适配器
 
-在任一 Magpie 主机上安装 `hinddian-session-start` 和 `hinddian-turn-end` 两个 Library Hooks。适配器使用本机的 hinddian 配置和 Jev 端点。
+在采集主机安装 `hinddian-session-start` 和 `hinddian-turn-end` 两个 Library Hooks。适配器使用本机 hinddian 配置和草稿目录。
 
 从 Magpie Library → Skills 安装 `wyq0x55/hinddian` 的 `hinddian-hooks` skill，或使用 `magpie plugin add github:wyq0x55/hinddian` 后调用 `hinddian_install`。也可直接运行 skill 目录里的 `install.py`（Linux/macOS）或 `install.ps1`（Windows）。
 

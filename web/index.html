@@ -37,13 +37,12 @@
     <section class="view" id="view-pipeline" hidden>
       <div class="rt">
         <div class="rt-top">
-          <div class="rt-what"><b>流水线</b> · 会话 → Jev 过滤 → 草稿 → 批处理 → Obsidian</div>
+          <div class="rt-what"><b>流水线</b> · 最终回复 → 草稿 → 批处理 → Obsidian</div>
           <p class="rt-mode" id="rt-mode">—</p>
         </div>
         <div class="rt-stage" id="stage">
           <svg class="rt-wires" id="wires" aria-hidden="true"></svg>
-          <div class="rt-node lane-m" data-n="hooks" style="grid-area:hooks"><span class="dot muted"></span><b>会话</b><strong>hooks</strong><small>每台电脑 · 每轮缓冲</small></div>
-          <div class="rt-node rt-hub" data-n="jev" style="grid-area:jev"><b>Jev 过滤</b><small>会话结束时</small><i>值不值得记</i></div>
+          <div class="rt-node lane-m" data-n="hooks" style="grid-area:hooks"><span class="dot muted"></span><b>会话</b><strong>hooks</strong><small>每轮最终回复</small></div>
           <a class="rt-node lane-b" data-n="drafts" style="grid-area:drafts" href="#drafts"><span class="dot accent"></span><b>草稿·按项目</b><strong id="n-drafts">—</strong><small id="drafts-by">—</small></a>
           <div class="rt-node rt-hub" data-n="analysis" style="grid-area:analysis"><b>批处理</b><small>自动整理</small></div>
           <div class="rt-node lane-o" data-n="obsidian" style="grid-area:obsidian"><span class="dot green"></span><b>Obsidian</b><strong id="n-notes">—</strong><small id="notes-by">原子笔记</small></div>
@@ -58,7 +57,7 @@
 
     <section class="view narrow" id="view-drafts" hidden>
       <section class="card">
-        <header class="card-h"><h2>Jev 判断记录</h2><span class="note">每次 finalize 的结果</span><span class="grow"></span><span class="count" id="jev-count">—</span></header>
+        <header class="card-h"><h2>历史 Jev 记录</h2><span class="grow"></span><span class="count" id="jev-count">—</span></header>
         <div class="card-b"><div class="meta" id="jev-summary">加载中…</div><div id="jev-list"><p class="empty">加载中…</p></div></div>
       </section>
       <section class="card">

@@ -1,9 +1,9 @@
 # 会话到笔记
 
-1. **缓冲**。`Stop`（Magpie 为 `turn-end`）提取用户和助手的白名单内容，脱敏后按宿主会话 ID 写入本地缓冲。`SessionStart` 尝试 finalize 其他会话，`Stop` 也会尝试处理闲置的缓冲。`compact` 和 `resume` 不主动 finalize 其他会话。
-2. **判断**。本地 finalize 再脱敏，调用 Jev。配置后可以从本地 System One 失败回退到 TypeSafe。Jev 不可用时保留缓冲并按退避策略重试；只有 Jev 保留的会话才进入草稿。
-3. **草稿**。同一会话在同一项目下写入同一份 Markdown，frontmatter 记录 `session_id`。来源项目优先采用明确提示和已知 repo/cwd 名称，再考虑 repo 名、Jev 结果及 `通用-未定`。Jev 状态日志仅记录元数据。
-4. **整理**。batch 将草稿段落和已有笔记摘要交给模型，按项目创建或更新笔记。写入后将对应草稿移到 `processed`，笔记的 `sources` 沿用草稿的原始 `session_id`。旧草稿仍可使用 `ingested_from` 或文件名。
-5. **阅读**。在 Obsidian 查看和修改笔记。仪表盘可查看草稿与处理状态。
+1. **采集**。`Stop`（Magpie 为 `turn-end`）从最终可见回复摘取「原行为」「改进」「取舍」「验证」。缺段默认记一条跳过日志。设置 `no_closing: "summary"` 时取前 `summary_chars` 字，标记 `kind: summary`。
+2. **草稿**。同一会话、同一来源的轮次可追加到同一份 Markdown。记录原始 `session_id`、主机、工作目录 basename、仓库、分支、短 HEAD、带时区的时间和项目。脏工作区的短 HEAD 附 `-dirty`，缺失的字段为空。项目依次看显式项目、repo/cwd 能匹配的已有项目、repo 名和 `通用-未定`。重复轮次在待处理目录和归档中均可识别。
+3. **本地诊断**。采集直接写入草稿，正文保留原文。脚本静默退出，写锁竞争、跳过或异常只记录元数据。`capture.log` 上限为 128 KiB。
+4. **整理**。batch 以 Git 提交为基线，将草稿和已有笔记摘要交给模型。笔记 `sources` 使用 `session_id@commit`。缺少来源的草稿暂留原地。写入限于项目、技巧及 INDEX，既有笔记和枢纽页的人工内容保留。成功后草稿移入 `processed`。
+5. **阅读**。在 Obsidian 查看和修改笔记，或通过仪表盘查看草稿与处理状态。
 
-远端采集客户端可配置 `capture_mode: "http"` 和 `url`，向 HTTP 采集器提交同一种 finalize 请求。已有 `url` 的旧配置沿用 HTTP 模式。详见[部署说明](../deploy/api-host/DEPLOY.md)。
+`SessionStart` 可用于检查本地配置。旧 HTTP hook 配置需迁移为 `capture_mode: "local"`。详见[部署说明](../deploy/api-host/DEPLOY.md)。

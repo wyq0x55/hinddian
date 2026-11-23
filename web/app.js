@@ -72,8 +72,7 @@
     const drafts = state.overview?.drafts;
     const pending = state.batch ? pendingCount() : null;
     const edges = [
-      { f: "hooks", t: "jev", col: "c-muted", plain: true },
-      { f: "jev", t: "drafts", n: drafts?.ok ? drafts.total + drafts.processed : null, col: "c-accent" },
+      { f: "hooks", t: "drafts", n: drafts?.ok ? drafts.total + drafts.processed : null, col: "c-accent" },
       { f: "drafts", t: "analysis", n: pending, col: "c-accent", live: true },
       { f: "analysis", t: "obsidian", n: drafts?.ok ? drafts.processed : null, col: "c-green" },
     ];

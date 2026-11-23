@@ -9,6 +9,12 @@ python3 classify/hinddian_batch.py process my-project --dir ./comparison-drafts 
 python3 classify/hinddian_batch.py rebuild-hubs
 ```
 
-`process --dir` 可指定独立的输入目录，用于手工比较。用 `--dry-run` 时保留笔记库与输入草稿。`HB_BATCH` 控制每批草稿数（默认 20），`HB_RUN_MAX_BATCHES` 控制一次 `run` 每项目最多处理的批数（默认 3）。批处理默认访问 `HB_GATEWAY=http://127.0.0.1:3425/v1/chat/completions`，模型由 `HB_MODEL` 指定。
+`process --dir` 可指定独立的输入目录。`--dry-run` 需要干净的 Git 工作区，只请求和校验模型操作。`HB_BATCH` 控制每批草稿数（默认 20），`HB_RUN_MAX_BATCHES` 控制一次 `run` 每项目最多处理的批数（默认 3）。模型由 `HB_MODEL` 指定，`HB_GATEWAY` 默认为 `http://127.0.0.1:3425/v1/chat/completions`。
 
-Linux 上可在运行 Obsidian 的用户账户下执行 `bash classify/deploy/install-user.sh`。该脚本安装用户级 `hinddian-classify.timer` 和 `.service`，每 15 分钟运行，输出写入 user journal。路径建议统一写入 `config.json`，定时任务专用环境变量可写入 `~/.config/hinddian/batch.env`。
+笔记库必须拥有自己的 Git 提交和本地提交身份。干净时使用 HEAD 作为快照，有改动时先把现有变更做成本地快照提交。这样手写改动和上次入库结果会留在本地历史里，定时器也能自动处理下一批。整理后的 diff 写入 stdout 与状态目录的 `batch-ledger.jsonl`。笔记改动留在工作区，下一次整理可将其提交到本地快照。
+
+白名单为 `项目/`、`技巧/` 和 `00-系统/INDEX.md`，并拒绝符号链接。新笔记须有场景、做法、理由和真实 `session_id@commit` 来源。旧笔记追加新段落，项目枢纽页和 INDEX 只更新专属生成区。缺少来源的草稿应从原会话或仓库核实后补录。批内操作被拒时，输入草稿保留供检查重跑。
+
+写入锁在 POSIX 上用 `flock`，在 Windows 上用 `msvcrt` 的字节锁。宿主和整理器应使用同一个状态目录，或显式指向同一个 `HINDDIAN_VAULT_LOCK`。
+
+Linux 的用户级 service 和每 15 分钟 timer 见[运维说明](../deploy/api-host/DEPLOY.md)。

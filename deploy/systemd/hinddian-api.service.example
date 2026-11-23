@@ -1,5 +1,5 @@
 [Unit]
-Description=hinddian dashboard and optional session collector
+Description=hinddian dashboard and explicit draft submissions
 After=network.target
 
 [Service]

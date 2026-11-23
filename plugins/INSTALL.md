@@ -25,6 +25,6 @@
 python3 plugins/hinddian/scripts/setup.py --check
 ```
 
-无采集地址时，hooks 默认在本机使用 Jev，并把草稿写到 `~/Obsidian/drafts`。如果旧配置里已有远端地址，可运行 `setup.py --local`，或给宿主进程设置 `HINDDIAN_CAPTURE_MODE=local`。可选的 HTTP 采集器使用 `setup.py --url https://<host>:8444/hinddian`，令牌可通过 `HINDDIAN_MCP_TOKEN` 提供。
+hooks 直接将符合格式的最终可见回复写到 `~/Obsidian/drafts`。旧配置带有远端地址时，将 `capture_mode` 显式设为 `local`。在 wan37 直接配置 Codex 用户级 hook 的片段见[运维说明](../deploy/api-host/DEPLOY.md)。
 
-开两个会话验证采集。第一个会话完成一轮后打开另一个会话，观察 `hooks/finalize.log` 和配置的草稿目录。只有 Jev 选择保留的会话会写草稿。
+用一轮包含「原行为」「改进」「取舍」「验证」的最终回复验证采集，完成后在草稿目录核对来源。缺段和失败信息见 `~/.config/hinddian/hooks/capture.log`。`SessionStart` 可用于配置检查，实际采集在 `Stop`。
