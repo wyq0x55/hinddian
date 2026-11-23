@@ -107,3 +107,5 @@ def test_slugify_keeps_ascii_and_hashes_cjk():
 
 def test_redact_strips_private_blocks():
     assert nf.redact("a <private>secret</private> b <private>tail") == "a [private] b [private]"
+    assert nf.redact("a <PRIVATE>x <private>y</private> outer</PRIVATE> z") == "a [private] z"
+    assert nf.redact("a <private>x <private>y</private> outer") == "a [private]"

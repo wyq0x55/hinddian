@@ -64,11 +64,32 @@ class UnsafePath(ValueError):
 # ------------------------------------------------------------------ text helpers
 # <private>…</private> in a conversation never leaves the user's machine (the hooks strip it);
 # stripped again here in case an older hook copy sent it. Unclosed → to the end.
-PRIVATE_RE = re.compile(r"<private>.*?(?:</private>|\Z)", re.S | re.I)
+PRIVATE_RE = re.compile(r"</?private>", re.I)
+
+
+def private_spans(text: str) -> Iterator[tuple[int, int]]:
+    depth = start = 0
+    for tag in PRIVATE_RE.finditer(text):
+        if tag[0][1] != "/":
+            if not depth:
+                start = tag.start()
+            depth += 1
+        elif depth:
+            depth -= 1
+            if not depth:
+                yield start, tag.end()
+    if depth:
+        yield start, len(text)
 
 
 def redact(t: str) -> str:
-    t = PRIVATE_RE.sub("[private]", t)
+    parts = []
+    end = 0
+    for start, stop in private_spans(t):
+        parts.extend((t[end:start], "[private]"))
+        end = stop
+    parts.append(t[end:])
+    t = "".join(parts)
     for r in SECRET_RE:
         t = r.sub("[REDACTED]", t)
     return t

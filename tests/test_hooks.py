@@ -143,7 +143,7 @@ def test_local_finalize_redacts_legacy_buffers_and_keeps_session_id(hooks, monke
     local_jev = finalize.session_finalize.jev
 
     def classify(text, projects, cwd):
-        assert "syntheticcredential" not in text and "private text" not in text
+        assert not any(secret in text for secret in ("syntheticcredential", "private text", "outer tail"))
         assert text.count("[REDACTED]") == 2 and "[private]" in text
         return local_jev.GateResult(True, {"keep": True, "project": "demo", "title": "Use a backup",
                                           "lesson": ["Write a backup before changing settings"]}, 0.9, "jev:local")
@@ -153,7 +153,7 @@ def test_local_finalize_redacts_legacy_buffers_and_keeps_session_id(hooks, monke
     entry = buffer.append_turn(session_id="local-123", turn_text="placeholder")
     marker = "PRIVATE" + " KEY"
     entry["turns"][0]["text"] = (
-        "token: syntheticcredential <private>private text</private>\n"
+        "token: syntheticcredential <private>private text <private>inner</private>outer tail</private>\n"
         f"-----BEGIN {marker}-----\nsyntheticcredential\n-----END {marker}-----"
     )
     buffer.save(entry)
