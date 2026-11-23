@@ -14,18 +14,5 @@
     "hooks",
     "obsidian"
   ],
-  "hooks": "./hooks/hooks.json",
-  "userConfig": {
-    "HINDDIAN_MEMORY_URL": {
-      "type": "string",
-      "title": "hinddian base URL",
-      "description": "Optional HTTPS collector base URL. Leave empty to capture locally."
-    },
-    "HINDDIAN_MCP_TOKEN": {
-      "type": "string",
-      "title": "HTTP collector token",
-      "description": "Bearer token for the optional HTTP collector.",
-      "sensitive": true
-    }
-  }
+  "hooks": "./hooks/hooks.json"
 }

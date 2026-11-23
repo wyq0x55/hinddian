@@ -62,7 +62,7 @@ def find_library() -> Path:
 def load_embed():
     sys.path.insert(0, str(HERE))
     for cand in (HERE, HERE.parent):
-        if (cand / "embed_hooks.py").is_file() and (cand / "jev.py").is_file():
+        if (cand / "embed_hooks.py").is_file() and (cand / "capture.py").is_file():
             sys.path.insert(0, str(cand))
             break
     import embed_hooks  # type: ignore
@@ -74,7 +74,7 @@ def main() -> int:
     lib_path = find_library()
     emb = load_embed()
     # Prefer scripts shipped inside this skill folder
-    src_dir = HERE if (HERE / "jev.py").is_file() else Path(emb.__file__).resolve().parent
+    src_dir = HERE if (HERE / "capture.py").is_file() else Path(emb.__file__).resolve().parent
     hooks = emb.hook_defs(src_dir=src_dir)
     bak = lib_path.with_suffix(lib_path.suffix + f".bak.{int(time.time())}")
     shutil.copy2(lib_path, bak)

@@ -1,11 +1,11 @@
-"""Authenticated HTTP fallback for session capture."""
+"""Authenticated API for explicitly submitted drafts."""
 from __future__ import annotations
 
 import hmac
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 
-from . import draft_store, jev, jev_log, note_format, paths, session_finalize
+from . import draft_store, note_format
 from .config import get_settings
 
 
@@ -32,18 +32,6 @@ def require_collector(authorization: str | None = Header(default=None)) -> None:
 router = APIRouter(prefix="/api/memory", dependencies=[Depends(require_collector)])
 
 
-def _project_names() -> list[str]:
-    return draft_store.project_names(paths.vault_dir())
-
-
-@router.post("/finalize")
-def finalize_session(payload: dict) -> dict:
-    try:
-        return session_finalize.finalize(payload, projects=_project_names, push=draft_store.save_payload)
-    except session_finalize.FinalizeError as exc:
-        raise HTTPException(422, str(exc)) from exc
-
-
 @router.post("/push_draft")
 def push_draft(payload: dict) -> dict:
     if not isinstance(payload.get("body", ""), str):
@@ -54,20 +42,3 @@ def push_draft(payload: dict) -> dict:
         raise HTTPException(503, "draft storage unavailable") from exc
 
 
-@router.get("/gates/backend")
-@router.get("/jev-backend")
-def jev_backend() -> dict:
-    return jev.backend_info()
-
-
-@router.post("/gates/report")
-def report(payload: dict) -> dict:
-    try:
-        record = jev_log.validate(payload)
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(422, str(exc)) from exc
-    try:
-        jev_log.append(record)
-    except (OSError, note_format.VaultBusy) as exc:
-        raise HTTPException(503, "jev log unavailable") from exc
-    return {"ok": True}

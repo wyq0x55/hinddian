@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,51 @@ def save_payload(payload: dict) -> dict:
         paths.drafts_dir(), vault=paths.vault_dir(), project=payload.get("project") or "通用-未定",
         title=payload.get("title") or "session", body=payload.get("body") or "", meta=meta,
     )
+
+
+def append_capture(root: Path, processed: Path, *, vault: Path, project: str, meta: dict,
+                   turn: str, at: str, text: str) -> dict:
+    for directory in (root, processed):
+        paths.check_draft_root(directory, vault)
+    if root.resolve().is_relative_to(processed.resolve()) or processed.resolve().is_relative_to(root.resolve()):
+        raise ValueError("drafts and processed must be separate directories")
+    project = nf.safe_project(project)
+    if project == "holdout":
+        project = "通用-未定"
+    identity = [meta["session_id"], meta["host"]]
+    if not meta["session_id"]:
+        identity.append(turn)
+    session = hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode()).hexdigest()
+    revision = hashlib.sha256(json.dumps(meta, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    name = f"session-{session}-{revision}"
+    with nf.vault_lock(timeout=0):
+        for directory in (root, processed):
+            if (directory / project).is_symlink():
+                raise nf.UnsafePath("capture directory must not use a symlink")
+            for candidate in (directory / project).glob(f"session-{session}-*.md"):
+                if candidate.is_symlink() or not candidate.is_file():
+                    continue
+                parsed = nf.parse_frontmatter(candidate.read_text(encoding="utf-8"))
+                if parsed and isinstance(ids := parsed[0].get("turn_ids"), list) and turn in ids:
+                    return {"path": str(candidate), "project": project, "duplicate": True}
+        path = nf.within(root, f"{project}/{name}")
+        if (root / project / f"{name}.md").is_symlink():
+            raise nf.UnsafePath("capture file must not use a symlink")
+        if path.exists():
+            parsed = nf.parse_frontmatter(path.read_text(encoding="utf-8"))
+            if not parsed or any(parsed[0].get(key) != value for key, value in meta.items()):
+                raise ValueError("capture draft metadata changed")
+            fields, raw, body = parsed
+            items = [(key, value) for key, value in fields.items() if key != "turn_ids"]
+            items.append(("turn_ids", [*fields["turn_ids"], turn]))
+            front = nf.dump_frontmatter(items, orig=fields, raw=raw)
+        else:
+            front = nf.dump_frontmatter([("title", f"{project} 会话草稿"), ("project", project),
+                                         ("origin", "turn-end"), *meta.items(), ("time", at), ("turn_ids", [turn])])
+            body = f"\n# {project} 会话草稿\n"
+        block = f"\n<!-- hinddian:turn {turn} {at} -->\n\n{text}\n"
+        nf.write_atomic(path, front + "\n" + body.rstrip("\n") + "\n" + block)
+    return {"path": str(path), "project": project, "duplicate": False}
 
 
 def write_draft(

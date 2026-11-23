@@ -9,8 +9,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 SCRIPT_NAMES = (
-    "jev.py", "hookcfg.py", "hook_runtime.py", "extract.py", "session_buf.py", "finalize.py", "session_start.py",
-    "turn_end.py", "setup.py", "draft_store.py", "jev_log.py", "note_format.py", "paths.py", "session_finalize.py",
+    "hook_runtime.py", "capture.py", "extract.py", "session_start.py",
+    "turn_end.py", "setup.py", "draft_store.py", "note_format.py", "paths.py",
 )
 
 
@@ -47,7 +47,7 @@ def hook_defs(src_dir: Path | None = None) -> list[dict]:
     return [
         {
             "name": "hinddian-session-start",
-            "description": "Finalize prior session buffers in the background",
+            "description": "Check local capture configuration",
             "event": "session-start",
             "command": command("session_start.py"),
             "agents": agents,
@@ -55,7 +55,7 @@ def hook_defs(src_dir: Path | None = None) -> list[dict]:
         },
         {
             "name": "hinddian-turn-end",
-            "description": "Buffer redacted conversation turns",
+            "description": "Capture the final reply's closing sections locally",
             "event": "turn-end",
             "command": command("turn_end.py"),
             "agents": agents,

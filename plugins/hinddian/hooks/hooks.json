@@ -6,7 +6,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session_start_entry.py\"",
-            "statusMessage": "hinddian: session start / finalize prior buffer"
+            "statusMessage": "hinddian: check local configuration"
           }
         ]
       }
@@ -17,7 +17,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/turn_end_entry.py\"",
-            "statusMessage": "hinddian: buffer turn into session draft"
+            "statusMessage": "hinddian: capture final reply"
           }
         ]
       }

@@ -1,9 +1,9 @@
-# Optional HTTPS collector. Set HINDDIAN_MEMORY_URL to the address below plus /hinddian.
+# Optional HTTPS API for explicit draft submissions.
 # The upstream checks the collector's bearer credential.
 {$HINDDIAN_COLLECTOR_ADDRESS} {
 	tls {$HINDDIAN_COLLECTOR_CERT} {$HINDDIAN_COLLECTOR_KEY}
 	encode gzip
-	@capture path /hinddian/api/health /hinddian/api/memory/finalize /hinddian/api/memory/push_draft /hinddian/api/memory/gates/backend /hinddian/api/memory/jev-backend /hinddian/api/memory/gates/report
+	@capture path /hinddian/api/health /hinddian/api/memory/push_draft
 	handle @capture {
 		uri strip_prefix /hinddian
 		reverse_proxy 127.0.0.1:8787 {

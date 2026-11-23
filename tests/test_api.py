@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from hinddian import draft_store, jev, jev_log, note_format as nf, session_finalize
+from hinddian import draft_store, jev_log, note_format as nf
 from hinddian.api import app
 from hinddian.config import get_settings
 
@@ -31,7 +31,7 @@ def dashboard():
 
 
 def test_collector_requires_token_and_channels_are_separate(client):
-    uri = "/api/memory/finalize"
+    uri = "/api/memory/push_draft"
     assert client.post(uri, json={}).status_code == 401
     assert client.post(uri, json={}, headers=collector("wrong")).status_code == 403
     assert client.post(uri, json={}, headers=dashboard()).status_code == 403
@@ -52,7 +52,7 @@ def test_missing_tokens_fail_closed(client, monkeypatch):
     monkeypatch.delenv("HINDDIAN_MCP_TOKEN")
     monkeypatch.delenv("AUTH_TOKEN")
     get_settings.cache_clear()
-    assert client.post("/api/memory/finalize", json={}).status_code == 503
+    assert client.post("/api/memory/push_draft", json={}).status_code == 503
     assert client.get("/api/overview").status_code == 503
 
 
@@ -111,26 +111,24 @@ def test_dashboard_needs_auth_but_static_does_not(dash_client):
     ("GET", "/api/memory/notes"), ("POST", "/api/memory/upsert_note"),
     ("POST", "/api/memory/suggest_correction"), ("GET", "/api/notes"), ("GET", "/api/note"),
     ("POST", "/api/gate/P/approve"), ("GET", "/api/corrections"),
-    ("POST", "/api/memory/gates/classify_turn"),
+    ("POST", "/api/memory/gates/classify_turn"), ("POST", "/api/memory/finalize"),
+    ("GET", "/api/memory/gates/backend"), ("GET", "/api/memory/jev-backend"), ("POST", "/api/memory/gates/report"),
 ])
 def test_removed_routes_are_closed(client, method, uri):
     assert client.request(method, uri, headers=dashboard()).status_code == 404
 
 
-def test_jev_report_validates_appends_and_shows_on_dashboard(client, tmp_path, monkeypatch):
+def test_legacy_jev_log_is_readable_only_on_dashboard(client, tmp_path, monkeypatch):
     log = tmp_path / "jev.jsonl"
     monkeypatch.setenv("HINDDIAN_JEV_LOG", str(log))
-    url = "/api/memory/gates/report"
-    assert client.post(url, json={"session_id": "s"}).status_code == 401
-    assert client.post(url, json={"session_id": "s"}, headers=dashboard()).status_code == 403
     for bad in ({}, {"session_id": "s", "keep": "yes"}, {"session_id": "s", "event": "x"},
                 {"session_id": "s", "error": "x" * 5000}):
-        assert client.post(url, json=bad, headers=collector()).status_code == 422
+        with pytest.raises(ValueError):
+            jev_log.validate(bad)
     record = {"session_id": "s1", "host": "mac", "project": "P", "jev_source": "none", "keep": None,
               "error": "jev_unavailable", "turn_count": 3, "pushed": False, "turn": "excluded body"}
-    assert client.post(url, json=record, headers=collector()).json() == {"ok": True}
-    assert client.post(url, json={**record, "session_id": "s2", "jev_source": "jev:local", "keep": False, "error": None},
-                       headers=collector()).status_code == 200
+    jev_log.append(jev_log.validate(record))
+    jev_log.append(jev_log.validate({**record, "session_id": "s2", "jev_source": "jev:local", "keep": False, "error": None}))
     raw = log.read_text()
     assert "excluded body" not in raw and raw.count("\n") == 2
     assert client.get("/api/jev-decisions", headers=collector()).status_code == 403
@@ -149,63 +147,3 @@ def test_jev_log_rotates(tmp_path, monkeypatch):
     assert jev_log.recent(5)[0]["session_id"] == "s19"
 
 
-def test_jev_backend_alias(client):
-    assert client.get("/api/memory/jev-backend", headers=collector()).status_code == 200
-
-
-def _fin_body(**kw):
-    return {"session_id": "sf1", "cwd": "/home/test/work/my-app/src", "repo": "my-app", "client_id": "mac-mini",
-            "finalize_reason": "idle", "turn_count": 2,
-            "turns": [{"text": "用户: 部署前要备份\n助手: 好的 SECRETTURN\nBearer syntheticcredential"}], **kw}
-
-
-def test_server_finalize_runs_jev_pushes_and_logs(client, tmp_path, monkeypatch):
-    log = tmp_path / "jev.jsonl"
-    monkeypatch.setenv("HINDDIAN_JEV_LOG", str(log))
-    seen = {}
-
-    def classify(text, projects, cwd):
-        seen.update(text=text, cwd=cwd)
-        return jev.GateResult(True, {"keep": True, "type": "lesson", "title": "部署前备份", "lesson": ["先备份"],
-                                     "open_question": ["多久一次"]}, 0.9, "jev:local")
-
-    monkeypatch.setattr(session_finalize.jev, "classify_turn", classify)
-    url = "/api/memory/finalize"
-    assert client.post(url, json=_fin_body()).status_code == 401
-    assert client.post(url, json=_fin_body(), headers=dashboard()).status_code == 403
-    assert client.post(url, json={"turns": []}, headers=collector()).status_code == 422
-    assert client.post(url, json=_fin_body(turns=[{"text": "x" * 20000}] * 11), headers=collector()).status_code == 422
-    result = client.post(url, json=_fin_body(), headers=collector()).json()
-    assert result["outcome"] == "pushed" and result["retry"] is False and result["source"] == "jev:local"
-    text = (tmp_path / "drafts/my-app/session-sf1.md").read_text()
-    assert "session_id: sf1" in text and "- 先备份" in text and "OPEN QUESTIONS" in text
-    assert seen["cwd"] == "src" and "SECRETTURN" in seen["text"]
-    raw = log.read_text()
-    assert "SECRETTURN" not in raw and "部署前要备份" not in raw
-    item = client.get("/api/jev-decisions", headers=dashboard()).json()["items"][0]
-    assert item["host"] == "mac-mini" and item["pushed"] and item["outcome"] == "pushed" and item["keep"]
-
-
-def test_server_finalize_jev_down_writes_nothing_and_asks_retry(client, tmp_path, monkeypatch):
-    for verdict, retry in ((jev.GateResult(False, None, 0, "none"), True),
-                           (jev.GateResult(True, {"keep": True}, 0.9, "llm"), False)):
-        monkeypatch.setattr(session_finalize.jev, "classify_turn", lambda *args: verdict)
-        result = client.post("/api/memory/finalize", json=_fin_body(), headers=collector()).json()
-        assert result["pushed"] is False and result["source"] == "none" and result["retry"] is retry
-    assert not (tmp_path / "drafts").exists()
-    items = client.get("/api/jev-decisions", headers=dashboard()).json()["items"]
-    assert {item["outcome"] for item in items} == {"jev_unavailable", "llm_forbidden"}
-    monkeypatch.setattr(session_finalize.jev, "classify_turn",
-                        lambda *args: jev.GateResult(True, {"keep": False}, 0.3, "jev:cloud"))
-    result = client.post("/api/memory/finalize", json=_fin_body(), headers=collector()).json()
-    assert result == {**result, "outcome": "keep_false", "retry": False, "keep": False}
-
-
-def test_server_pick_project():
-    pick = session_finalize.pick_project
-    payload = {"project": "", "repo": "", "cwd": ""}
-    assert pick({**payload, "repo": "my-app-api"}, "x", ["my-app", "my-app-api"]) == "my-app-api"
-    assert pick({**payload, "repo": "new-repo"}, "hinddian", ["hinddian"]) == "new-repo"
-    assert pick({**payload, "cwd": "loose"}, "hinddian", ["hinddian"]) == "hinddian"
-    assert pick({**payload, "project": "P"}, None, []) == "P"
-    assert pick(payload, None, []) == "通用-未定"
