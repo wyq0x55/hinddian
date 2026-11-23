@@ -92,7 +92,7 @@ PRIVATE = re.compile(r"<private>.*?(?:</private>|\Z)", re.S | re.I)
 
 
 def strip_private(text: str) -> str:
-    """<private>…</private> is never buffered, recalled on, or sent anywhere. Unclosed → to the end."""
+    """Redact <private>…</private> before buffering. Unclosed → to the end."""
     return PRIVATE.sub("[private]", text or "")
 
 
@@ -140,9 +140,7 @@ def list_open() -> list[dict[str, Any]]:
             b = json.loads(p.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        if b.get("finalized"):
-            continue
-        if b.get("turns"):
+        if isinstance(b, dict) and not b.get("finalized") and b.get("turns"):
             out.append(b)
     return out
 

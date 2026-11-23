@@ -94,7 +94,7 @@ def routing_global() -> dict:
                 "blurb": blurb[:160],
                 "decisions": n_dec,
                 "lessons": n_les,
-                "when_to_recall": f"任务涉及 {name} 仓库/代码/决策时先 routing_project 再按需 recall",
+                "when_to_recall": f"用户要求查 {name} 的笔记时可用 routing_project 浏览或用 recall 检索",
             }
         )
     tips = sum(1 for n in notes.values() if n["type"] == "tip")
@@ -104,8 +104,7 @@ def routing_global() -> dict:
         "tips": {"id": "topic/agent-usage-tips", "count": tips, "path": "技巧/技巧"},
         "projects": projects,
         "guidance": (
-            "稳定前缀：本路由表。易变 recall 结果放对话后部。"
-            "先 match 项目；再看项目路由的 when_to_recall；不需要就跳过。"
+            "用户要求浏览或检索笔记时，按项目查找。"
             "写入：禁止 Hindsight retain。会话整理由 hooks→草稿；记住/纠正直接写笔记。"
             "tip/preference/lesson/decision 均可直接 upsert_note；suggest_correction 同样直写。"
             "人在 Obsidian 改删即管理记忆；仪表盘审批可选。"
@@ -129,8 +128,7 @@ def routing_project(name: str) -> dict:
         "readme_id": f"proj/{name}/readme",
         "current_state": state or "（待补）",
         "when_to_recall": (
-            f"涉及 {name} 架构、门禁、测试、部署或已知坑时调用 recall(project={name})；"
-            "纯寒暄/无关任务可跳过。默认只召回 status=active。"
+            f"用户要求检索 {name} 的笔记时可用 recall(project={name})。默认只检索 status=active。"
         ),
         "decisions": [{"id": n["id"], "title": n["title"], "updated": n["updated"]} for n in dec[:40]],
         "lessons": [{"id": n["id"], "title": n["title"], "updated": n["updated"]} for n in les[:40]],

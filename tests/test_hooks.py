@@ -3,11 +3,17 @@ from __future__ import annotations
 
 import importlib
 import json
+import shlex
+import subprocess
 import sys
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from string import Template
+from threading import Event, Thread
 
 import pytest
+from fastapi.testclient import TestClient
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "plugins/hinddian/scripts"
 
@@ -21,12 +27,12 @@ def hooks(tmp_path, monkeypatch):
     monkeypatch.setenv("HINDDIAN_REPORT_JEV", "0")  # tests opt in explicitly
     for k in ("HINDDIAN_MCP_TOKEN", "HINDDIAN_CA_FILE", "HINDDIAN_ALLOW_INSECURE"):
         monkeypatch.delenv(k, raising=False)
+        monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_" + k, raising=False)
     monkeypatch.syspath_prepend(str(SCRIPTS))
-    names = ("hookcfg", "session_buf", "finalize", "extract", "jev", "mcp_bridge", "setup", "turn_end",
-             "prompt_recall", "session_start")
+    names = ("hookcfg", "session_buf", "finalize", "extract", "jev", "mcp_bridge", "setup", "turn_end", "session_start")
     for m in names:
         sys.modules.pop(m, None)
-    mods = {m: importlib.import_module(m) for m in ("hookcfg", "session_buf", "finalize", "mcp_bridge", "prompt_recall", "session_start")}
+    mods = {m: importlib.import_module(m) for m in ("hookcfg", "session_buf", "finalize", "mcp_bridge", "session_start")}
     yield mods
     for m in names:
         sys.modules.pop(m, None)
@@ -198,105 +204,10 @@ def test_bridge_doctor_runs_locally(hooks, monkeypatch):
     assert "hinddian" in out["result"]["content"][0]["text"]
 
 
-# ------------------------------------------------------------------ auto recall
-def test_recall_skips_cheap_prompts(hooks):
-    w = hooks["prompt_recall"].worth_recalling
-    for p in ("好的", "继续", "ok", "Thanks!", "/hinddian:doctor", "<task-notification>x</task-notification>", "短"):
-        assert not w(p), p
-    assert w("部署到 API 主机之前要检查什么")
-
-
-def test_private_blocks_never_buffered_or_queried(hooks, monkeypatch, capsys):
-    import io
-    import json
-
-    sb, pr = hooks["session_buf"], hooks["prompt_recall"]
+def test_private_blocks_never_buffered(hooks):
+    sb = hooks["session_buf"]
     buf = sb.append_turn(session_id="p1", turn_text="部署 <private>token=abc 密码</private> 完成 <PRIVATE>尾巴")
     assert buf["turns"][0]["text"] == "部署 [private] 完成 [private]"
-    sent = []
-    monkeypatch.setattr(pr.hookcfg, "req", lambda m, path, body=None, **k: sent.append(body) or {"results": []})
-    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"session_id": "p1", "prompt": "上次部署怎么做的 <private>内部地址 10.0.0.1</private>"})))
-    pr.main()
-    assert "10.0.0.1" not in sent[0]["query"]
-
-
-def test_recall_query_drops_pastes(hooks):
-    pr = hooks["prompt_recall"]
-    q = pr.clean_query("部署又失败了，看下\n```\nTraceback (most recent call last):\n  File x\n```\n是不是门禁的问题")
-    assert q == "部署又失败了，看下 是不是门禁的问题"
-    assert pr.clean_query("x" * 400) == ""
-    assert not pr.worth_recalling(pr.clean_query("```\nonly a log\n```"))
-
-
-def test_recall_filters_and_dedupes(hooks):
-    pr = hooks["prompt_recall"]
-    results = [
-        {"document_id": "a", "text": "---\nid: a\n---\n# A\n\n## 做法\n先跑门禁", "metadata": {"title": "A"}, "scores": {"reranker": 0.9}},
-        {"document_id": "b", "text": "无关", "metadata": {"title": "B"}, "scores": {"reranker": 0.1}},
-        {"id": "c", "title": "C", "practice": "p", "score": 0.6},
-        {"id": "d", "title": "D", "practice": "p", "score": 0.1},
-    ]
-    items = pr.normalize(results)
-    assert [i["id"] for i in items] == ["a", "c"]
-    assert "snippet" not in items[0]
-    assert "先跑门禁" not in pr.render(items)
-    assert [i["id"] for i in pr.pick_new("s1", items)] == ["a", "c"]
-    assert pr.pick_new("s1", items) == []          # already injected this session
-    assert [i["id"] for i in pr.pick_new("s2", items)] == ["a", "c"]
-
-
-def test_recall_keeps_fact_rows_but_stops_promising_get_note(hooks):
-    pr = hooks["prompt_recall"]
-    results = [
-        # Hindsight fact row: has a fact id, no document_id → get_note(<fact id>) is not_found
-        {"id": "f1", "text": "WinAMS 桩代码设有内存预算", "scores": {"final": 0.9}},
-        {"document_id": "n2", "id": "f2", "text": "---\nid: n2\n---\n# N2\n\n## 做法\n先跑门禁",
-         "metadata": {"title": "N2"}, "scores": {"final": 0.8}},
-    ]
-    items = pr.normalize(results)
-    assert [(i["key"], i["id"]) for i in items] == [("f1", ""), ("n2", "n2")]
-    text = pr.render(items)
-    assert "[f1]" not in text and "get_note(f1)" not in text
-    assert "[n2]" in text and "需要全文用 get_note(id)。" in text
-    assert "（Hindsight 事实条目，无笔记全文）" in text
-    assert "get_note" not in pr.render(items[:1])  # nothing fetchable → no such line
-
-
-def test_recall_fact_rows_are_deduped_by_fact_id(hooks):
-    pr = hooks["prompt_recall"]
-    items = pr.normalize([{"id": "f1", "text": "只有事实层的条目", "scores": {"final": 0.9}}])
-    assert len(pr.pick_new("s3", items)) == 1
-    assert pr.pick_new("s3", items) == []          # same fact must not be injected twice
-
-
-def test_recall_tolerates_null_score_from_hindsight(hooks):
-    pr = hooks["prompt_recall"]
-    # one Hindsight endpoint answers with an explicit `"score": null` next to `scores`
-    items = pr.normalize([
-        {"document_id": "n1", "id": "f1", "text": "t", "metadata": {"title": "N1"},
-         "score": None, "scores": {"final": 0.9}},
-        {"id": "f2", "text": "t2", "score": None, "scores": {"final": 0.9}},
-    ])
-    assert [(i["key"], i["id"]) for i in items] == [("n1", "n1"), ("f2", "")]
-
-
-def test_recall_scopes_to_session_project_and_dedupes(hooks, monkeypatch, capsys):
-    import io
-    import json
-
-    pr, sb = hooks["prompt_recall"], hooks["session_buf"]
-    sb.side_file("s9", "project").write_text("my-app", encoding="utf-8")
-    sent = []
-
-    def req(method, path, body=None, **kw):
-        sent.append(body)
-        return {"results": [{"document_id": "a", "text": "x", "metadata": {"title": "A"}}] * 3}
-
-    monkeypatch.setattr(pr.hookcfg, "req", req)
-    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"session_id": "s9", "prompt": "上次部署门禁怎么定的"})))
-    pr.main()
-    assert sent[0]["project"] == "my-app"
-    assert capsys.readouterr().out.count("[a]") == 1
 
 
 def test_prune_handles_side_files(hooks):
@@ -311,134 +222,103 @@ def test_prune_handles_side_files(hooks):
     assert not seen.exists() and sb.side_file("new", "project").exists()
 
 
-def test_recall_emits_structured_context(hooks, monkeypatch, capsys):
-    import io
-    import json
-
-    pr = hooks["prompt_recall"]
-    monkeypatch.setattr(pr.hookcfg, "req", lambda *a, **k: {"results": [{"document_id": "a", "text": "t", "metadata": {"title": "A"}}]})
-    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"hook_event_name": "UserPromptSubmit", "session_id": "s", "prompt": "上次部署门禁怎么定的"})))
-    pr.main()
-    out = json.loads(capsys.readouterr().out)
-    ctx = out["hookSpecificOutput"]
-    assert ctx["hookEventName"] == "UserPromptSubmit" and "<hinddian_recall>" in ctx["additionalContext"]
+def test_unconfigured_session_start_is_silent(hooks, monkeypatch, capsys):
+    monkeypatch.setenv("HINDDIAN_MEMORY_URL", "http://203.0.113.5/hinddian")
+    hooks["session_start"].main()
+    assert capsys.readouterr() == ("", "")
+    assert hooks["session_buf"].list_open() == []
 
 
-def test_recall_off_switch_and_failure_are_silent(hooks, monkeypatch, capsys):
-    import io
+@pytest.mark.parametrize("host", ["claude", "codex", "magpie"])
+def test_host_buffers_turns_and_finalizes_silently(host, hooks, vault, monkeypatch, tmp_path):
+    from hinddian import jev, memory_mcp, notes, session_finalize
+    from hinddian.api import app
+    from hinddian.config import Settings
 
-    pr = hooks["prompt_recall"]
-    monkeypatch.setenv("HINDDIAN_AUTO_RECALL", "0")
-    monkeypatch.setattr("sys.stdin", io.StringIO('{"prompt": "上次部署门禁怎么定的"}'))
-    pr.main()
-    monkeypatch.setenv("HINDDIAN_AUTO_RECALL", "1")
+    requests = []
+    allow_finalize = Event()
+    settings = Settings(_env_file=None, vault_root=vault, hinddian_mcp_token=None,
+                        hinddian_public_url=None, hinddian_allow_no_auth=True, hindsight_api_key=None)
+    monkeypatch.setattr(memory_mcp, "get_settings", lambda: settings)
+    monkeypatch.setenv("HINDDIAN_JEV_LOG", str(tmp_path / "jev.jsonl"))
+    gate = jev.GateResult(True, {"keep": True, "type": "lesson", "title": "降低并发后重试成功",
+                                "lesson": ["降低并发后复测通过"], "open_question": ["并发上限受连接池限制吗？"]},
+                          0.9, "jev:local", {})
+    monkeypatch.setattr(session_finalize.jev, "classify_turn", lambda *args: gate)
+    assert notes.upsert_note({"action": "add", "type": "lesson", "project": "my-app", "title": "旧笔记",
+                              "scene": "排障", "practice": "先看日志", "reason": "确认超时原因"})["ok"]
+    old_note = next(vault.rglob("*.md"))
+    original_note = old_note.read_bytes()
 
-    def boom(*a, **k):
-        raise TimeoutError
+    class MemoryServer(BaseHTTPRequestHandler):
+        def forward(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"]))) if self.command == "POST" else None
+            requests.append((self.command, self.path, body))
+            if self.path == "/api/memory/finalize":
+                allow_finalize.wait(timeout=10)
+            response = client.request(self.command, self.path, json=body)
+            self.send_response(response.status_code)
+            self.end_headers()
+            self.wfile.write(response.content)
 
-    monkeypatch.setattr(pr.hookcfg, "req", boom)
-    monkeypatch.setattr("sys.stdin", io.StringIO('{"prompt": "上次部署门禁怎么定的"}'))
-    pr.main()
-    assert capsys.readouterr().out == ""
+        do_GET = do_POST = forward
 
+    with TestClient(app) as client, ThreadingHTTPServer(("127.0.0.1", 0), MemoryServer) as server:
+        worker = Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            monkeypatch.setenv("HINDDIAN_MEMORY_URL", f"http://127.0.0.1:{server.server_port}")
+            monkeypatch.setenv("no_proxy", "127.0.0.1")
+            monkeypatch.delenv("HINDDIAN_HOOK_SYNC", raising=False)
+            monkeypatch.setenv("HINDDIAN_AUTO_RECALL", "1")
+            monkeypatch.setenv("HINDDIAN_SESSION_IDLE_SEC", "1800")
+            plugin = SCRIPTS.parent
+            if host == "magpie":
+                skill = plugin.parents[1] / "adapters/magpie/skills/hinddian-hooks"
+                library = tmp_path / "library.json"
+                library.write_text('{"hooks":[{"name":"hinddian-session-start","command":"old"}]}')
+                monkeypatch.setenv("HINDDIAN_MCP_URL", f"http://127.0.0.1:{server.server_port}/mcp")
+                monkeypatch.setenv("MAGPIE_LIBRARY", str(library))
+                monkeypatch.setenv("HINDDIAN_MAGPIE_HOOK_DIR", str(tmp_path / "magpie-hooks"))
+                monkeypatch.setenv("HINDDIAN_PYTHON", sys.executable)
+                subprocess.run([sys.executable, str(skill / "install.py")], capture_output=True, check=True, timeout=5)
+                commands = {hook["event"]: hook["command"] for hook in json.loads(library.read_text())["hooks"]}
+                start, stop = "session-start", "turn-end"
+            else:
+                manifest = plugin / ("hooks/hooks.json" if host == "claude" else ".codex-plugin/hooks.json")
+                config = json.loads(manifest.read_text())["hooks"]
+                commands = {event: Template(entries[0]["hooks"][0]["command"]).substitute(
+                    CLAUDE_PLUGIN_ROOT=plugin, PLUGIN_ROOT=plugin) for event, entries in config.items()}
+                start, stop = "SessionStart", "Stop"
+            assert set(commands) == {start, stop}
 
-# ------------------------------------------------------------------ session start
-def test_routing_block_is_cache_stable(hooks):
-    import hashlib
+            def run(event, sid, **data):
+                payload = {"session_id": sid, "cwd": "/work/my-app", **data}
+                if host != "magpie":
+                    payload["hook_event_name"] = event
+                return subprocess.run(shlex.split(commands[event]), input=json.dumps(payload), text=True,
+                                      capture_output=True, check=True, timeout=5).stdout
 
-    ss = hooks["session_start"]
-    a = ss.routing_block(sorted(["b", "a"]), "a")
-    assert a == ss.routing_block(["a", "b"], "a")
-    assert hashlib.sha256(a.encode()).hexdigest() == "9da295af05a8962112d9cf024586f0049c2d9bb3f137be2ebb49e9c0bf148c76"
-    assert "decision 均用 upsert_note 直写" in a
-    assert "suggest_correction 同样直写" in a and "仪表盘审批可选" in a
-    assert not any(ch.isdigit() for ch in a.replace("hinddian", ""))  # no counts / dates in the prefix
-    assert ss.match_project("/home/me/work/my-app-api", ["my-app", "my-app-api"]) == "my-app-api"
-
-
-def test_recall_title_index_limits_and_score_sources(hooks):
-    pr = hooks["prompt_recall"]
-    rows = [{"id": str(i), "title": f"Title {i}\nextra", "type": "lesson", "date": "2026-01-01",
-             "score": 0.7, "practice": "SHOULD NOT INJECT"} for i in range(10)]
-    fresh = pr.pick_new("index", pr.normalize(rows, "hindsight"))
-    assert 5 <= len(fresh) <= 8
-    text = pr.render(fresh)
-    assert "SHOULD NOT INJECT" not in text and "Title 0 extra" in text
-    assert text.count("get_note") == 1
-    assert pr.pick_new("index", pr.normalize(rows, "hindsight"))[0]["id"] == "6"
-    assert pr.normalize([{**rows[0], "score": 0.4}], "hindsight") == []
-    assert pr.normalize([{**rows[0], "score": 0.4}], "local-fallback")
-    orphan = pr.normalize([{**rows[0], "resolvable": False}], "hindsight")[0]
-    assert not orphan["id"] and orphan["key"] == "0"
-
-
-def test_session_start_appends_recent_after_unchanged_prefix(hooks, monkeypatch, capsys):
-    import io
-
-    ss, sb = hooks["session_start"], hooks["session_buf"]
-    sb.append_turn(session_id="old", cwd="/work/my-app", turn_text="USER:\nask\n\nASSISTANT:\nClosing summary")
-    sb.mark_finalized("old", "pushed")
-    monkeypatch.setattr(ss.hookcfg, "spawn_finalize", lambda *a, **k: True)
-    calls = []
-    def req(method, path, body=None, timeout=0):
-        calls.append((path, timeout))
-        if path == "/api/memory/routing/global":
-            return {"projects": [{"name": "my-app"}]}
-        return [{"title": "Newest", "project": "my-app"}, {"title": "Old", "status": "obsolete"},
-                {"title": "Wrong project", "project": "other"}]
-    monkeypatch.setattr(ss.hookcfg, "req", req)
-    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({
-        "hook_event_name": "SessionStart", "session_id": "new", "cwd": "/work/my-app"})))
-    ss.main()
-    context = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
-    prefix = ss.routing_block(["my-app"], "my-app")
-    assert context.startswith(prefix + "\n<hinddian_recent>")
-    assert "Newest" in context and "Closing summary" in context
-    assert "Wrong project" not in context and "- Old" not in context
-    assert "project=my-app" in calls[1][0]
-    assert calls[0][1] == 5 and 0 < calls[1][1] <= 2
-    assert sb.side_file("new", "project").read_text() == "my-app"
-
-
-def test_session_recent_cap_and_latest_project_closing(hooks, monkeypatch):
-    ss, sb = hooks["session_start"], hooks["session_buf"]
-    for sid, project, text, updated in [
-        ("old", "P", "old summary", 1), ("latest", "P", "Latest <private>secret</private> " + "x" * 3000, 2),
-        ("other", "Q", "other summary", 3), ("current", "P", "current summary", 4),
-    ]:
-        buf = sb.append_turn(session_id=sid, project_hint=project, turn_text="ASSISTANT:\n" + text)
-        buf["updated_at"] = updated
-        sb.save(buf)
-    sb.side_file("bad", "json").write_text("{")
-    sb.side_file("huge", "json").write_text("x" * 512001)
-    assert ss.last_closing_summary("current", "P", ["P", "Q"]).startswith("Latest [private]")
-    monkeypatch.setattr(ss, "RECENT_ITEMS", 20)
-    monkeypatch.setattr(ss.hookcfg, "req", lambda *a, **k: [{"title": "T" * 300}] * 20)
-    text = ss.recent_context("current", "P", ["P", "Q"], time.monotonic() + 5)
-    assert len(text) <= ss.RECENT_CHARS and text.endswith("</hinddian_recent>")
-    assert "secret" not in text and "Latest [private]" in text
-
-
-def test_session_recent_missing_sources_and_deadline(hooks, monkeypatch, capsys):
-    import io
-
-    ss = hooks["session_start"]
-    monkeypatch.setattr(ss.hookcfg, "spawn_finalize", lambda *a, **k: True)
-    def offline(*a, **k):
-        raise TimeoutError
-    monkeypatch.setattr(ss.hookcfg, "req", offline)
-    monkeypatch.setattr("sys.stdin", io.StringIO('{"session_id":"new","cwd":"/work/P"}'))
-    ss.main()
-    assert capsys.readouterr().out == ss.routing_block([], None) + "\n"
-    assert ss.recent_context("new", None, [], time.monotonic() + 5) == ""
-    assert ss.recent_context("new", "P", ["P"], time.monotonic() - 1) == ""
-    assert ss.recent_context("new", "P", ["P"], time.monotonic() + 5) == ""
-
-
-def test_session_closing_without_assistant_is_omitted(hooks):
-    ss, sb = hooks["session_start"], hooks["session_buf"]
-    sb.append_turn(session_id="old", project_hint="P", turn_text="USER:\nonly user text")
-    assert ss.last_closing_summary("new", "P", ["P"]) == ""
+            buffer = hooks["session_buf"]
+            buffer.append_turn(session_id="old", cwd="/work/my-app", turn_text="ASSISTANT:\nPrevious closing")
+            buffer.side_file("old", "recalled.json").write_text('["stored-note"]', encoding="utf-8")
+            assert run(start, "new", source="startup") == ""
+            allow_finalize.set()
+            deadline = time.monotonic() + 5
+            while not buffer.load("old")["finalized"] and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert buffer.load("old")["outcome"] == "pushed"
+            draft = (tmp_path / "drafts/my-app/session-old.md").read_text(encoding="utf-8")
+            assert "# 降低并发后重试成功" in draft and "## OPEN QUESTIONS\n- 并发上限受连接池限制吗？" in draft
+            assert old_note.read_bytes() == original_note
+            assert json.loads(run(stop, "new", prompt="排查超时", last_assistant_message="调低并发后复测通过"))["buffered"]
+            assert "调低并发后复测通过" in buffer.load("new")["turns"][0]["text"]
+            assert [(method, path) for method, path, _ in requests] == [("POST", "/api/memory/finalize")]
+            assert requests[0][2]["turns"] == [{"text": "ASSISTANT:\nPrevious closing"}]
+        finally:
+            allow_finalize.set()
+            server.shutdown()
+            worker.join()
 
 
 def test_injected_recent_context_is_not_rebuffered(hooks):

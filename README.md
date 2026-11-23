@@ -1,6 +1,6 @@
 # hinddian
 
-Host-agnostic memory product: **Obsidian 原子笔记**为人和 Agent 共用的唯一真相源（SoT）；Agent 经 **hinddian-memory MCP** 路由 / 召回 / 直接写入；**Hindsight** 只做最后一层检索索引（定时同步喂入，Agent **禁止** `retain`）。
+hinddian 正从 Agent 记忆转向供人回看的 **Obsidian / Markdown 笔记**。目前 hooks 采集会话并交给后台整理，**hinddian-memory MCP** 和 **Hindsight** 索引继续服务已有的显式查询与写入流程。
 
 **与 Magpie 无关。** Magpie 若仍在用，见可选适配器 [`adapters/magpie/`](adapters/magpie/README.md)。
 
@@ -20,6 +20,7 @@ Host-agnostic memory product: **Obsidian 原子笔记**为人和 Agent 共用的
 | [`docs/DASHBOARD.md`](docs/DASHBOARD.md) | 仪表盘：图谱 / 批准项目 / Agent 修正 |
 | [`docs/MEMORY-MCP.md`](docs/MEMORY-MCP.md) | Agent 只挂 hinddian-memory（现行） |
 | [`docs/PIPELINE.md`](docs/PIPELINE.md) | 一轮会话如何进笔记 |
+| [`docs/notes-pivot.md`](docs/notes-pivot.md) | 人读笔记转型方案与迁移步骤 |
 | [`plugins/INSTALL.md`](plugins/INSTALL.md) | Claude Code / Codex 插件市场安装（首选） |
 | [`adapters/magpie/README.md`](adapters/magpie/README.md) | **可选** Magpie 宿主适配器 |
 | [`deploy/api-host/DEPLOY.md`](deploy/api-host/DEPLOY.md) | API 主机 部署与组件 |
@@ -30,7 +31,7 @@ Host-agnostic memory product: **Obsidian 原子笔记**为人和 Agent 共用的
 ## Agent 插件安装（Claude Code / Codex）— 首选
 
 装插件 → 跑一次 `setup.py` → 新开会话。插件内置本地 MCP 桥，插件配置里不写服务器地址。
-用起来：每条消息自动召回相关笔记（附在消息末尾，不破坏缓存）；`/hinddian:recall`、`/hinddian:remember`、`/hinddian:doctor` 手动用。
+Hooks 在后台处理会话缓冲。用户可显式调用 `/hinddian:recall`、`/hinddian:remember`、`/hinddian:doctor`。
 
 ```bash
 # Claude Code
@@ -40,7 +41,7 @@ claude plugin install hinddian@hinddian-plugins
 codex plugin marketplace add wyq0x55/hinddian
 codex plugin add hinddian@hinddian-plugins
 
-# 一次性配置 + 自检（新会话开头也会打印这条命令的完整路径）
+# 一次性配置 + 自检
 python3 <插件目录>/scripts/setup.py --url https://<host>:8444/hinddian --token <HINDDIAN_MCP_TOKEN>
 # 必须 https + :8444；http://<host>/hinddian（旧 :80）已关闭，会返回 410
 ```

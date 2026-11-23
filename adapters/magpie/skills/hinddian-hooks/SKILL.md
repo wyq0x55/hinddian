@@ -58,7 +58,7 @@ magpie webdav now
 
 ## 装好后的行为
 
-- **session-start**：结束上一会话缓冲（Jev keep → 一次 `push_draft`）；注入固定的记忆路由块
+- **session-start**：静默启动后台定稿（Jev keep → 一次 `push_draft`）
 - **turn-end**：白名单抽取（用户话 + 最终回复）→ 会话缓冲（不按回合推草稿）
 - **Jev**：本机 Magpie `127.0.0.1:3425/v1/systemone` → 可选云端 → 都失败则不写（`source=none`）
 
@@ -66,7 +66,8 @@ magpie webdav now
 ## Agent 直接管理记忆
 
 - **全类型直写**：`tip` / `preference` / `lesson` / `decision` → `upsert_note` 或 `suggest_correction`；仪表盘审批可选，兼容旧队列
-- **双可读**：标题即命题，填齐 project（tip 除外）、场景/做法/理由；先看 routing_project 标题地图（id/updated），再 get_note 全文
+- **显式查询**：用户要求浏览笔记时，可用 `routing_project` 看标题地图，再用 `get_note` 取全文
+- **笔记格式**：标题即命题，填齐 project（tip 除外）、场景/做法/理由
 - **禁止**：手调 `push_draft` 当纠正/审阅（那是 hooks 会话蒸馏）；硬删、Hindsight `retain`；只用 `supersede` / `obsolete`
 - Obsidian 为真相源；同步层跟随笔记状态
 

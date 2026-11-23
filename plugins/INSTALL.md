@@ -11,8 +11,8 @@
 | 组件 | Claude Code | Codex CLI / 桌面 |
 |------|-------------|------------------|
 | MCP `hinddian-memory` | 是：本地 stdio 桥 `scripts/mcp_bridge.py`，转发到你的服务器 | 是：同一个桥（`.codex-plugin/mcp.json`） |
-| Hooks：SessionStart（注入记忆路由块）、UserPromptSubmit（按消息自动召回）、Stop（会话草稿） | 是 | 是，但需在 Codex 里 **trust** 插件 hooks |
-| Skills：`memory`（何时读/写）、`recall`、`remember`、`doctor`、`setup` | 是（`/hinddian:recall` 等） | 是 |
+| Hooks：SessionStart（后台定稿）、Stop（会话缓冲） | 是 | 是，但需在 Codex 里 **trust** 插件 hooks |
+| Skills：`recall`、`remember`、`doctor`、`setup` | 是（`/hinddian:recall` 等） | 是 |
 
 MCP 走插件内置的本地桥，所以插件配置里**不写任何服务器地址**；地址和 token 只存在你本机的
 `~/.config/hinddian/config.json`（权限 600），hooks 和 MCP 共用这一份。
@@ -36,7 +36,7 @@ codex plugin add hinddian@hinddian-plugins
 
 ## 2. 配置（一次）
 
-插件装好后，新会话开头会直接打印要运行的完整命令（带插件的实际路径）。也可以自己找：
+插件装好后，在终端运行 `setup.py`：
 
 ```bash
 # Claude Code
@@ -86,26 +86,9 @@ python3 …/scripts/setup.py --url https://<host>:8444/hinddian --token <HINDDIA
 - Claude Code：`/mcp` 里能看到 `plugin:hinddian:hinddian-memory` 已连接
 - Codex：会话里能调用 `routing_global` / `recall`
 
-## 关掉 Agent 自带的记忆（推荐）
+## 从自动召回版本升级
 
-hinddian 是多台电脑共用、带审批的长期记忆；Agent 自带的记忆只在本机本项目，两边都开会重复、互相矛盾。
-
-- **Claude Code Auto Memory**（它自己写的 `MEMORY.md`）：`~/.claude/settings.json` 加 `"autoMemoryEnabled": false`
-  （只关一个项目就写进该项目的 `.claude/settings.json`），或会话里 `/memory` 切换
-- **Codex Memories**：默认关；开过的话在 `~/.codex/config.toml` 的 `[features]` 下设 `memories = false`
-- **保留** `CLAUDE.md` / `AGENTS.md`：那是你写给 Agent 的固定规则，不是记忆
-
-代价：新知识要经「会话结束 → 草稿 → 批处理 → Obsidian → Hindsight」才能被召回（新项目还要先攒够草稿并批准）；
-想马上生效用 `/hinddian:remember`。服务器连不上时没有记忆可用（对话照常）。
-
-## 自动召回
-
-每条用户消息会按内容去服务端 recall，命中的相关笔记（最多 3 条、每条一行）附在**该条消息末尾**；
-会话开头只注入一段固定不变的规则 + 项目名，所以不破坏提示词缓存。检索词会去掉贴进来的代码块和长日志行，并限定在当前项目 + 全局技巧。短消息（「好的」「继续」等）、只有粘贴内容的消息、`/` 命令跳过；
-同一会话不重复注入；3 秒超时就跳过。
-
-- 关闭：`HINDDIAN_AUTO_RECALL=0`，或在 `~/.config/hinddian/config.json` 写 `"auto_recall": false`
-- 调节：`HINDDIAN_RECALL_MIN_CHARS`（默认 8）、`HINDDIAN_RECALL_MAX_ITEMS`（3）、`HINDDIAN_RECALL_MIN_SCORE`（0.5）
+更新插件并新开会话。若曾自行注册 hinddian 的 `UserPromptSubmit` hook，移除该条注册。官方配置只有后台定稿和会话缓冲，旧地址及鉴权配置可继续使用。查询旧笔记仍可显式调用 `/hinddian:recall`。
 
 ## 进阶
 
