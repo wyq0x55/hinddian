@@ -119,7 +119,8 @@ def test_batch_create_never_overwrites_an_existing_note(batch):
     second = existing.with_stem("缓存命中率-2")
     second.write_text("# Also occupied\n")
     result = batch._apply("P", [], {"ops": [{"op": "create", "slug": "existing", "title": "缓存命中率",
-                                            "type": "lesson", "practice": "别改前缀"}]}, {}, False)
+                                            "type": "lesson", "scene": "缓存未命中", "reason": "前缀参与匹配",
+                                            "practice": "别改前缀"}]}, {}, False)
     assert result[0]["action"] == "create" and result[0]["id"] != old["id"]
     assert batch.load_notes()[old["id"]]["practice"] == "gate.sh"
     assert existing.read_text() == "# A hand-written page with no frontmatter\n"
@@ -129,11 +130,24 @@ def test_batch_create_never_overwrites_an_existing_note(batch):
 
 def test_batch_similarity_merges_into_existing_note(batch):
     title = "部署前先跑门禁"
+    near = make_note(batch, title + "检查", "z-near", practice="执行部署门禁")
     old = make_note(batch, title, "existing", practice="先执行部署门禁脚本")
+    assert nf.similarity(title, "先执行部署门禁脚本", near) > batch.DEDUPE
     results = batch._apply("P", [], {"ops": [{"op": "create", "slug": "new-id", "title": title,
-                                             "type": "lesson", "practice": "先执行部署门禁脚本"}]}, {}, False)
+                                             "type": "lesson", "scene": "部署前", "reason": "需要门禁检查",
+                                             "practice": "先执行部署门禁脚本"}]}, {}, False)
     assert results[0]["action"] == "update(dedupe)" and results[0]["id"] == old["id"]
-    assert set(batch.load_notes()) == {old["id"]}
+    assert set(batch.load_notes()) == {old["id"], near["id"]}
+
+
+def test_batch_rejects_incomplete_and_deduplicates_creates_in_the_same_batch(batch):
+    complete = {"op": "create", "type": "lesson", "title": "先查连接池",
+                "scene": "压测超时", "practice": "先查连接池", "reason": "连接池耗尽后请求排队"}
+    incomplete = {"op": "create", "type": "lesson", "title": "只有标题"}
+    results = batch._apply("P", [], {"ops": [incomplete, {**complete, "slug": "first"},
+                                            {**complete, "slug": "second"}]}, {}, False)
+    assert [result["action"] for result in results] == ["create", "update(dedupe)"]
+    assert len(batch.load_notes()) == 1 and "incomplete_atomic_note" in batch.LOG.read_text()
 
 
 def test_batch_retries_if_capture_replaces_a_draft_during_model_call(batch, monkeypatch):

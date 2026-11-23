@@ -280,6 +280,7 @@ def _apply(project, files, data, idx, dry, *, before=None):
     tips_only = project == UNKNOWN
     pool = [n for n in notes.values() if n["status"] == "active" and (n["type"] == "tip" or (not tips_only and n["project"] == project))]
     plan, newids = [], {}
+    candidates = list(pool)
     def norm(op):
         for k in ("scene", "practice", "reason", "title", "slug", "id"):
             v = op.get(k)
@@ -310,7 +311,14 @@ def _apply(project, files, data, idx, dry, *, before=None):
                 continue
             typ = target["type"]
         else:
-            best = max(((nf.similarity(op.get("title", ""), op.get("practice", ""), m), m["id"]) for m in pool if m["type"] == typ), default=(0, None))
+            if op.get("type") not in nf.NOTE_TYPES or any(
+                not op.get(field, "").strip() or op[field].strip() == "（待补）"
+                for field in ("title", "scene", "practice", "reason")
+            ):
+                log({"event": "rejected_op", "project": project, "reason": "incomplete_atomic_note"})
+                continue
+            best = max(((nf.similarity(op["title"], op["practice"], m), m["id"])
+                        for m in candidates if m["type"] == typ), default=(0, None))
             if best[0] >= DEDUPE: dup = best[1]
             if dup:
                 nid = dup; op["merged_by_dedupe"] = True
@@ -320,6 +328,7 @@ def _apply(project, files, data, idx, dry, *, before=None):
                 nid, suffix = base, 2
                 while nid in notes or any(nid == item[0] for item in plan):
                     nid, suffix = f"{base}-{suffix}", suffix + 1
+                candidates.append({"id": nid, "type": typ, "title": op["title"], "practice": op["practice"]})
         newids["new:" + (op.get("slug") or "")] = nid
         plan.append((nid, typ, op))
     result, done, created = [], [], set()
