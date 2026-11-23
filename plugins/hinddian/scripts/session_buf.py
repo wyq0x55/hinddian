@@ -92,7 +92,9 @@ def append_turn(
     cwd: str = "",
     project_hint: str | None = None,
 ) -> dict[str, Any]:
-    with claim(session_id, kind="state", wait=True):
+    with claim(session_id, kind="state") as acquired:
+        if not acquired:
+            raise TimeoutError("session state lock busy")
         return _append_turn(session_id, turn_text, cwd, project_hint)
 
 
@@ -196,24 +198,17 @@ def prune(now: float | None = None) -> int:
 
 
 @contextlib.contextmanager
-def claim(sid: str, *, kind: str = "finalize", wait: bool = False) -> Iterator[bool]:
+def claim(sid: str, *, kind: str = "finalize") -> Iterator[bool]:
     """Separate the long-running finalize claim from short buffer updates."""
     lock = _path(sid).with_suffix(".lock" if kind == "finalize" else ".state.lock")
     with contextlib.suppress(OSError):
         if time.time() - lock.stat().st_mtime > LOCK_STALE_SEC:
             lock.unlink()
-    deadline = time.monotonic() + 5
-    while True:
-        try:
-            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            break
-        except FileExistsError:
-            if not wait:
-                yield False
-                return
-            if time.monotonic() >= deadline:
-                raise TimeoutError(f"session {kind} lock busy")
-            time.sleep(0.02)
+    try:
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        yield False
+        return
     os.close(fd)
     try:
         yield True

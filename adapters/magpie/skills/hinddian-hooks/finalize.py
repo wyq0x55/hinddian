@@ -21,6 +21,7 @@ import draft_store  # noqa: E402
 import note_format as nf  # noqa: E402
 import paths  # noqa: E402
 import session_finalize  # noqa: E402
+from hook_runtime import quiet, record  # noqa: E402
 
 req = hookcfg.req
 FINALIZE_TIMEOUT = 120.0
@@ -93,7 +94,10 @@ def finalize_buffer(buf: dict, *, reason: str) -> dict:
         out = {"retry": True, "error": f"{label}: {type(e).__name__}"}
     if not isinstance(out, dict) or not (out.get("retry") or out.get("outcome")):
         out = {"retry": True, "error": "invalid finalize response"}
-    with session_buf.claim(sid, kind="state", wait=True):
+    with session_buf.claim(sid, kind="state") as acquired:
+        if not acquired:
+            record("lock_busy", entry="finalize")
+            return {"ok": True, "skipped": "lock_busy", "session_id": sid, "reason": reason}
         current = session_buf.load(sid)
         if not current or current.get("updated_at") != buf.get("updated_at") or current.get("finalized"):
             return {"ok": True, "skipped": "buffer_changed", "session_id": sid, "reason": reason}
@@ -102,6 +106,7 @@ def finalize_buffer(buf: dict, *, reason: str) -> dict:
 
 def _settle(sid: str, reason: str, out: dict) -> dict:
     if out.get("retry"):
+        record("finalize_retry")
         err = str(out.get("error") or out.get("outcome") or "retry")[:200]
         d = session_buf.defer(sid, err)
         return {"ok": False, "deferred": not d["gave_up"], **d, "session_id": sid, "reason": reason, "error": err,
@@ -144,6 +149,7 @@ def finalize_idle_and_others(*, current_sid: str | None = None, project: str | N
     return results
 
 
+@quiet
 def main(argv: list[str]) -> None:
     current = argv[argv.index("--current") + 1] if "--current" in argv and argv.index("--current") + 1 < len(argv) else None
     if why := hookcfg.capture_problem():

@@ -9,7 +9,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 SCRIPT_NAMES = (
-    "jev.py", "hookcfg.py", "extract.py", "session_buf.py", "finalize.py", "session_start.py",
+    "jev.py", "hookcfg.py", "hook_runtime.py", "extract.py", "session_buf.py", "finalize.py", "session_start.py",
     "turn_end.py", "setup.py", "draft_store.py", "jev_log.py", "note_format.py", "paths.py", "session_finalize.py",
 )
 

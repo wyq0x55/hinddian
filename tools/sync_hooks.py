@@ -23,6 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CORE = {
     "hookcfg.py": ROOT / "hooks/hookcfg.py",
+    "hook_runtime.py": ROOT / "hooks/hook_runtime.py",
     "extract.py": ROOT / "hooks/extract.py",
     "session_buf.py": ROOT / "hooks/session_buf.py",
     "finalize.py": ROOT / "hooks/finalize.py",

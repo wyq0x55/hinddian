@@ -16,9 +16,11 @@ def config_path() -> Path:
 def load_config() -> dict[str, Any]:
     try:
         data = json.loads(config_path().read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
+    except FileNotFoundError:
         return {}
+    if not isinstance(data, dict):
+        raise ValueError("hinddian config must be a JSON object")
+    return data
 
 
 def _path(config: dict, key: str, *env_names: str) -> Path | None:

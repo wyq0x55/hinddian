@@ -6,13 +6,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import extract  # noqa: E402
-import hookcfg  # noqa: E402
-import session_buf  # noqa: E402
+from hook_runtime import quiet, record  # noqa: E402
 
 
+@quiet
 def main() -> None:
+    import extract
+    import hookcfg
+    import session_buf
+
+    hookcfg.load_config()
     if hookcfg.capture_problem():
+        record("capture_disabled", entry="session_start")
         return
     stdin = sys.stdin.read(50000) if not sys.stdin.isatty() else ""
     payload = extract.parse_hook_payload(stdin, include_turn=False)

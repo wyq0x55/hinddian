@@ -5,21 +5,24 @@ it handles session-start / idle / project-switch (see finalize.py).
 """
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import extract  # noqa: E402
-import hookcfg  # noqa: E402
-import session_buf  # noqa: E402
+from hook_runtime import quiet, record  # noqa: E402
 
 
+@quiet
 def main() -> None:
+    import extract
+    import hookcfg
+    import session_buf
+
+    hookcfg.load_config()
     why = hookcfg.capture_problem()
     if why:
-        print(json.dumps({"ok": False, "buffered": False, "reason": why}, ensure_ascii=False))
+        record("capture_disabled", entry="turn_end")
         return
     stdin = ""
     if not sys.stdin.isatty():
@@ -32,17 +35,8 @@ def main() -> None:
         return
 
     sid = session_buf.stable_session_id(payload.get("session_id"), payload.get("cwd") or "", turn[:80])
-    buf = session_buf.append_turn(session_id=sid, turn_text=turn, cwd=payload.get("cwd") or "")
-    background = hookcfg.spawn_finalize("--current", sid, log=log)
-    out = {
-        "ok": True,
-        "buffered": True,
-        "session_id": sid,
-        "turns": len(buf.get("turns") or []),
-        "chars": len(turn),
-        "finalize": "background" if background else _sync_finalize(sid),
-    }
-    print(json.dumps(out, ensure_ascii=False)[:500])
+    session_buf.append_turn(session_id=sid, turn_text=turn, cwd=payload.get("cwd") or "")
+    hookcfg.spawn_finalize("--current", sid, log=log) or _sync_finalize(sid)
 
 
 def _sync_finalize(sid: str | None) -> list[dict]:

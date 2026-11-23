@@ -1,6 +1,7 @@
 """Host-hook runtime, tested from the generated plugin copy (what users actually run)."""
 from __future__ import annotations
 
+import errno
 import importlib
 import json
 import shlex
@@ -29,7 +30,7 @@ def hooks(tmp_path, monkeypatch):
         monkeypatch.delenv(k, raising=False)
         monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_" + k, raising=False)
     monkeypatch.syspath_prepend(str(SCRIPTS))
-    names = ("hookcfg", "session_buf", "finalize", "extract", "jev", "setup", "turn_end", "session_start",
+    names = ("hook_runtime", "hookcfg", "session_buf", "finalize", "extract", "jev", "setup", "turn_end", "session_start",
              "draft_store", "jev_log", "note_format", "paths", "session_finalize")
     for m in names:
         sys.modules.pop(m, None)
@@ -187,7 +188,7 @@ def test_turn_end_refuses_without_server(hooks, monkeypatch, capsys):
     sys.modules.pop("turn_end", None)
     te = importlib.import_module("turn_end")
     te.main()
-    assert '"buffered": false' in capsys.readouterr().out
+    assert capsys.readouterr() == ("", "")
     assert hooks["session_buf"].list_open() == []
 
 
@@ -244,6 +245,59 @@ def test_unconfigured_session_start_is_silent(hooks, monkeypatch, capsys):
     hooks["session_start"].main()
     assert capsys.readouterr() == ("", "")
     assert hooks["session_buf"].list_open() == []
+
+
+@pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
+@pytest.mark.parametrize("failure", ["lock", "directory", "config", "mode", "url", "number"])
+def test_plugin_entry_failures_are_silent(manifest, failure, hooks, monkeypatch, tmp_path):
+    plugin = SCRIPTS.parent
+    config = json.loads((plugin / manifest).read_text())["hooks"]
+    state = hooks["session_buf"]
+    if failure == "directory":
+        state.hook_dir().write_text("not a directory")
+    if failure == "config":
+        path = hooks["hookcfg"].config_path()
+        path.parent.mkdir(parents=True)
+        path.write_text("{")
+    if failure == "mode":
+        monkeypatch.setenv("HINDDIAN_CAPTURE_MODE", "invalid")
+    if failure == "url":
+        monkeypatch.setenv("HINDDIAN_MEMORY_URL", "https://[invalid")
+    if failure == "number":
+        monkeypatch.setenv("HINDDIAN_EXTRACT_ASSIST_CHARS", "invalid")
+    if failure == "lock":
+        state._path("test").with_suffix(".state.lock").touch()
+    for event in ("Stop", "SessionStart") if failure in {"config", "url", "mode", "number"} else ("Stop",):
+        command = Template(config[event][0]["hooks"][0]["command"]).substitute(
+            CLAUDE_PLUGIN_ROOT=plugin, PLUGIN_ROOT=plugin)
+        result = subprocess.run(shlex.split(command), input=json.dumps({
+            "session_id": "test", "last_assistant_message": "no private diagnostic content",
+        }), capture_output=True, text=True, timeout=3)
+        assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
+    logs = list(tmp_path.rglob("capture.log"))
+    assert logs and all("no private diagnostic content" not in log.read_text() for log in logs)
+    assert not list(tmp_path.rglob("sessions/*.json"))
+
+
+def test_enospc_is_silent_and_log_is_bounded(hooks, monkeypatch, capsys):
+    from hook_runtime import record
+    from turn_end import main
+
+    def full(*args, **kwargs):
+        raise OSError(errno.ENOSPC, "private exception detail")
+
+    from io import StringIO
+
+    monkeypatch.setattr(hooks["session_buf"], "write_atomic", full)
+    monkeypatch.setattr(sys, "stdin", StringIO('{"session_id":"s","last_assistant_message":"answer"}'))
+    main()
+    assert capsys.readouterr() == ("", "")
+    log = hooks["session_buf"].hook_dir() / "capture.log"
+    assert "OSError" in log.read_text() and "private exception detail" not in log.read_text()
+    monkeypatch.setattr("hook_runtime.LOG_LIMIT", 300)
+    for _ in range(10):
+        record("test")
+        assert log.stat().st_size <= 300
 
 
 @pytest.mark.parametrize("host", ["claude", "codex", "magpie"])
@@ -330,7 +384,7 @@ def test_host_buffers_turns_and_finalizes_silently(host, hooks, vault, monkeypat
             draft = (tmp_path / "drafts/my-app/session-old.md").read_text(encoding="utf-8")
             assert "# 降低并发后重试成功" in draft and "## OPEN QUESTIONS\n- 并发上限受连接池限制吗？" in draft
             assert old_note.read_bytes() == original_note
-            assert json.loads(run(stop, "new", prompt="排查超时", last_assistant_message="调低并发后复测通过"))["buffered"]
+            assert run(stop, "new", prompt="排查超时", last_assistant_message="调低并发后复测通过") == ""
             assert "调低并发后复测通过" in buffer.load("new")["turns"][0]["text"]
             assert [(method, path) for method, path, _ in requests] == [("POST", "/api/memory/finalize")]
             assert requests[0][2]["turns"] == [{"text": "ASSISTANT:\nPrevious closing"}]

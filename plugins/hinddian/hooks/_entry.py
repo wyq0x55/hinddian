@@ -4,6 +4,7 @@ Claude Code exports plugin userConfig as CLAUDE_PLUGIN_OPTION_<KEY>; map those o
 names the scripts read. There is no built-in server address.
 """
 import os
+import runpy
 import sys
 from pathlib import Path
 
@@ -15,4 +16,14 @@ def run(script: str) -> None:
         if opt and not os.environ.get(key):
             os.environ[key] = opt
     path = root / "scripts" / script
-    os.execv(sys.executable, [sys.executable, str(path)])
+    sys.path.insert(0, str(path.parent))
+    try:
+        from hook_runtime import quiet
+    except Exception:
+        scripts = Path(__file__).resolve().parents[1] / "scripts"
+        sys.path.insert(0, str(scripts))
+        try:
+            from hook_runtime import quiet
+        except Exception:
+            return
+    quiet(runpy.run_path)(str(path), run_name="__main__")
