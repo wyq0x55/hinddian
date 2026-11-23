@@ -73,12 +73,13 @@ def append_capture(root: Path, processed: Path, *, vault: Path, project: str, me
         for directory in (root, processed):
             if (directory / project).is_symlink():
                 raise nf.UnsafePath("capture directory must not use a symlink")
-            for candidate in (directory / project).glob(f"session-{session}-*.md"):
-                if candidate.is_symlink() or not candidate.is_file():
-                    continue
-                parsed = nf.parse_frontmatter(candidate.read_text(encoding="utf-8"))
-                if parsed and isinstance(ids := parsed[0].get("turn_ids"), list) and turn in ids:
-                    return {"path": str(candidate), "project": project, "duplicate": True}
+            for previous_project in pending_projects(directory):
+                for candidate in (directory / previous_project).glob(f"session-{session}-*.md"):
+                    if candidate.is_symlink() or not candidate.is_file():
+                        continue
+                    parsed = nf.parse_frontmatter(candidate.read_text(encoding="utf-8"))
+                    if parsed and isinstance(ids := parsed[0].get("turn_ids"), list) and turn in ids:
+                        return {"path": str(candidate), "project": previous_project, "duplicate": True}
         path = nf.within(root, f"{project}/{name}")
         if (root / project / f"{name}.md").is_symlink():
             raise nf.UnsafePath("capture file must not use a symlink")

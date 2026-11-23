@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import sys
 
-from hook_runtime import quiet
+from hook_runtime import quiet, run_hook
 
 
 @quiet
@@ -21,4 +21,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    run_hook(main)

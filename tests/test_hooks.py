@@ -5,6 +5,7 @@ import datetime as dt
 import errno
 import importlib
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -61,12 +62,27 @@ def make_repo(repo):
 
 
 @pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
-@pytest.mark.parametrize("failure", ["lock", "directory", "config", "mode", "url", "number"])
+@pytest.mark.parametrize("failure", ["lock", "directory", "config", "mode", "url", "number", "fifo", "slow-config"])
 def test_plugin_entry_failures_are_silent(manifest, failure, hooks, monkeypatch, tmp_path):
     if failure == "directory":
         (tmp_path / "drafts").write_text("not a directory")
     if failure == "config":
         hooks.paths.config_path().write_text("{")
+    if failure == "fifo":
+        os.mkfifo(hooks.paths.config_path())
+    if failure == "slow-config":
+        config = hooks.paths.config_path()
+        config.write_text("{}")
+        (tmp_path / "sitecustomize.py").write_text(
+            "import os, time\n"
+            "open_file = os.open\n"
+            "def slow_open(path, *args, **kwargs):\n"
+            "    if os.fspath(path) == os.environ['HINDDIAN_CONFIG']:\n"
+            "        time.sleep(30)\n"
+            "    return open_file(path, *args, **kwargs)\n"
+            "os.open = slow_open\n"
+        )
+        monkeypatch.setenv("PYTHONPATH", str(tmp_path))
     if failure == "mode":
         monkeypatch.setenv("HINDDIAN_CAPTURE_MODE", "invalid")
     if failure == "url":
@@ -77,11 +93,13 @@ def test_plugin_entry_failures_are_silent(manifest, failure, hooks, monkeypatch,
     lock = nf.vault_lock(timeout=0) if failure == "lock" else nf.contextlib.nullcontext()
     with lock:
         run(events["Stop"], session_id="test", last_assistant_message=REPLY)
-        if failure in {"config", "url", "mode", "number"}:
+        if failure not in {"directory", "lock"}:
             run(events["SessionStart"])
     logs = list(tmp_path.rglob("capture.log"))
     assert logs and all("旧流程" not in log.read_text() for log in logs)
     assert not list(tmp_path.rglob("drafts/**/*.md"))
+    if failure == "slow-config":
+        assert "TimeoutError" in logs[0].read_text()
 
 
 def test_enospc_is_silent_and_log_is_bounded(hooks, monkeypatch, capsys, tmp_path):
@@ -110,6 +128,38 @@ def test_closing_headings_ignore_fenced_examples_and_unrelated_headings(hooks):
     assert hooks.extract.closing(REPLY.replace("**取舍：**", "**其他**")) == ""
     assert hooks.extract.closing("**原行为** x\n**改进** y\n**取舍** z\n**验证**") == ""
     assert hooks.extract.closing(REPLY.replace("**原行为**", "原行为：").replace("### 改进：", "### 改进 ###\n"))
+
+
+@pytest.mark.parametrize("direct", [False, True])
+def test_stop_keeps_distinct_transcript_ids_and_excludes_bold_appendix(hooks, tmp_path, direct):
+    transcript = tmp_path / "transcript.jsonl"
+    reply = REPLY + "**其他**\n无关附录\n"
+    payload = {"session_id": "s", "transcript_path": str(transcript), "project": "P"}
+    if direct:
+        payload["last_assistant_message"] = reply
+    stop = commands(".codex-plugin/hooks.json")["Stop"]
+    for message_id in ("one", "one", "two"):
+        event = {"type": "response_item", "payload": {"type": "message", "id": message_id,
+                 "role": "assistant", "phase": "final_answer", "content": [{"type": "output_text", "text": reply}]}}
+        transcript.write_text(json.dumps(event) + "\n")
+        run(stop, **payload)
+    draft, = (tmp_path / "drafts/P").glob("*.md")
+    assert draft.read_text().count("<!-- hinddian:turn ") == 2
+    assert "无关附录" not in draft.read_text()
+
+
+def test_duplicate_stop_is_detected_across_pending_and_archived_projects(hooks, tmp_path):
+    stop = commands(".codex-plugin/hooks.json")["Stop"]
+    payload = {"session_id": "s", "turn_id": "same", "last_assistant_message": REPLY}
+    run(stop, project="First", **payload)
+    run(stop, project="Second", **payload)
+    draft, = (tmp_path / "drafts").glob("*/*.md")
+    assert draft.parent.name == "First"
+    archived = tmp_path / "processed/First" / draft.name
+    archived.parent.mkdir(parents=True)
+    draft.rename(archived)
+    run(stop, project="Third", **payload)
+    assert not list((tmp_path / "drafts").glob("*/*.md"))
 
 
 def test_skip_and_summary_only_use_visible_final(hooks, monkeypatch, tmp_path):

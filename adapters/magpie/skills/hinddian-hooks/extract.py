@@ -13,7 +13,7 @@ _HEADING = re.compile(
     rf"(?:\*\*[ \t\u3000]*(?P<bold>{_NAMES})[ \t\u3000]*[:：]?[ \t\u3000]*\*\*|(?P<plain>{_NAMES}))"
     r"(?:[ \t\u3000]*[:：][ \t\u3000]*|[ \t\u3000]+|(?<=\*\*)|$)(?P<body>.*)$"
 )
-_OTHER_HEADING = re.compile(r"^[ \t]{0,3}#{1,6}[ \t\u3000]+")
+_OTHER_HEADING = re.compile(r"^[ \t\u3000]{0,3}(?:#{1,6}[ \t\u3000]+|\*\*[^*\n]+\*\*\s*(?:[:：]|$))")
 _FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$")
 
 
@@ -58,9 +58,9 @@ def _text(content) -> str:
     return ""
 
 
-def _last_assistant(messages) -> str:
+def _last_assistant(messages) -> tuple[str, str]:
     if not isinstance(messages, list):
-        return ""
+        return "", ""
     for message in reversed(messages):
         if not isinstance(message, dict) or message.get("isMeta"):
             continue
@@ -72,11 +72,13 @@ def _last_assistant(messages) -> str:
         if message.get("phase") not in ("analysis", "commentary") and message.get("stop_reason") != "tool_use":
             content = message.get("content") or message.get("text")
             if text := _text(content):
-                return text
-    return ""
+                message_id = next((message[key] for key in ("id", "message_id", "uuid")
+                                   if isinstance(message.get(key), str) and message[key].strip()), "")
+                return text, message_id
+    return "", ""
 
 
-def _transcript(path: Path) -> str:
+def _transcript(path: Path) -> tuple[str, str]:
     if not path.is_file():
         raise ValueError("transcript must be a regular file")
     with path.open("rb") as stream:
@@ -103,18 +105,39 @@ def _transcript(path: Path) -> str:
         else:
             continue
         if isinstance(message, dict):
+            if event.get("uuid") and not message.get("uuid"):
+                message = {**message, "uuid": event["uuid"]}
             messages.append(message)
     return _last_assistant(messages)
 
 
 def final_reply(payload: dict) -> str:
+    return final_message(payload)[0]
+
+
+def final_message(payload: dict) -> tuple[str, str]:
     for key in ("last_assistant_message", "assistant_message", "response", "completion", "output"):
-        if text := _text(payload.get(key)):
-            return text
+        message = payload.get(key)
+        if isinstance(message, dict):
+            result = _last_assistant([{**message, "role": "assistant"}])
+            if result[0]:
+                return result
+        if text := _text(message):
+            path = payload.get("transcript_path") or payload.get("transcriptPath")
+            if path and not any(payload.get(key) for key in ("turn_id", "turnId", "message_id")):
+                try:
+                    transcript_text, message_id = _transcript(Path(path))
+                except (OSError, ValueError):
+                    pass
+                else:
+                    if transcript_text.strip() == text.strip():
+                        return text, message_id
+            return text, ""
     if path := payload.get("transcript_path") or payload.get("transcriptPath"):
         return _transcript(Path(path))
-    if text := _last_assistant(payload.get("messages")):
-        return text
+    result = _last_assistant(payload.get("messages"))
+    if result[0]:
+        return result
     turn = os.environ.get("MAGPIE_TURN_TEXT") or payload.get("turn_text") or payload.get("transcript")
     if isinstance(turn, list):
         return _last_assistant(turn)
@@ -123,10 +146,10 @@ def final_reply(payload: dict) -> str:
             try:
                 envelope = json.loads(turn)
             except ValueError:
-                return ""
-            return final_reply(envelope) if isinstance(envelope, dict) else _last_assistant(envelope)
+                return "", ""
+            return final_message(envelope) if isinstance(envelope, dict) else _last_assistant(envelope)
         role = re.compile(r"(?im)^(user|human|assistant|model|tool|system|developer)\s*[:：][ \t]*")
         matches = list(role.finditer(turn))
         if matches and matches[-1][1].lower() in ("assistant", "model"):
-            return turn[matches[-1].end():]
-    return ""
+            return turn[matches[-1].end():], ""
+    return "", ""

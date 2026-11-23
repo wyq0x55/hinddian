@@ -75,7 +75,7 @@ def _field(payload: dict, *keys: str) -> str:
 
 def capture(payload: dict) -> dict | None:
     fallback, limit = settings()
-    reply = extract.final_reply(payload)
+    reply, message_id = extract.final_message(payload)
     sid = (_field(payload, "session_id", "sessionId", "conversation_id", "conversationId", "thread_id")
            or next((os.environ[name] for name in ("MAGPIE_SESSION_ID", "CLAUDE_SESSION_ID", "CODEX_SESSION_ID",
                                                  "CURSOR_SESSION_ID") if os.environ.get(name)), ""))
@@ -94,8 +94,8 @@ def capture(payload: dict) -> dict | None:
     meta = {"session_id": sid, "host": host, "cwd": basename, **repository(cwd), "kind": kind}
     vault = paths.vault_dir()
     project = _project(_field(payload, "project"), meta["repo"], basename, draft_store.project_names(vault))
-    explicit = _field(payload, "turn_id", "turnId", "message_id")
-    identity = [sid, host, explicit] if sid and explicit else [sid, host, cwd, reply]
+    explicit = _field(payload, "turn_id", "turnId", "message_id") or message_id
+    identity = [sid, host, explicit] if explicit else [sid, host, cwd, reply]
     turn = hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode()).hexdigest()
     at = dt.datetime.now().astimezone().isoformat(timespec="seconds")
     return draft_store.append_capture(paths.drafts_dir(), paths.processed_dir(), vault=vault, project=project,

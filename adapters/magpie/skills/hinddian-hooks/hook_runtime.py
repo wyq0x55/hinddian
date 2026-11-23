@@ -7,6 +7,7 @@ import functools
 import json
 import os
 import sys
+import threading
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -50,3 +51,16 @@ def quiet(main):
                 record("error", entry=main.__module__, error=type(exc).__name__)
 
     return run
+
+
+def run_hook(main):
+    with open(os.devnull, "wb") as sink:
+        for fd in (1, 2):
+            os.dup2(sink.fileno(), fd)
+    deadline = threading.Timer(2.5, os._exit, args=(0,))
+    deadline.daemon = True
+    deadline.start()
+    try:
+        main()
+    finally:
+        deadline.cancel()

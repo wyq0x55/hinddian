@@ -4,6 +4,9 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import queue
+import stat
+import threading
 from typing import Any
 
 
@@ -13,14 +16,40 @@ def config_path() -> Path:
     return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "hinddian/config.json"
 
 
-def load_config() -> dict[str, Any]:
+def _read_config(path: Path) -> dict[str, Any]:
     try:
-        data = json.loads(config_path().read_text(encoding="utf-8"))
+        if not stat.S_ISREG(path.stat().st_mode):
+            raise ValueError("hinddian config must be a regular file")
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
     except FileNotFoundError:
         return {}
+    with os.fdopen(fd, encoding="utf-8") as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ValueError("hinddian config must be a regular file")
+        data = json.load(stream)
     if not isinstance(data, dict):
         raise ValueError("hinddian config must be a JSON object")
     return data
+
+
+def load_config() -> dict[str, Any]:
+    result = queue.Queue(maxsize=1)
+    path = config_path()
+
+    def read():
+        try:
+            result.put(_read_config(path))
+        except Exception as exc:
+            result.put(exc)
+
+    threading.Thread(target=read, daemon=True).start()
+    try:
+        config = result.get(timeout=0.5)
+    except queue.Empty:
+        raise TimeoutError("hinddian config read timed out") from None
+    if isinstance(config, Exception):
+        raise config
+    return config
 
 
 def _path(config: dict, key: str, *env_names: str) -> Path | None:
