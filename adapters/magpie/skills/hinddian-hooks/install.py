@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""One-step local install: Magpie Hooks + hinddian-memory MCP.
+"""Install the hinddian capture hooks on this Magpie host.
 
 WebDAV does NOT sync Hooks (upstream). After pulling the skill via WebDAV
 (or GitHub skill install), run this once on each computer.
 
-vault host remains library SoT via apply_library.py — do NOT run apply_library here.
 """
 from __future__ import annotations
 
@@ -16,12 +15,6 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-MCP_URL = (os.environ.get("HINDDIAN_MCP_URL") or (
-    (os.environ.get("HINDDIAN_MEMORY_URL") or "").rstrip("/") + "/mcp" if os.environ.get("HINDDIAN_MEMORY_URL") else ""
-)).strip()
-if not MCP_URL:
-    raise SystemExit("set HINDDIAN_MCP_URL (or HINDDIAN_MEMORY_URL), e.g. https://<host>:8444/hinddian/mcp")
-MCP_NAME = "hinddian-memory"
 HOOK_NAMES = {"hinddian-session-start", "hinddian-turn-end"}
 
 
@@ -77,31 +70,6 @@ def load_embed():
     return embed_hooks
 
 
-def ensure_mcp(data: dict) -> dict:
-    bearer = None
-    for m in data.get("mcp") or []:
-        h = (m.get("headers") or {}).get("Authorization") or ""
-        if h.lower().startswith("bearer "):
-            bearer = h.split(" ", 1)[1].strip()
-            break
-    env_tok = (os.environ.get("HINDDIAN_MCP_TOKEN") or "").strip()
-    if env_tok:
-        bearer = env_tok
-    agents = ["claude", "codex", "grok", "pi", "cursor", "gemini"]
-    new_mcp = [m for m in (data.get("mcp") or []) if m.get("name") not in ("hindsight", MCP_NAME)]
-    entry = {
-        "name": MCP_NAME,
-        "transport": "http",
-        "url": MCP_URL,
-        "agents": agents,
-    }
-    if bearer:
-        entry["headers"] = {"Authorization": f"Bearer {bearer}"}
-    new_mcp.insert(0, entry)
-    data["mcp"] = new_mcp
-    return {"mcp": MCP_NAME, "url": MCP_URL, "bearer": bool(bearer)}
-
-
 def main() -> int:
     lib_path = find_library()
     emb = load_embed()
@@ -111,9 +79,9 @@ def main() -> int:
     bak = lib_path.with_suffix(lib_path.suffix + f".bak.{int(time.time())}")
     shutil.copy2(lib_path, bak)
     data = json.loads(lib_path.read_text(encoding="utf-8"))
-    mcp_info = ensure_mcp(data)
-    names = {h["name"] for h in hooks}
-    kept = [h for h in (data.get("hooks") or []) if h.get("name") not in names]
+    if isinstance(data.get("mcp"), list):
+        data["mcp"] = [entry for entry in data["mcp"] if entry.get("name") != "hinddian-memory"]
+    kept = [h for h in (data.get("hooks") or []) if h.get("name") not in HOOK_NAMES]
     data["hooks"] = kept + hooks
     # ensure skill listed (no absolute path)
     skills = [s for s in (data.get("skills") or []) if s.get("name") != "hinddian-hooks"]
@@ -129,7 +97,6 @@ def main() -> int:
                 "backup": str(bak),
                 "hooks": hook_names,
                 "all_hooks": [h.get("name") for h in data["hooks"]],
-                "mcp": mcp_info,
                 "python": emb.python_bin(),
                 "ver": emb.hooks_version(),
             },
@@ -140,7 +107,6 @@ def main() -> int:
     print()
     print("Next: Magpie → Library → Hooks should list hinddian-session-start / hinddian-turn-end.")
     print("Then: magpie library sync")
-    print("Do not run apply_library.py on this PC (vault host is SoT).")
     return 0
 
 

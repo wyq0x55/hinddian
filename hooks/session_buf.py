@@ -14,14 +14,12 @@ import contextlib
 import hashlib
 import json
 import os
-import re
 import shutil
 import time
 from pathlib import Path
 from typing import Any, Iterator
 
-import hookcfg
-from note_format import redact
+from hookcfg import redact, write_atomic
 
 IDLE_SEC = int(os.environ.get("HINDDIAN_SESSION_IDLE_SEC", "1800"))  # 30 min
 RETAIN_SEC = int(os.environ.get("HINDDIAN_BUFFER_RETAIN_SEC", str(3 * 86400)))
@@ -83,20 +81,8 @@ def load(sid: str) -> dict[str, Any] | None:
 
 def save(buf: dict[str, Any]) -> Path:
     p = _path(buf["session_id"])
-    tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(buf, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    with contextlib.suppress(OSError):
-        os.chmod(tmp, 0o600)
-    tmp.replace(p)
+    write_atomic(p, json.dumps(buf, ensure_ascii=False, indent=2) + "\n")
     return p
-
-
-PRIVATE = re.compile(r"<private>.*?(?:</private>|\Z)", re.S | re.I)
-
-
-def strip_private(text: str) -> str:
-    """Redact <private>…</private> before buffering. Unclosed → to the end."""
-    return PRIVATE.sub("[private]", text or "")
 
 
 def append_turn(
@@ -106,6 +92,11 @@ def append_turn(
     cwd: str = "",
     project_hint: str | None = None,
 ) -> dict[str, Any]:
+    with claim(session_id, kind="state", wait=True):
+        return _append_turn(session_id, turn_text, cwd, project_hint)
+
+
+def _append_turn(session_id: str, turn_text: str, cwd: str, project_hint: str | None) -> dict[str, Any]:
     text = redact(turn_text).strip()
     now = time.time()
     buf = load(session_id) or {
@@ -205,17 +196,24 @@ def prune(now: float | None = None) -> int:
 
 
 @contextlib.contextmanager
-def claim(sid: str) -> Iterator[bool]:
-    """Per-session lock file so two background finalizers never push the same session."""
-    lock = _path(sid).with_suffix(".lock")
+def claim(sid: str, *, kind: str = "finalize", wait: bool = False) -> Iterator[bool]:
+    """Separate the long-running finalize claim from short buffer updates."""
+    lock = _path(sid).with_suffix(".lock" if kind == "finalize" else ".state.lock")
     with contextlib.suppress(OSError):
         if time.time() - lock.stat().st_mtime > LOCK_STALE_SEC:
             lock.unlink()
-    try:
-        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        yield False
-        return
+    deadline = time.monotonic() + 5
+    while True:
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            break
+        except FileExistsError:
+            if not wait:
+                yield False
+                return
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"session {kind} lock busy")
+            time.sleep(0.02)
     os.close(fd)
     try:
         yield True

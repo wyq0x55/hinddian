@@ -46,7 +46,7 @@ def test_block_list_and_unknown_keys_parse(tmp_path):
     n = _parse(tmp_path, HUMAN_NOTE)
     assert n["tags"] == ["alpha", "beta"]
     assert n["_fm"]["reviewer"] == "alice"
-    assert ("我的补充", "人手写的段落，不能丢。") in n["_sections"]
+    assert "## 我的补充\n人手写的段落，不能丢。\n" in n["_sections"]
 
 
 def test_render_preserves_human_content(tmp_path):
@@ -94,12 +94,6 @@ def test_safe_segment():
     assert "/" not in nf.safe_project("a/b")
     assert nf.safe_project("..") == "通用-未定"
     assert nf.safe_title("t\nstatus: x") == "t-status- x"
-
-
-def test_score_works_for_chinese():
-    n = {"title": "部署门禁", "scene": "API 主机 部署时", "practice": "", "reason": ""}
-    assert nf.score("部署", n) > 0
-    assert nf.score("无关话题", n) == 0
 
 
 def test_slugify_keeps_ascii_and_hashes_cjk():

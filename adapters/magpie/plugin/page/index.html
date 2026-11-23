@@ -13,8 +13,8 @@
 <script defer>
   magpie.ready.then(() => {})
 </script>
-<h1>Hindian 记忆</h1>
-<p>把 <strong>hinddian-memory MCP</strong> 和 Magpie <strong>Library Hooks</strong>（session-start / turn-end）装到本机。</p>
+<h1>Hinddian 笔记</h1>
+<p>安装 Magpie 会话采集 hooks（session-start / turn-end）。</p>
 <p class="warn">硬限制：Magpie WebDAV / 备份 <strong>不同步 Hooks</strong>；插件启用也不会自动写入 Hooks。每台电脑装一次。</p>
 <h2>推荐（像市场一样）</h2>
 <ol>
@@ -31,6 +31,4 @@
 <h2>装好后检查</h2>
 <ul>
   <li>Library → Hooks：<code>hinddian-session-start</code>、<code>hinddian-turn-end</code></li>
-  <li>Library → MCP：<code>hinddian-memory</code></li>
 </ul>
-<p>不要在其他电脑跑 <code>apply_library.py</code>（SoT 在 vault 主机）。</p>

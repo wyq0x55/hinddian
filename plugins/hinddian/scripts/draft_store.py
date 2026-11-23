@@ -2,9 +2,8 @@
 from __future__ import annotations
 
 import datetime as dt
-import os
+import hashlib
 import re
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +15,24 @@ else:
 
 DRAFT_META_KEYS = ("type", "confidence", "origin", "session_id", "jev_source", "turn_count", "finalize_reason")
 _META_KEY = re.compile(r"^[a-z][a-z0-9_]{0,40}$")
+
+
+def valid_project(project: str) -> bool:
+    return bool(project and not project.startswith(".") and nf.safe_project(project) == project)
+
+
+def pending_projects(root: Path) -> list[str]:
+    if not root.is_dir():
+        return []
+    return sorted(path.name for path in root.iterdir() if path.is_dir() and not path.is_symlink()
+                  and path.name != "holdout" and valid_project(path.name))
+
+
+def draft_files(root: Path, project: str) -> list[Path]:
+    directory = root / project
+    if not valid_project(project) or directory.is_symlink():
+        return []
+    return sorted(path for path in directory.glob("*.md") if path.is_file() and not path.is_symlink())
 
 
 def project_names(vault: Path) -> list[str]:
@@ -49,12 +66,12 @@ def write_draft(
     sid = str(meta.get("session_id") or "").strip()
     if sid:
         safe_sid = "".join(char if char.isalnum() or char in "-_" else "_" for char in sid)[:80]
+        if safe_sid != sid:
+            safe_sid = f"{safe_sid[:63]}-{hashlib.sha256(sid.encode()).hexdigest()[:16]}"
         name = f"session-{safe_sid}"
     else:
         stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
         name = f"{stamp}-{nf.slugify(title)[:40]}"
-    path = nf.within(root, f"{project}/{name}")
-    paths.check_draft_root(path, vault)
     today = dt.date.today().isoformat()
     items: list[tuple[str, Any]] = [
         ("title", title),
@@ -69,14 +86,11 @@ def write_draft(
         if isinstance(value, (str, int, float, bool)):
             items.append((key, nf.redact(str(value))[:200]))
     text = nf.dump_frontmatter(items) + f"\n\n# {title}\n\n" + nf.redact(body).strip() + "\n"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as fh:
-        temporary = Path(fh.name)
-        try:
-            fh.write(text)
-            fh.close()
-            os.replace(temporary, path)
-        finally:
-            temporary.unlink(missing_ok=True)
+    with nf.vault_lock():
+        path = nf.within(root, f"{project}/{name}")
+        paths.check_draft_root(path, vault)
+        if (root / project).is_symlink() or (root / project / f"{name}.md").is_symlink():
+            raise nf.UnsafePath("draft path must not use a symlink")
+        nf.write_atomic(path, text)
     return {"ok": True, "path": str(path), "project": project,
             "session_id": sid or None, "jev_source": meta.get("jev_source"), "upsert": bool(sid)}

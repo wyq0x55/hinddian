@@ -45,7 +45,7 @@ def drafts_dir() -> Path:
 
 
 def processed_dir() -> Path:
-    return _path(load_config(), "processed_dir", "HINDDIAN_PROCESSED_DIR", "HB_PROCESSED") or drafts_dir().with_name("processed")
+    return _path(load_config(), "processed_dir", "HINDDIAN_PROCESSED_DIR", "HB_PROCESSED") or drafts_dir().parent / "processed"
 
 
 def jev_log_path() -> Path:
@@ -53,5 +53,6 @@ def jev_log_path() -> Path:
 
 
 def check_draft_root(root: Path, vault: Path) -> None:
-    if root.resolve().is_relative_to(vault.resolve()):
+    root, vault = root.resolve(), vault.resolve()
+    if root.is_relative_to(vault) or vault.is_relative_to(root):
         raise ValueError(f"draft storage must be outside the vault: {root}")

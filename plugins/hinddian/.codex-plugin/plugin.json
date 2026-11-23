@@ -1,7 +1,7 @@
 {
   "name": "hinddian",
   "version": "0.5.0",
-  "description": "hinddian memory for Codex: MCP (local bridge) + SessionStart/Stop hooks + skills. One-time: python3 scripts/setup.py --url … --token …",
+  "description": "SessionStart and Stop hooks that capture session drafts for Obsidian.",
   "author": {
     "name": "Wanwan",
     "url": "https://github.com/wyq0x55/hinddian"
@@ -10,27 +10,23 @@
   "repository": "https://github.com/wyq0x55/hinddian",
   "license": "MIT",
   "keywords": [
-    "memory",
-    "mcp",
+    "notes",
     "hooks"
   ],
   "skills": "./skills/",
   "hooks": "./.codex-plugin/hooks.json",
-  "mcpServers": "./.codex-plugin/mcp.json",
   "interface": {
-    "displayName": "Hindian Memory",
-    "shortDescription": "MCP memory + session hooks",
-    "longDescription": "hinddian-memory MCP (local stdio bridge to your hinddian server) plus SessionStart/Stop hooks that turn sessions into drafts for Obsidian notes. One-time setup: python3 scripts/setup.py.",
+    "displayName": "Hinddian Notes",
+    "shortDescription": "Session capture for Obsidian",
+    "longDescription": "Capture session drafts with SessionStart and Stop hooks. A local batch job organizes drafts into Obsidian notes.",
     "developerName": "Wanwan",
     "category": "Productivity",
     "capabilities": [
-      "Read",
       "Write"
     ],
     "websiteURL": "https://github.com/wyq0x55/hinddian",
     "defaultPrompt": [
-      "用 hinddian recall 查项目记忆",
-      "安装并配置 hinddian 记忆"
+      "检查 hinddian 会话采集配置"
     ]
   },
   "extensions": {

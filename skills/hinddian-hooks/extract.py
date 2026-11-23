@@ -9,7 +9,10 @@ from __future__ import annotations
 import json
 import os
 import re
+from pathlib import Path
 from typing import Any
+
+from hookcfg import redact
 
 # Role markers common across agents / host dumps
 _ROLE_RE = re.compile(
@@ -39,7 +42,7 @@ _MAX_TOTAL = int(os.environ.get("HINDDIAN_EXTRACT_TOTAL_CHARS", "12000"))
 
 
 def _clean_piece(text: str, *, role: str) -> str:
-    t = (text or "").strip()
+    t = redact(text or "").strip()
     if not t:
         return ""
     t = _JUNK_BLOCK.sub("\n", t)
@@ -72,7 +75,7 @@ def _from_messages(messages: list[Any]) -> list[tuple[str, str]]:
                 if isinstance(p, str):
                     parts.append(p)
                 elif isinstance(p, dict):
-                    if p.get("type") in ("tool_use", "tool_result", "function_call"):
+                    if p.get("type") not in (None, "text", "input_text", "output_text"):
                         continue
                     parts.append(str(p.get("text") or p.get("content") or ""))
             content = "\n".join(parts)
@@ -120,6 +123,7 @@ def _from_plaintext(text: str) -> list[tuple[str, str]]:
         except Exception:
             pass
 
+    raw = redact(raw)
     # Role-labeled plaintext
     parts: list[tuple[str, str]] = []
     matches = list(_ROLE_RE.finditer(raw))
@@ -169,6 +173,53 @@ def format_whitelist(pairs: list[tuple[str, str]]) -> str:
 def extract_turn_text(raw: str | None = None) -> str:
     """Public: whitelist-only text for one turn (or stdin blob)."""
     return format_whitelist(whitelist_pairs(raw or ""))
+
+
+def _transcript_pairs(path: Path) -> list[tuple[str, str]]:
+    """Read the last visible user/assistant turn from Claude Code or Codex JSONL."""
+    try:
+        if not path.is_file():
+            return []
+        with path.open("rb") as stream:
+            size = stream.seek(0, os.SEEK_END)
+            start = max(0, size - 2_000_000)
+            stream.seek(start)
+            if start:
+                stream.readline()
+            raw = stream.read(2_000_000).decode("utf-8", errors="replace")
+    except OSError:
+        return []
+    messages = []
+    structured = False
+    for line in raw.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        structured = True
+        if event.get("isMeta"):
+            continue
+        if event.get("type") in ("user", "assistant"):
+            message = event.get("message")
+        elif event.get("type") == "response_item":
+            message = event.get("payload")
+            if not isinstance(message, dict) or message.get("type") != "message":
+                continue
+        else:
+            continue
+        if (isinstance(message, dict) and message.get("phase") not in ("commentary", "analysis")
+                and message.get("stop_reason") != "tool_use"):
+            messages.append(message)
+    if structured:
+        pairs = _from_messages(messages)
+    elif not start:
+        pairs = whitelist_pairs(raw)
+    else:
+        return []
+    last_user = next((index for index in range(len(pairs) - 1, -1, -1) if pairs[index][0] == "user"), 0)
+    return pairs[last_user:]
 
 
 def structured_body(*, decisions: list[str], lessons: list[str], preferences: list[str], title: str = "") -> str:
@@ -233,12 +284,6 @@ def parse_hook_payload(stdin_text: str = "", env: dict | None = None, *, include
         "cwd": str(cwd).strip(),
         "turn_text": "",
         "raw_data": data,
-        "first_message": (
-            env.get("MAGPIE_FIRST_MESSAGE")
-            or env.get("MAGPIE_PROMPT")
-            or data.get("prompt")
-            or ""
-        ),
     }
     if not include_turn:
         return payload
@@ -264,33 +309,23 @@ def parse_hook_payload(stdin_text: str = "", env: dict | None = None, *, include
             or data.get("completion")
             or data.get("output")
         )
-        if user or asst:
-            pairs = []
-            if user:
-                pairs.append(("user", _clean_piece(str(user), role="user")))
-            if asst:
-                pairs.append(("assistant", _clean_piece(str(asst), role="assistant")))
-            turn = format_whitelist([(r, x) for r, x in pairs if x])
-        # Optional transcript file (Claude Stop often provides transcript_path)
         tpath = data.get("transcript_path") or data.get("transcriptPath")
-        if not turn and tpath:
-            try:
-                from pathlib import Path as _P
-                tp = _P(str(tpath))
-                if tp.is_file() and tp.stat().st_size < 2_000_000:
-                    turn = extract_turn_text(tp.read_text(encoding="utf-8", errors="replace")[-80000:])
-            except Exception:
-                pass
-    if not turn and data:
-        # Build from last user+assistant in payload
-        pairs = whitelist_pairs(messages=data.get("messages") if isinstance(data.get("messages"), list) else None)
-        if not pairs:
-            pairs = whitelist_pairs(json.dumps(data, ensure_ascii=False)[:20000])
-        turn = format_whitelist(pairs)
-    elif not turn and raw and not data:
-        turn = extract_turn_text(raw)
+        transcript = _transcript_pairs(Path(tpath)) if isinstance(tpath, str) and (not user or not asst) else []
+        if asst:
+            transcript = [pair for pair in transcript if pair[0] != "assistant"]
+        if user:
+            transcript = [("user", _clean_piece(str(user), role="user"))] + [
+                pair for pair in transcript if pair[0] != "user"
+            ]
+        if asst:
+            transcript.append(("assistant", _clean_piece(str(asst), role="assistant")))
+        if not transcript and isinstance(data.get("messages"), list):
+            transcript = whitelist_pairs(messages=data["messages"])
+        payload["turn_text"] = format_whitelist([(role, text) for role, text in transcript if text])
+    elif isinstance(turn, list):
+        payload["turn_text"] = format_whitelist(whitelist_pairs(messages=turn))
+    elif isinstance(turn, str) and turn:
+        payload["turn_text"] = extract_turn_text(turn)
     else:
-        turn = extract_turn_text(turn) if turn else extract_turn_text(raw)
-
-    payload["turn_text"] = turn
+        payload["turn_text"] = extract_turn_text(raw) if not raw.startswith("{") else ""
     return payload

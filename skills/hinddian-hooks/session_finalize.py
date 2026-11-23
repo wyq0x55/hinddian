@@ -1,7 +1,7 @@
 """Finalize a hook buffer through Jev and write a draft, locally or via the HTTP collector.
 
-Jev runs here (the server's JEV_BASE_URL first, then TypeSafe cloud if configured — see jev.py).
-Both fail → source=none, nothing is written and the client keeps its buffer to retry.
+Jev uses the configured System One gateway, then TypeSafe cloud if configured.
+If both fail, the hook keeps its buffer to retry.
 Only metadata goes to the decision log, never turn text.
 """
 from __future__ import annotations

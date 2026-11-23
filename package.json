@@ -1,7 +1,7 @@
 {
   "name": "hinddian",
   "version": "0.6.0",
-  "description": "Host-agnostic memory (Claude/Codex first). Root package.json is a Magpie shim; real adapter is adapters/magpie/.",
+  "description": "Session capture for Obsidian notes, with an optional Magpie adapter.",
   "type": "module",
   "main": "./adapters/magpie/plugin/index.mjs",
   "private": false,
@@ -18,8 +18,7 @@
   ],
   "keywords": [
     "hinddian",
-    "memory",
-    "mcp",
+    "notes",
     "claude",
     "codex"
   ],

@@ -15,7 +15,7 @@ Secondary (optional):
   Model: jev-latest
 
 Write path (keep/classify): local → cloud only; if both fail → do NOT write (source=none).
-No loose LLM auto-keep. Recall/routing may soft-fallback to chat completions.
+Chat completions can enrich drafts after Jev decides to keep them.
 
 Never log or return API keys.
 """
@@ -135,8 +135,7 @@ def backend_info() -> dict[str, Any]:
         "endpoints": eps,
         "write_policy": "jev_only_no_llm_keep",
         "sources": ["jev:local", "jev:cloud", "none"],
-        "recall_llm_fallback": GATEWAY,
-        "llm_model": FALLBACK_MODEL,
+        "enrichment_model": FALLBACK_MODEL,
         "force_cloud": _force_cloud(),
     }
 
@@ -166,14 +165,9 @@ def _post_jev(state: Any, questions: dict) -> tuple[dict, str]:
             )
             return raw, label
         except urllib.error.HTTPError as e:
-            detail = ""
-            try:
-                detail = e.read()[:180].decode(errors="replace")
-            except Exception:
-                pass
-            errors.append(f"{label}:HTTP {e.code} {detail}")
+            errors.append(f"{label}:HTTP {e.code}")
         except Exception as e:
-            errors.append(f"{label}:{type(e).__name__}:{str(e)[:120]}")
+            errors.append(f"{label}:{type(e).__name__}")
     if not _endpoints():
         raise RuntimeError("no_jev_endpoint")
     raise RuntimeError("; ".join(errors)[:300] or "jev_failed")
@@ -234,44 +228,6 @@ def choice(state: Any, instructions: str, criteria: dict[str, str | None]) -> Ga
         return GateResult(True, val, conf, f"jev:{label}", raw)
     except Exception as e:
         return GateResult(False, None, 0.0, "error", None, str(e)[:200])
-
-
-def _jev_ok(r: GateResult) -> bool:
-    return r.ok and (r.source == "jev" or str(r.source).startswith("jev:"))
-
-
-def should_recall(cwd: str, first_message: str, projects: list[str]) -> GateResult:
-    state = {"cwd": cwd or "", "message": (first_message or "")[:2000], "projects": projects}
-    r = noul(
-        state,
-        "Should the agent recall project memory before answering? Yes if the task touches an existing project, prior decisions, or known pitfalls.",
-        true_c="Task needs prior project memory",
-        false_c="Greeting, unrelated, or fully self-contained",
-    )
-    if _jev_ok(r):
-        return r
-    if r.source == "jev" and r.error == "low_confidence":
-        pass
-    elif r.source == "error":
-        pass
-    elif r.source == "skip":
-        pass
-    else:
-        return r
-    try:
-        data = _llm_json(
-            "用 JSON 回答是否需要召回项目记忆。字段: {\"should_recall\": true|false, \"confidence\": 0-1, \"project\": \"名或空\"}\n"
-            f"cwd={cwd}\nmessage={first_message[:1500]}\nprojects={projects}"
-        )
-        return GateResult(
-            True,
-            bool(data.get("should_recall")),
-            float(data.get("confidence") or 0.5),
-            "llm",
-            data,
-        )
-    except Exception as e:
-        return GateResult(True, True, 0.4, "llm", None, f"fallback_default_yes:{e}"[:120])
 
 
 def match_project(cwd: str, message: str, projects: list[str]) -> GateResult:
@@ -407,29 +363,3 @@ def classify_turn(turn_text: str, projects: list[str], cwd: str = "") -> GateRes
             payload[bucket] = [payload["summary"]]
     # source stays jev:local|jev:cloud (keep gate), not llm
     return GateResult(True, payload, payload["confidence"], keep.source, {"keep": keep.raw, "type": typ.raw})
-
-
-def write_verdict(new_summary: str, candidates: list[dict]) -> GateResult:
-    """4-state: add|update|supersede|noop against candidate note digests."""
-    state = {"new": new_summary[:3000], "candidates": candidates[:12]}
-    r = choice(
-        state,
-        "How should this new memory relate to existing notes?",
-        {
-            "add": "Truly new topic; create a note",
-            "update": "Same topic; merge into an existing id",
-            "supersede": "New conclusion replaces an old note",
-            "noop": "Duplicate or not worth keeping",
-        },
-    )
-    if r.ok:
-        return r
-    try:
-        data = _llm_json(
-            "四态裁决 JSON: {\"verdict\": \"add|update|supersede|noop\", \"target_id\": \"或空\", "
-            "\"confidence\": 0-1, \"reason\": \"…\"}\n"
-            f"NEW:\n{new_summary[:2500]}\nCANDIDATES:\n{json.dumps(candidates[:12], ensure_ascii=False)[:4000]}"
-        )
-        return GateResult(True, data.get("verdict"), float(data.get("confidence") or 0.5), "llm", data)
-    except Exception as e:
-        return GateResult(True, "add", 0.3, "error", None, str(e)[:120])

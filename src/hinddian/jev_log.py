@@ -1,25 +1,20 @@
-"""Client-reported Jev decisions (metadata only) — append-only JSONL on the API host.
-
-Jev runs in the client hooks; without these reports the server cannot tell "finalize never
-fired" from "Jev source=none" from "keep=false". Never stores turn text or secrets.
-"""
+"""Metadata-only JSONL decisions from local hooks or HTTP capture."""
 from __future__ import annotations
 
 import json
 import os
 import re
-import threading
 import time
 from collections import Counter
 from pathlib import Path
 
 if __package__:
-    from . import paths
+    from . import note_format, paths
 else:
+    import note_format
     import paths
 
 MAX_BYTES = 2 * 1024 * 1024  # rotate to .1 past this (one old generation kept)
-_LOCK = threading.Lock()
 EVENTS = ("finalize", "turn")
 STR_FIELDS = {  # name -> max length
     "session_id": 128, "project": 128, "cwd": 128, "host": 64, "finalize_reason": 40,
@@ -77,17 +72,16 @@ def validate(args: dict) -> dict:
     now = time.time()
     ts = args.get("ts")
     rec["client_ts"] = float(ts) if isinstance(ts, (int, float)) and not isinstance(ts, bool) else None
-    rec["ts"] = now  # server receive time is authoritative
+    rec["ts"] = now
     return rec
 
 
 def append(rec: dict) -> None:
     p = log_path()
     line = json.dumps(rec, ensure_ascii=False) + "\n"
-    with _LOCK:
-        p.parent.mkdir(parents=True, exist_ok=True)
+    with note_format.vault_lock(p.with_name(p.name + ".lock")):
         try:
-            if p.stat().st_size + len(line) > MAX_BYTES:
+            if p.stat().st_size + len(line.encode("utf-8")) > MAX_BYTES:
                 os.replace(p, p.with_suffix(p.suffix + ".1"))
         except FileNotFoundError:
             pass

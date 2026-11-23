@@ -56,6 +56,10 @@ def payload(buf: dict, *, reason: str) -> dict:
     cwd = str(buf.get("cwd") or "")
     root = repo_root(cwd) if cwd else None
     turns = buf.get("turns") or []
+    texts = [session_buf.clip(nf.redact(str(turn.get("text") or "")), 19000, 6000)
+             for turn in turns if (turn.get("text") or "").strip()]
+    if len(texts) > session_finalize.MAX_TURNS or sum(map(len, texts)) > session_finalize.MAX_TOTAL_CHARS:
+        texts = [session_finalize.clip("\n\n---\n\n".join(texts))]
     return {
         "session_id": str(buf.get("session_id") or "")[:128],
         "project": str(buf.get("project") or "")[:128] or None,
@@ -64,20 +68,18 @@ def payload(buf: dict, *, reason: str) -> dict:
         "client_id": client_id(),
         "finalize_reason": reason,
         "turn_count": len(turns),
-        "turns": [{"text": session_buf.clip(nf.redact(str(t.get("text") or "")), 19000, 6000)}
-                  for t in turns if (t.get("text") or "").strip()],
+        "turns": [{"text": text} for text in texts],
     }
 
 
 def finalize_buffer(buf: dict, *, reason: str) -> dict:
     sid = buf.get("session_id") or ""
-    if not session_buf.session_corpus(buf).strip():
-        session_buf.mark_finalized(sid, "empty")
-        return {"ok": True, "skipped": "empty", "session_id": sid, "reason": reason}
     mode = hookcfg.capture_mode()
     try:
         args = payload(buf, reason=reason)
-        if mode == "http":
+        if not args["turns"]:
+            out = {"outcome": "empty"}
+        elif mode == "http":
             out = req("POST", "/api/memory/finalize", args, timeout=FINALIZE_TIMEOUT)
         elif mode == "local":
             out = session_finalize.finalize(
@@ -87,10 +89,18 @@ def finalize_buffer(buf: dict, *, reason: str) -> dict:
         else:
             raise ValueError("unknown capture mode")
     except Exception as e:
-        err = f"{'server_unreachable' if mode == 'http' else 'finalize_failed'}: {type(e).__name__}"
-        d = session_buf.defer(sid, err)
-        return {"ok": False, "deferred": not d["gave_up"], **d, "session_id": sid, "reason": reason, "error": err}
-    out = out if isinstance(out, dict) else {}
+        label = "server_unreachable" if mode == "http" else "finalize_failed"
+        out = {"retry": True, "error": f"{label}: {type(e).__name__}"}
+    if not isinstance(out, dict) or not (out.get("retry") or out.get("outcome")):
+        out = {"retry": True, "error": "invalid finalize response"}
+    with session_buf.claim(sid, kind="state", wait=True):
+        current = session_buf.load(sid)
+        if not current or current.get("updated_at") != buf.get("updated_at") or current.get("finalized"):
+            return {"ok": True, "skipped": "buffer_changed", "session_id": sid, "reason": reason}
+        return _settle(sid, reason, out)
+
+
+def _settle(sid: str, reason: str, out: dict) -> dict:
     if out.get("retry"):
         err = str(out.get("error") or out.get("outcome") or "retry")[:200]
         d = session_buf.defer(sid, err)
@@ -127,8 +137,10 @@ def finalize_idle_and_others(*, current_sid: str | None = None, project: str | N
         else:
             reason = "idle"
         with session_buf.claim(sid) as mine:
-            if mine:
-                results.append(finalize_buffer(buf, reason=reason))
+            if mine and (fresh := session_buf.load(sid)) and not fresh.get("finalized") and session_buf.due(fresh):
+                if is_current and reason == "idle" and time.time() - float(fresh.get("updated_at") or 0) < session_buf.IDLE_SEC:
+                    continue
+                results.append(finalize_buffer(fresh, reason=reason))
     return results
 
 

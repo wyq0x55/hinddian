@@ -1,87 +1,50 @@
-"""FastAPI app. Two channels with separate credentials:
-
-  agent channel     /mcp, /api/memory/*  — Bearer HINDDIAN_MCP_TOKEN (memory_mcp.py)
-  dashboard channel /, /api/*            — AUTH_TOKEN, as Bearer or as the X-Hinddian-Dashboard
-                                           header a TLS/mTLS proxy injects. Approvals live here only.
-"""
-
+"""Read-only pipeline dashboard and optional HTTP session collector."""
 from __future__ import annotations
 
 import hmac
-from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import Body, Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__
-from . import classify_remote
-from . import jev_log
-from . import memory_mcp
-from . import oauth
-from .config import Settings, get_settings
+from . import __version__, hooks_api, jev_log, notes
+from .config import get_settings
 
 WEB_DIR = Path(__file__).resolve().parents[2] / "web"
-
-
-@asynccontextmanager
-async def _lifespan(_app: FastAPI):
-    yield
-
-
-app = FastAPI(title="hinddian", version=__version__, description="hinddian memory dashboard", lifespan=_lifespan)
-app.include_router(memory_mcp.router)
-app.include_router(oauth.router)
-
-
-def _settings() -> Settings:
-    return get_settings()
+app = FastAPI(title="hinddian", version=__version__, description="hinddian notes pipeline")
+app.include_router(hooks_api.router)
 
 
 def require_dashboard(
     authorization: str | None = Header(default=None),
     x_hinddian_dashboard: str | None = Header(default=None),
-    settings: Settings = Depends(_settings),
 ) -> None:
+    settings = get_settings()
     token = settings.auth_token
     if not token:
         if settings.hinddian_allow_no_auth:
             return
-        raise HTTPException(503, "dashboard disabled: set AUTH_TOKEN (distinct from HINDDIAN_MCP_TOKEN)")
-    if settings.hinddian_mcp_token and hmac.compare_digest(token.encode(), settings.hinddian_mcp_token.encode()):
+        raise HTTPException(503, "dashboard disabled: set AUTH_TOKEN")
+    collector = settings.hinddian_mcp_token
+    if collector and hmac.compare_digest(token.encode(), collector.encode()):
         raise HTTPException(503, "AUTH_TOKEN must differ from HINDDIAN_MCP_TOKEN")
-    got = memory_mcp.bearer(authorization) or (x_hinddian_dashboard or "").strip()
+    got = hooks_api.bearer(authorization) or (x_hinddian_dashboard or "").strip()
     if not got:
         raise HTTPException(401, "dashboard token required")
     if not hmac.compare_digest(got.encode(), token.encode()):
         raise HTTPException(403, "invalid token")
 
 
-def require_csrf(x_hinddian: str | None = Header(default=None)) -> None:
-    """Mutations need a custom header → cross-site forms/fetch can't send it without CORS."""
-    if x_hinddian != "1":
-        raise HTTPException(403, "missing X-Hinddian header")
-
-
-NOTE_TYPES = ("decision", "lesson", "tip")
 dash = [Depends(require_dashboard)]
-dash_write = [Depends(require_dashboard), Depends(require_csrf)]
 
 
-def _vault(op: str, **kw: Any) -> Any:
+def _soft(fn) -> tuple[Any, str | None]:
     try:
-        return memory_mcp.vault(op, **kw)
-    except Exception as e:  # noqa: BLE001 — surfaced to the dashboard as a 502
-        raise HTTPException(502, f"vault host: {str(e)[:300]}") from e
-
-
-def _soft(fn, *args) -> tuple[Any, str | None]:
-    try:
-        return fn(*args), None
-    except Exception as e:  # noqa: BLE001
-        return None, str(e)[:200]
+        return fn(), None
+    except (OSError, ValueError) as exc:
+        return None, str(exc)[:200]
 
 
 @app.get("/api/health")
@@ -91,121 +54,46 @@ def health() -> dict:
 
 @app.get("/api/overview", dependencies=dash)
 def overview() -> dict:
-    """Everything the 概览 tab and the tab badges need, each part failing independently."""
-    routing, routing_err = _soft(memory_mcp.vault, "routing_global")
-    gate, gate_err = _soft(classify_remote.gate)
-    corr, corr_err = _soft(lambda: memory_mcp.vault("list_corrections", status="pending", limit=100))
-    projects = (routing or {}).get("projects") or []
-    gate_projects = (gate or {}).get("projects") or []
+    stats, vault_error = _soft(notes.vault_stats)
+    batch, draft_error = _soft(notes.batch_status)
+    projects = (batch or {}).get("projects", [])
     return {
         "version": __version__,
-        "vault": {
-            "ok": routing_err is None,
-            "error": routing_err,
-            "projects": len(projects),
-            "decisions": sum(p.get("decisions", 0) for p in projects),
-            "lessons": sum(p.get("lessons", 0) for p in projects),
-            "tips": ((routing or {}).get("tips") or {}).get("count", 0),
-        },
-        "drafts": {
-            "ok": gate_err is None,
-            "error": gate_err,
-            "total": sum(p.get("drafts", 0) for p in gate_projects),
-            "ready": sum(1 for p in gate_projects if p.get("state") == "ready"),
-            "processed": sum(p.get("processed", 0) for p in gate_projects),
-        },
-        "corrections": {"ok": corr_err is None, "error": corr_err, "pending": len(corr or [])},
-        "sync": classify_remote.sync_status(),
-        "hindsight": classify_remote.hindsight_stats(),
+        "vault": {"ok": vault_error is None, "error": vault_error,
+                  **(stats or dict.fromkeys(("projects", "decisions", "lessons", "tips"), 0))},
+        "drafts": {"ok": draft_error is None, "error": draft_error,
+                   "total": sum(project["drafts"] for project in projects),
+                   "processed": sum(project["processed"] for project in projects)},
     }
 
 
-@app.get("/api/notes", dependencies=dash)
-def notes(project: str | None = None, type: str | None = None, status: str = "active", q: str = "", limit: int = 200) -> list[dict]:
-    limit = max(1, min(int(limit), 500))
-    if q.strip():
-        return _vault("search_notes", query=q.strip()[:200], project=project or None, type=type or None, limit=min(limit, 50))
-    rows = _vault("list_notes", project=project or None, type=type or None, status=status, limit=limit)
-    # hub / project-state pages are navigation, not memory
-    return rows if type else [r for r in rows if r.get("type") in NOTE_TYPES]
-
-
-@app.get("/api/note", dependencies=dash)
-def note(id: str) -> dict:
-    n = _vault("get_note", id=id)
-    if not n:
-        raise HTTPException(404, "note not found")
-    return n
-
-
-@app.post("/api/recall", dependencies=dash)
-def recall(payload: dict = Body(...)) -> dict:
-    """Use the same retrieval as the agent, retaining full snippets for the dashboard."""
-    query = str(payload.get("query") or "").strip()
-    if not query:
-        raise HTTPException(400, "query required")
-    return memory_mcp.call_tool("recall", {"query": query[:500], "project": payload.get("project") or "", "budget": "low", "format": "full"})
-
-
-@app.get("/api/gate", dependencies=dash)
-def batch_gate(settings: Settings = Depends(_settings)) -> dict:
-    if not settings.classify_enabled:
-        raise HTTPException(503, "batch stage disabled")
-    try:
-        return classify_remote.gate()
-    except classify_remote.RemoteError as e:
-        raise HTTPException(502, str(e)) from e
-
-
-@app.post("/api/gate/{project}/approve", dependencies=dash_write)
-def batch_approve(project: str, settings: Settings = Depends(_settings)) -> dict:
-    if not settings.classify_enabled:
-        raise HTTPException(503, "batch stage disabled")
-    try:
-        return classify_remote.approve_batch(project)
-    except classify_remote.RemoteError as e:
-        raise HTTPException(400, str(e)) from e
+@app.get("/api/batch", dependencies=dash)
+def batch_status() -> dict:
+    data, error = _soft(notes.batch_status)
+    if error:
+        raise HTTPException(503, error)
+    return data
 
 
 @app.get("/api/drafts", dependencies=dash)
 def list_session_drafts(project: str | None = None, status: str = "pending", limit: int = 100) -> list[dict]:
-    """push_draft session files: pending in drafts/, processed after batch."""
-    limit = max(1, min(int(limit), 500))
-    status = (status or "pending").lower()
+    status = status.lower()
     if status not in ("pending", "processed", "all"):
         raise HTTPException(400, "status must be pending|processed|all")
-    return _vault("list_drafts", project=project or None, status=status, limit=limit)
+    return notes.list_drafts(project=project or None, status=status, limit=limit)
 
 
 @app.get("/api/draft", dependencies=dash)
 def session_draft(id: str) -> dict:
-    """One session draft by project/filename (pending or processed)."""
-    d = _vault("get_draft", id=id)
-    if not d:
+    draft = notes.get_draft(id)
+    if not draft:
         raise HTTPException(404, "draft not found")
-    return d
+    return draft
 
 
 @app.get("/api/jev-decisions", dependencies=dash)
 def jev_decisions(limit: int = 100) -> dict:
-    """Jev decisions reported by client hooks, newest first, plus a per-host / per-source summary."""
     return {"items": jev_log.recent(max(1, min(int(limit), 500))), "summary": jev_log.summary()}
-
-
-@app.get("/api/corrections", dependencies=dash)
-def list_agent_corrections(status: str = "pending") -> list[dict]:
-    """Agent gated-upsert suggestions queued on the vault host."""
-    return _vault("list_corrections", status=status, limit=100)
-
-
-@app.post("/api/corrections/{cid}/approve", dependencies=dash_write)
-def approve_agent_correction(cid: str) -> dict:
-    return _vault("decide_correction", id=cid, approve=True)
-
-
-@app.post("/api/corrections/{cid}/reject", dependencies=dash_write)
-def reject_agent_correction(cid: str, payload: dict = Body(default={})) -> dict:
-    return _vault("decide_correction", id=cid, approve=False, reason=str((payload or {}).get("reason") or ""))
 
 
 @app.get("/", dependencies=dash)
