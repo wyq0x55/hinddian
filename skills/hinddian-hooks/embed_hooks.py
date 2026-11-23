@@ -16,7 +16,10 @@ import tarfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-SCRIPT_NAMES = ("jev.py", "hookcfg.py", "extract.py", "session_buf.py", "finalize.py", "session_start.py", "turn_end.py", "setup.py")
+SCRIPT_NAMES = (
+    "jev.py", "hookcfg.py", "extract.py", "session_buf.py", "finalize.py", "session_start.py",
+    "turn_end.py", "setup.py", "draft_store.py", "jev_log.py", "note_format.py", "paths.py", "session_finalize.py",
+)
 DEFAULT_VER = "20261018.1"
 MEMORY_URL = (os.environ.get("HINDDIAN_MEMORY_URL") or "").strip()  # baked into the hook command; empty = read env at run time
 
@@ -59,7 +62,7 @@ if which not in ("session_start", "turn_end"):
     sys.stderr.write("usage: session_start|turn_end\\n")
     raise SystemExit(2)
 need = (
-    not (D / "jev.py").is_file()
+    not all((D / name).is_file() for name in {SCRIPT_NAMES!r})
     or not (D / ".version").is_file()
     or (D / ".version").read_text().strip() != V
     or not (D / (which + ".py")).is_file()

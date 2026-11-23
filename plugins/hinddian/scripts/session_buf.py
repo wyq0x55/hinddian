@@ -20,6 +20,9 @@ import time
 from pathlib import Path
 from typing import Any, Iterator
 
+import hookcfg
+from note_format import redact
+
 IDLE_SEC = int(os.environ.get("HINDDIAN_SESSION_IDLE_SEC", "1800"))  # 30 min
 RETAIN_SEC = int(os.environ.get("HINDDIAN_BUFFER_RETAIN_SEC", str(3 * 86400)))
 MAX_ATTEMPTS = int(os.environ.get("HINDDIAN_FINALIZE_MAX_ATTEMPTS", "8"))
@@ -103,7 +106,7 @@ def append_turn(
     cwd: str = "",
     project_hint: str | None = None,
 ) -> dict[str, Any]:
-    text = strip_private(turn_text).strip()
+    text = redact(turn_text).strip()
     now = time.time()
     buf = load(session_id) or {
         "session_id": session_id,

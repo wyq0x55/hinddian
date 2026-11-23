@@ -1,4 +1,4 @@
-"""Server-side session finalize: hook buffer → Jev keep/extract → push_draft, logged to jev_log.
+"""Finalize a hook buffer through Jev and write a draft, locally or via the HTTP collector.
 
 Jev runs here (the server's JEV_BASE_URL first, then TypeSafe cloud if configured — see jev.py).
 Both fail → source=none, nothing is written and the client keeps its buffer to retry.
@@ -10,7 +10,12 @@ import os
 import re
 from typing import Any, Callable
 
-from . import jev, jev_log
+if __package__:
+    from . import jev, jev_log, note_format as nf
+else:
+    import jev
+    import jev_log
+    import note_format as nf
 
 UNKNOWN_PROJECT = "通用-未定"
 MAX_TURNS = 400
@@ -28,7 +33,7 @@ def _s(v: Any, n: int) -> str:
         return ""
     if not isinstance(v, (str, int, float)):
         raise FinalizeError("string expected")
-    return re.sub(r"[\x00-\x1f]+", " ", str(v)).strip()[:n]
+    return re.sub(r"[\x00-\x1f]+", " ", nf.redact(str(v))).strip()[:n]
 
 
 def _base(v: Any) -> str:
@@ -52,10 +57,10 @@ def parse(args: dict) -> dict:
         tx = t.get("text") if isinstance(t, dict) else t
         if not isinstance(tx, str):
             raise FinalizeError("turn text must be a string")
-        tx = tx.strip()[:MAX_TURN_CHARS]
         total += len(tx)
         if total > MAX_TOTAL_CHARS:
             raise FinalizeError("buffer too large")
+        tx = nf.redact(tx).strip()[:MAX_TURN_CHARS]
         if tx:
             texts.append(tx)
     tc = args.get("turn_count")
@@ -88,7 +93,7 @@ def norm_source(src: str | None) -> str:
 
 def pick_project(p: dict, jev_project: str | None, projects: list[str]) -> str:
     """Hook's project > a known project named by the repo / cwd basename > the repo itself (a new
-    project waits for dashboard approval) > what Jev read from the text > 通用-未定."""
+    project) > what Jev read from the text > 通用-未定."""
     if p["project"]:
         return p["project"]
     for name in (p["repo"], p["cwd"]):
@@ -132,19 +137,19 @@ def body(val: dict, title: str, typ: str) -> str:
     return "\n".join(out).strip() + "\n"
 
 
-def finalize(args: dict, *, projects: Callable[[], list[str]], push: Callable[[dict], Any]) -> dict:
+def finalize(args: dict, *, projects: Callable[[], list[str]], push: Callable[[dict], Any], mode: str = "server") -> dict:
     """Returns {ok, outcome, retry, source, keep, pushed, ...}. retry=True → client keeps the buffer."""
     p = parse(args)
-    res = _run(p, projects, push)
+    res = _run(p, projects, push, mode)
     _log(p, res)
     return {k: v for k, v in res.items() if k != "draft_obj"}
 
 
-def _run(p: dict, projects, push) -> dict:
+def _run(p: dict, projects, push, mode: str) -> dict:
     if not p["texts"]:
         return {"ok": True, "outcome": "empty", "retry": False, "source": "none", "keep": None, "pushed": False}
     try:
-        names = projects()
+        names = [nf.redact(name) for name in projects()]
     except Exception:
         names = []
     try:
@@ -169,7 +174,7 @@ def _run(p: dict, projects, push) -> dict:
     payload = {
         "project": pick_project(p, val.get("project"), names),
         "title": title, "body": body(val, title, typ), "type": typ, "confidence": conf,
-        "origin": f"session-finalize:{p['finalize_reason']}:{src}:server",
+        "origin": f"session-finalize:{p['finalize_reason']}:{src}:{mode}",
         "session_id": p["session_id"], "jev_source": src, "turn_count": p["turn_count"],
         "finalize_reason": p["finalize_reason"],
     }

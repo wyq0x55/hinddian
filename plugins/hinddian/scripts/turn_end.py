@@ -17,9 +17,8 @@ import session_buf  # noqa: E402
 
 
 def main() -> None:
-    why = hookcfg.transport_problem()
+    why = hookcfg.capture_problem()
     if why:
-        # Nothing could ever be delivered — don't keep conversation text on disk for it.
         print(json.dumps({"ok": False, "buffered": False, "reason": why}, ensure_ascii=False))
         return
     stdin = ""

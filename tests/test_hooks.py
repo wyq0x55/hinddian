@@ -29,7 +29,8 @@ def hooks(tmp_path, monkeypatch):
         monkeypatch.delenv(k, raising=False)
         monkeypatch.delenv("CLAUDE_PLUGIN_OPTION_" + k, raising=False)
     monkeypatch.syspath_prepend(str(SCRIPTS))
-    names = ("hookcfg", "session_buf", "finalize", "extract", "jev", "mcp_bridge", "setup", "turn_end", "session_start")
+    names = ("hookcfg", "session_buf", "finalize", "extract", "jev", "mcp_bridge", "setup", "turn_end", "session_start",
+             "draft_store", "jev_log", "note_format", "paths", "session_finalize")
     for m in names:
         sys.modules.pop(m, None)
     mods = {m: importlib.import_module(m) for m in ("hookcfg", "session_buf", "finalize", "mcp_bridge", "session_start")}
@@ -99,7 +100,6 @@ def test_finalize_posts_buffer_to_server_once(hooks, monkeypatch, tmp_path):
     assert body["cwd"] == "src" and body["repo"] == "my-repo" and str(tmp_path) not in json.dumps(body)
     assert body["turns"] == [{"text": "用户: a\n助手: b"}] and body["client_id"]
     assert fin.finalize_idle_and_others(current_sid="new") == []
-    assert not hasattr(fin, "jev")
 
 
 def test_claim_is_exclusive(hooks):
@@ -107,6 +107,36 @@ def test_claim_is_exclusive(hooks):
     with sb.claim("s") as a:
         with sb.claim("s") as b:
             assert a is True and b is False
+
+
+def test_local_finalize_redacts_legacy_buffers_and_keeps_session_id(hooks, monkeypatch, tmp_path):
+    buffer, finalize = hooks["session_buf"], hooks["finalize"]
+    monkeypatch.delenv("HINDDIAN_MEMORY_URL")
+    monkeypatch.setenv("HINDDIAN_VAULT", str(tmp_path / "vault"))
+    monkeypatch.setenv("HINDDIAN_DRAFTS_DIR", str(tmp_path / "drafts"))
+    monkeypatch.setenv("HINDDIAN_STATE_DIR", str(tmp_path / "state"))
+    local_jev = finalize.session_finalize.jev
+
+    def classify(text, projects, cwd):
+        assert "syntheticcredential" not in text and "private text" not in text
+        assert text.count("[REDACTED]") == 2 and "[private]" in text
+        return local_jev.GateResult(True, {"keep": True, "project": "demo", "title": "Use a backup",
+                                          "lesson": ["Write a backup before changing settings"]}, 0.9, "jev:local")
+
+    monkeypatch.setattr(local_jev, "classify_turn", classify)
+    monkeypatch.setattr(finalize, "req", lambda *args, **kwargs: pytest.fail("local mode called HTTP"))
+    entry = buffer.append_turn(session_id="local-123", turn_text="placeholder")
+    entry["turns"][0]["text"] = (
+        "token: syntheticcredential <private>private text</private>\n"
+        "-----BEGIN PRIVATE KEY-----\nsyntheticcredential\n-----END PRIVATE KEY-----"
+    )
+    buffer.save(entry)
+    result, = finalize.finalize_idle_and_others(current_sid="next")
+    assert result["pushed"] and buffer.load("local-123")["finalized"]
+    path = tmp_path / "drafts/demo/session-local-123.md"
+    assert "session_id: local-123" in path.read_text()
+    assert "session-finalize:session-start:jev:local:local" in path.read_text()
+    assert (tmp_path / "state/jev-decisions.jsonl").is_file()
 
 
 def test_prune_deletes_old_finalized(hooks):

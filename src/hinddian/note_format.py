@@ -20,6 +20,11 @@ import threading
 import time
 from typing import Any, Iterator
 
+if __package__:
+    from . import paths
+else:
+    import paths
+
 try:
     import fcntl
 except ImportError:  # pragma: no cover — Windows dev boxes; vault writes only run on the vault host
@@ -31,8 +36,9 @@ NOTE_TYPES = ("tip", "decision", "lesson")
 
 SECRET_RE = [
     re.compile(r"(?i)(password|passwd|secret|token|api[_-]?key|bearer)\s*[:=]\s*['\"]?[A-Za-z0-9_\-\.]{12,}"),
+    re.compile(r"(?i)\bbearer[ \t]+[A-Za-z0-9_\-\.]{12,}"),
     re.compile(r"sk-[A-Za-z0-9]{16,}"),
-    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)", re.S),
     re.compile(r"\b(ghp|gho|github_pat)_[A-Za-z0-9_]{20,}"),
 ]
 WIKI = re.compile(r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]")
@@ -544,8 +550,8 @@ _proc_lock = threading.RLock()
 def default_lock_path() -> pathlib.Path:
     env = os.environ.get("HINDDIAN_VAULT_LOCK")
     if env:
-        return pathlib.Path(env)
-    return pathlib.Path(os.environ.get("HB_BASE") or "/var/lib/hinddian") / "vault.lock"
+        return pathlib.Path(env).expanduser()
+    return paths.state_dir() / "vault.lock"
 
 
 @contextlib.contextmanager

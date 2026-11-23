@@ -1,8 +1,6 @@
-"""Finalize a session buffer → POST it to the server, which runs Jev and push_draft.
+"""Finalize a session buffer with local Jev and draft storage, or send it to the HTTP collector.
 
-Jev runs on the hinddian server (POST /api/memory/finalize); the hook never calls Jev itself and
-needs no JEV_BASE_URL. Server unreachable / Jev unavailable there → keep the buffer and retry
-with backoff — "no loose auto-keep" means *don't write yet*, not *throw the session away*.
+Keep the buffer and retry with backoff if Jev or the collector is unavailable.
 
 CLI (spawned detached by the hooks):  finalize.py [--current SID]
 """
@@ -19,6 +17,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import hookcfg  # noqa: E402
 import session_buf  # noqa: E402
+import draft_store  # noqa: E402
+import note_format as nf  # noqa: E402
+import paths  # noqa: E402
+import session_finalize  # noqa: E402
 
 req = hookcfg.req
 FINALIZE_TIMEOUT = 120.0
@@ -62,7 +64,8 @@ def payload(buf: dict, *, reason: str) -> dict:
         "client_id": client_id(),
         "finalize_reason": reason,
         "turn_count": len(turns),
-        "turns": [{"text": session_buf.clip(str(t.get("text") or ""), 20000, 6000)} for t in turns if (t.get("text") or "").strip()],
+        "turns": [{"text": session_buf.clip(nf.redact(str(t.get("text") or "")), 19000, 6000)}
+                  for t in turns if (t.get("text") or "").strip()],
     }
 
 
@@ -71,10 +74,20 @@ def finalize_buffer(buf: dict, *, reason: str) -> dict:
     if not session_buf.session_corpus(buf).strip():
         session_buf.mark_finalized(sid, "empty")
         return {"ok": True, "skipped": "empty", "session_id": sid, "reason": reason}
+    mode = hookcfg.capture_mode()
     try:
-        out = req("POST", "/api/memory/finalize", payload(buf, reason=reason), timeout=FINALIZE_TIMEOUT)
-    except Exception as e:  # server unreachable / 5xx: keep the buffer, retry next finalize
-        err = f"server_unreachable: {type(e).__name__}: {str(e)[:120]}"
+        args = payload(buf, reason=reason)
+        if mode == "http":
+            out = req("POST", "/api/memory/finalize", args, timeout=FINALIZE_TIMEOUT)
+        elif mode == "local":
+            out = session_finalize.finalize(
+                args, projects=lambda: draft_store.project_names(paths.vault_dir()),
+                push=draft_store.save_payload, mode="local",
+            )
+        else:
+            raise ValueError("unknown capture mode")
+    except Exception as e:
+        err = f"{'server_unreachable' if mode == 'http' else 'finalize_failed'}: {type(e).__name__}"
         d = session_buf.defer(sid, err)
         return {"ok": False, "deferred": not d["gave_up"], **d, "session_id": sid, "reason": reason, "error": err}
     out = out if isinstance(out, dict) else {}
@@ -121,8 +134,8 @@ def finalize_idle_and_others(*, current_sid: str | None = None, project: str | N
 
 def main(argv: list[str]) -> None:
     current = argv[argv.index("--current") + 1] if "--current" in argv and argv.index("--current") + 1 < len(argv) else None
-    if hookcfg.transport_problem():
-        print(json.dumps({"skipped": hookcfg.transport_problem()}, ensure_ascii=False))
+    if why := hookcfg.capture_problem():
+        print(json.dumps({"skipped": why}, ensure_ascii=False))
         return
     results = finalize_idle_and_others(current_sid=current)
     pruned = session_buf.prune()

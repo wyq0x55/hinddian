@@ -13,6 +13,11 @@ import time
 from collections import Counter
 from pathlib import Path
 
+if __package__:
+    from . import paths
+else:
+    import paths
+
 MAX_BYTES = 2 * 1024 * 1024  # rotate to .1 past this (one old generation kept)
 _LOCK = threading.Lock()
 EVENTS = ("finalize", "turn")
@@ -28,7 +33,7 @@ class ReportError(ValueError):
 
 
 def log_path() -> Path:
-    return Path(os.environ.get("HINDDIAN_JEV_LOG") or "/var/lib/hinddian/jev-decisions.jsonl")
+    return paths.jev_log_path()
 
 
 def _clean(v, n: int) -> str | None:

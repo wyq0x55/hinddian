@@ -3,7 +3,7 @@
 
 Sources (edit these):
   hooks/*.py                               hook runtime (stdlib only)
-  src/hinddian/jev.py                      Jev gate (also imported by the server)
+  src/hinddian/                           shared stdlib finalize, paths and draft modules
   adapters/magpie/skills/hinddian-hooks/   Magpie-only installer files (SKILL.md, install.*, embed_hooks.py)
 
 Generated (never edit by hand):
@@ -32,6 +32,8 @@ CORE = {
     "setup.py": ROOT / "hooks/setup.py",
     "jev.py": ROOT / "src/hinddian/jev.py",
 }
+for name in ("draft_store", "jev_log", "note_format", "paths", "session_finalize"):
+    CORE[f"{name}.py"] = ROOT / "src/hinddian" / f"{name}.py"
 MAGPIE_SKILL = ROOT / "adapters/magpie/skills/hinddian-hooks"
 MAGPIE_EXTRA = ("SKILL.md", "embed_hooks.py", "install.py", "install.ps1")
 

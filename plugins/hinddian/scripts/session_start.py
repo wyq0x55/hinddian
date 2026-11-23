@@ -12,7 +12,7 @@ import session_buf  # noqa: E402
 
 
 def main() -> None:
-    if hookcfg.transport_problem():
+    if hookcfg.capture_problem():
         return
     stdin = sys.stdin.read(50000) if not sys.stdin.isatty() else ""
     payload = extract.parse_hook_payload(stdin, include_turn=False)
