@@ -40,4 +40,3 @@ def push_draft(payload: dict) -> dict:
         return draft_store.save_payload(payload)
     except (ValueError, OSError, note_format.VaultBusy) as exc:
         raise HTTPException(503, "draft storage unavailable") from exc
-
