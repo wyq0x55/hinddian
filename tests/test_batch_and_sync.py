@@ -77,6 +77,7 @@ def test_batch_apply_uses_shared_format(batch, monkeypatch):
                                       "custom:\n  owner: 'someone'\n"
                                       "supersedes:\n  - 'legacy/id'\n"
                                       "superseded_by: 'other/id' # historical")
+    edited = edited.replace("sources: []", "sources: [old-session] # 手写来源注释")
     edited = edited.replace("\n## 场景", f"\n{banner}\n\n## 场景", 1)
     path.write_text(edited + "\n" + legacy + "## 我的补充\n保留  \n")
     draft = put_draft()
@@ -85,7 +86,8 @@ def test_batch_apply_uses_shared_format(batch, monkeypatch):
     monkeypatch.setattr(batch, "chat", lambda prompt: json.dumps(data))
     assert batch.process("P", [draft])[0]["action"] == "update"
     text = path.read_text()
-    assert "[[项目/P/经验/A|A]]" in text and "### 相关\n- `evil`" in text and "sources: [sess-1@abcdef1]" in text
+    assert "[[项目/P/经验/A|A]]" in text and "### 相关\n- `evil`" in text
+    assert "sources: [old-session, sess-1@abcdef1] # 手写来源注释" in text
     assert "custom:\n  owner: 'someone'" in text and "## 我的补充\n保留  \n" in text
     assert "supersedes:\n  - 'legacy/id'" in text and "superseded_by: 'other/id' # historical" in text
     assert legacy in text and banner in text

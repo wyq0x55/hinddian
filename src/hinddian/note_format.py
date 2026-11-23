@@ -150,6 +150,24 @@ def _split_inline(s: str) -> list[str]:
 _KEY = re.compile(r"""^("(?:\\.|[^"\\])*"|'(?:''|[^'])*'|[^\s#?:][^:]*?):(?:[ \t]+(.*))?$""")
 
 
+def yaml_comment(line: str) -> tuple[str, str]:
+    quote = ""
+    escaped = False
+    for index, char in enumerate(line):
+        if escaped:
+            escaped = False
+        elif quote == '"' and char == "\\":
+            escaped = True
+        elif char == quote:
+            quote = ""
+        elif not quote and char in "\"'" and (not index or line[index - 1] in " \t[:,"):
+            quote = char
+        elif not quote and char == "#" and (not index or line[index - 1].isspace()):
+            value = line[:index].rstrip()
+            return value, line[len(value):]
+    return line, ""
+
+
 def parse_frontmatter(text: str) -> tuple[dict[str, Any], dict[str, str], str] | None:
     """→ (values, raw_lines_per_key, body). Values are str or list[str]; structures we don't
     understand (nested maps, multi-line scalars) are kept only as raw text."""
@@ -171,7 +189,8 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], dict[str, str], str] |
         if not m:
             i += 1
             continue
-        key, val = _unquote(m.group(1).rstrip()), (m.group(2) or "").strip()
+        key = _unquote(m.group(1).rstrip())
+        val = yaml_comment(m.group(2) or "")[0].strip()
         j = i + 1
         while j < len(lines) and (lines[j].startswith((" ", "\t", "-")) or not lines[j].strip()) and not _KEY.match(lines[j]):
             j += 1
@@ -181,7 +200,7 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], dict[str, str], str] |
         raw[key] = "\n".join(block)
         cont = [x for x in block[1:] if x.strip()]
         if not val and cont and all(x.lstrip().startswith("- ") or x.strip() == "-" for x in cont):
-            fm[key] = [_unquote(x.lstrip()[1:]) for x in cont if x.lstrip()[1:].strip()]
+            fm[key] = [_unquote(yaml_comment(x.lstrip()[1:])[0]) for x in cont if x.lstrip()[1:].strip()]
         elif cont:
             fm[key] = None  # opaque; raw[key] carries it
         elif val.startswith("[") and val.endswith("]"):
