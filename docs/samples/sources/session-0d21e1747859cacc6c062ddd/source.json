@@ -1,0 +1,13 @@
+{
+  "session_id": "short-control",
+  "records": {
+    "jsonl-1-0": {
+      "role": "user",
+      "text": "把 README 里的测试入口改为 python -m pytest。"
+    },
+    "jsonl-1-110": {
+      "role": "assistant",
+      "text": "已更新 README，并运行 git diff --check，退出码为 0。"
+    }
+  }
+}
