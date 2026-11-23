@@ -146,4 +146,3 @@ def test_jev_log_rotates(tmp_path, monkeypatch):
     assert (tmp_path / "j.jsonl.1").exists() and (tmp_path / "j.jsonl").stat().st_size <= 400
     assert jev_log.recent(5)[0]["session_id"] == "s19"
 
-
