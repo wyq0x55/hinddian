@@ -116,7 +116,7 @@ def _rebuild_hubs():
           *[f"- {link_of(t)} — {t['scene'][:40].replace(chr(10), ' ')}…" for t in tips], ""]
     write_file("技巧/技巧", "\n".join(th))
     idx = ["---", "id: system/index", "type: hub", f"updated: {today()}", "generated: true", "---", "# 笔记库地图（INDEX）", "",
-           "> 由 hinddian 生成，勿手改。Agent 开局走 Hindsight Recall；本页给人导航和图谱枢纽。", "",
+           "> 由 hinddian 生成，供阅读和图谱导航。", "",
            "## 全局", "- [[00-系统/ASKS|ASKS]] — 人→Agent 待办", f"- [[技巧/技巧|agent使用技巧]] — {len(tips)} 条", "", "## 项目"]
     for proj in projects:
         k = sum(1 for n in notes.values() if n["project"] == proj and n["type"] in FOLDER and n["status"] == "active")

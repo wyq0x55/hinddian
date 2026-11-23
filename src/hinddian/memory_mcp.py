@@ -28,7 +28,7 @@ router = APIRouter()
 TOOLS = [
     {
         "name": "routing_global",
-        "description": "Global memory routing table: projects, tip count, when to recall. Call at session start; keep as stable prefix.",
+        "description": "List the projects and tip count when the user asks to browse the Obsidian note collection.",
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     {
@@ -42,7 +42,7 @@ TOOLS = [
     },
     {
         "name": "recall",
-        "description": "Search active notes via Hindsight (vault local fallback). Returns a compact id/title/type/date/score index verified against current vault files; date is updated. Use timeline for context and get_note for details. format=full includes current vault text.",
+        "description": "Search active Obsidian notes when the user asks to look them up. Uses Hindsight with a vault local fallback. Returns a compact id/title/type/date/score index verified against current vault files; date is updated. Use timeline for adjacent notes and get_note for details. format=full includes current vault text.",
         "inputSchema": {
             "type": "object",
             "properties": {

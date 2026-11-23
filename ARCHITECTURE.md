@@ -2,16 +2,13 @@
 
 ## 一句话
 
-**会话是原料，原子笔记才是记忆；权威在 Obsidian，Hindsight 只做最后一层索引；Agent 只走 hinddian-memory MCP。宿主无关（Claude / Codex / 其它）；Magpie 仅为可选适配器。**
+**会话是原料，Obsidian 是阅读和编辑入口。Hindsight 提供索引，hinddian-memory MCP 兼容显式查询和写入。宿主无关（Claude / Codex / 其它）；Magpie 是可选适配器。**
 
 ## 流水线
 
 ```
 Agent 会话
-  ├─ session-start：finalize 上一会话缓冲 → Jev(keep) → 一次 push_draft
-  │                 注入固定的记忆路由块（规则 + 项目名；逐字节稳定，不破坏提示词缓存）
-  │                 随后附当前项目最近 6 条 active 笔记标题 + 本地上一会话结语（合计 ≤2400 字符）
-  ├─ user-prompt：按本条消息自动 recall，命中的 ≤6 条标题索引附在该消息末尾（去重、3s 超时、短消息跳过）
+  ├─ session-start：静默启动后台 finalize → Jev(keep) → 一次 push_draft
   └─ turn-end：白名单抽取（用户 + 最终回复）→ 本机会话缓冲（不远程写）
                        ↓（空闲 ~30min / 换项目 也会 finalize）
               /var/lib/hinddian/drafts/<project>/session-*.md
@@ -53,7 +50,7 @@ Agent 会话
 2. 可选云端 TypeSafe（`TYPESAFE_API_KEY`）
 3. 都失败 → **本轮暂不写**（无松弛 LLM auto-keep），缓冲留着退避重试
 
-**读/UX 路径**：本机失败时可用 chat completions soft fallback，不自动写草稿。召回不经 Jev：由 UserPromptSubmit hook 按消息直接 recall，并按相关度阈值过滤。
+**显式查询**：`recall` 走 Hindsight 或 vault 本地检索。旧 Jev 读侧接口仍可显式调用。
 
 - 任意暴露 System One 的本机网关均可；与 Magpie 产品身份无关
 - API 主机 API 可选经 SSH LocalForward 使用远端 `:3425`（infra，非产品品牌）
@@ -101,8 +98,8 @@ Agent 会话
 
 格式：Agent 新建/取代必须提供命题标题、项目（tip 除外）及场景/做法/理由；更新可沿用已有字段，软退役只需 id。frontmatter 自动填 type/project/status。重渲染只改受管字段与段落；人在 Obsidian 里加的 frontmatter 键、段落、引用行、悬空链接原样保留。
 
-标题地图：全局项目列表 + routing_project 按 decision/lesson 分组的 id/title/updated；
-稳定规则前缀不含易变日期，先索引、再按需全文。compact recall 的 date 沿用 vault updated。
+标题地图：全局项目列表 + routing_project 按 decision/lesson 分组的 id/title/updated。
+compact recall 的 date 沿用 vault updated。
 get_note/list_notes/本地 recall 始终从 vault 文件读；Hindsight 命中也用 vault 校验删除、退役和类型/项目，并在 full 模式取当前正文。
 vault 暂时不可达时 Hindsight 结果标 vault_verified=false。
 

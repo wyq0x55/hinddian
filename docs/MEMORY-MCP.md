@@ -6,7 +6,7 @@
 
 | 名 | URL | 用途 |
 |----|-----|------|
-| **`hinddian-memory`** | `https://<api-host>:8444/hinddian/mcp`（Bearer `HINDDIAN_MCP_TOKEN`） | Agent **唯一**记忆入口：路由 / recall / 直接写入 / push_draft |
+| **`hinddian-memory`** | `https://<api-host>:8444/hinddian/mcp`（Bearer `HINDDIAN_MCP_TOKEN`） | 兼容入口，提供显式查询、直接写入和草稿 |
 
 Header：`Authorization: Bearer <HINDDIAN_MCP_TOKEN>`（常与 Hindsight tenant key 同源；只放 secrets，勿进笔记）。
 
@@ -39,7 +39,6 @@ Hindsight bank（`HINDSIGHT_BANK`，默认 `hinddian`） 仍由 API 主机 **`hi
 - `recall(query, project, format="full")` 保留原结果结构（Hindsight 的 `text/metadata/scores/facts` 或本地的 `scene/practice/score`），关联笔记的正文/元数据取当前 vault 文件。仪表盘继续使用此格式显示摘要。
 - 未关联笔记的 Hindsight 事实保留 `resolvable: false`，其 id 不能传给 `get_note`。
 - 带 `project` 不带 `type`：返回该项目笔记 **+ 全局技巧**（`tags_match: any_strict`）；带 `type` 时按类型严格过滤。
-- 插件的自动召回会带上会话开始时从 cwd 匹配到的项目，默认附最多 6 条标题（不附摘要）。
 
 逐层读取：`recall` 找相关标题 → `timeline(anchor_id, before=3, after=3)` 看同项目时间上下文 → `get_note(id)` 取全文。
 `timeline` 按 `updated` 升序、同日按 id 排序；前后各 0–20 条 active 邻居，并包含锚点（锚点可已退役）。

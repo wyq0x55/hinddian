@@ -21,17 +21,6 @@
           }
         ]
       }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/prompt_recall_entry.py\"",
-            "timeout": 10
-          }
-        ]
-      }
     ]
   }
 }

@@ -136,7 +136,7 @@ def hook_defs(src_dir: Path | None = None, py: str | None = None) -> list[dict]:
     return [
         {
             "name": "hinddian-session-start",
-            "description": "SessionStart: finalize prior session draft + routing + Jev should-recall (WebDAV does not sync hooks)",
+            "description": "SessionStart: finalize prior session buffers in the background (WebDAV does not sync hooks)",
             "event": "session-start",
             "command": ss,
             "agents": agents,

@@ -194,7 +194,7 @@ def structured_body(*, decisions: list[str], lessons: list[str], preferences: li
     return nl.join(lines).strip() + "\n"
 
 
-def parse_hook_payload(stdin_text: str = "", env: dict | None = None) -> dict[str, Any]:
+def parse_hook_payload(stdin_text: str = "", env: dict | None = None, *, include_turn: bool = True) -> dict[str, Any]:
     """Best-effort host / agent hook payload → session_id, cwd, turn text, project hint."""
     env = env or dict(os.environ)
     raw = (stdin_text or "").strip()
@@ -224,8 +224,25 @@ def parse_hook_payload(stdin_text: str = "", env: dict | None = None) -> dict[st
         or data.get("cwd_path")
         or env.get("MAGPIE_CWD")
         or env.get("PWD")
+        or data.get("working_directory")
+        or data.get("workdir")
         or ""
     )
+    payload = {
+        "session_id": str(session_id or "").strip() or None,
+        "cwd": str(cwd).strip(),
+        "turn_text": "",
+        "raw_data": data,
+        "first_message": (
+            env.get("MAGPIE_FIRST_MESSAGE")
+            or env.get("MAGPIE_PROMPT")
+            or data.get("prompt")
+            or ""
+        ),
+    }
+    if not include_turn:
+        return payload
+
     turn = (
         env.get("MAGPIE_TURN_TEXT")
         or data.get("turn_text")
@@ -275,19 +292,5 @@ def parse_hook_payload(stdin_text: str = "", env: dict | None = None) -> dict[st
     else:
         turn = extract_turn_text(turn) if turn else extract_turn_text(raw)
 
-    # Claude / Codex cwd aliases
-    if not cwd:
-        cwd = str(data.get("working_directory") or data.get("workdir") or "").strip()
-
-    return {
-        "session_id": str(session_id or "").strip() or None,
-        "cwd": str(cwd or "").strip(),
-        "turn_text": turn,
-        "raw_data": data,
-        "first_message": (
-            env.get("MAGPIE_FIRST_MESSAGE")
-            or env.get("MAGPIE_PROMPT")
-            or data.get("prompt")
-            or ""
-        ),
-    }
+    payload["turn_text"] = turn
+    return payload
