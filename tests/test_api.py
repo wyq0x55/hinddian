@@ -111,6 +111,7 @@ def test_dashboard_needs_auth_but_static_does_not(dash_client):
     ("GET", "/api/memory/notes"), ("POST", "/api/memory/upsert_note"),
     ("POST", "/api/memory/suggest_correction"), ("GET", "/api/notes"), ("GET", "/api/note"),
     ("POST", "/api/gate/P/approve"), ("GET", "/api/corrections"),
+    ("POST", "/api/memory/gates/classify_turn"),
 ])
 def test_removed_routes_are_closed(client, method, uri):
     assert client.request(method, uri, headers=dashboard()).status_code == 404

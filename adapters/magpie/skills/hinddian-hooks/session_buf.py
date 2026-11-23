@@ -230,15 +230,6 @@ def claim(sid: str, *, kind: str = "finalize") -> Iterator[bool]:
             lock.unlink()
 
 
-def session_corpus(buf: dict[str, Any]) -> str:
-    parts = []
-    for t in buf.get("turns") or []:
-        tx = (t.get("text") or "").strip()
-        if tx:
-            parts.append(tx)
-    return "\n\n---\n\n".join(parts)
-
-
 def clip(text: str, limit: int = 12000, head: int = 4000) -> str:
     """Keep the start (the ask) and the end (where conclusions land) of a long session."""
     if len(text) <= limit:
@@ -246,12 +237,3 @@ def clip(text: str, limit: int = 12000, head: int = 4000) -> str:
     return text[:head] + "\n\n…（中间省略）…\n\n" + text[-(limit - head) :]
 
 
-def idle_sessions(now: float | None = None) -> list[dict[str, Any]]:
-    now = now if now is not None else time.time()
-    return [b for b in list_open() if (now - float(b.get("updated_at") or 0)) >= IDLE_SEC]
-
-
-def project_switched(buf: dict[str, Any], new_project: str | None) -> bool:
-    old = (buf.get("project") or "").strip()
-    new = (new_project or "").strip()
-    return bool(old and new and old != new)

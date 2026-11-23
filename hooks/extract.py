@@ -222,29 +222,6 @@ def _transcript_pairs(path: Path) -> list[tuple[str, str]]:
     return pairs[last_user:]
 
 
-def structured_body(*, decisions: list[str], lessons: list[str], preferences: list[str], title: str = "") -> str:
-    nl = "\n"
-    lines = []
-    if title:
-        lines.append(f"# {title}")
-        lines.append("")
-    lines.append("## DECISIONS")
-    for d in decisions or []:
-        if d and str(d).strip():
-            lines.append(f"- {str(d).strip()}")
-    lines.append("")
-    lines.append("## LESSONS")
-    for d in lessons or []:
-        if d and str(d).strip():
-            lines.append(f"- {str(d).strip()}")
-    lines.append("")
-    lines.append("## PREFERENCES")
-    for d in preferences or []:
-        if d and str(d).strip():
-            lines.append(f"- {str(d).strip()}")
-    return nl.join(lines).strip() + "\n"
-
-
 def parse_hook_payload(stdin_text: str = "", env: dict | None = None, *, include_turn: bool = True) -> dict[str, Any]:
     """Best-effort host / agent hook payload → session_id, cwd, turn text, project hint."""
     env = env or dict(os.environ)

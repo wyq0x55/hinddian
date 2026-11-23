@@ -4,7 +4,7 @@ One implementation of: frontmatter parse/dump (unknown keys and unchanged values
 verbatim), body sections (sections we don't manage survive a re-render), link resolution,
 path safety, the vault write lock and a content-keyed parse cache.
 
-Stdlib only — the batch engine runs under the system python on the vault host.
+Stdlib only, shared by hooks and the local batch engine.
 """
 from __future__ import annotations
 

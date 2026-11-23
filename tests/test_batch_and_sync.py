@@ -26,6 +26,15 @@ def test_no_plaintext_server_defaults():
     assert hits == "", hits
 
 
+def test_caddy_templates_leave_certificates_and_listeners_configurable():
+    directory = ROOT / "deploy/api-host"
+    for name, channel in (("Caddyfile.snippet", "DASHBOARD"), ("caddy-hinddian-collector.snippet", "COLLECTOR")):
+        text = (directory / name).read_text()
+        for key in ("ADDRESS", "CERT", "KEY"):
+            assert f"{{$HINDDIAN_{channel}_{key}}}" in text
+        assert "/etc/caddy/certs/" not in text and "/etc/caddy/mtls/" not in text
+
+
 @pytest.fixture
 def batch(monkeypatch, vault):
     monkeypatch.syspath_prepend(str(ROOT / "classify"))

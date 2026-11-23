@@ -60,15 +60,6 @@ def jev_backend() -> dict:
     return jev.backend_info()
 
 
-@router.post("/gates/classify_turn")
-def classify_turn(payload: dict) -> dict:
-    text = note_format.redact(str(payload.get("turn") or payload.get("text") or ""))
-    cwd = note_format.redact(str(payload.get("cwd") or ""))
-    result = jev.classify_turn(text, [note_format.redact(name) for name in _project_names()], cwd)
-    return {"ok": result.ok, "value": result.value, "confidence": result.confidence,
-            "source": result.source, "error": result.error}
-
-
 @router.post("/gates/report")
 def report(payload: dict) -> dict:
     try:

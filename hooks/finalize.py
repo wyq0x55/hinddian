@@ -122,8 +122,8 @@ def _settle(sid: str, reason: str, out: dict) -> dict:
     return res
 
 
-def finalize_idle_and_others(*, current_sid: str | None = None, project: str | None = None) -> list[dict]:
-    """Finalize open buffers that are not the active session, or idle, or project-switched."""
+def finalize_idle_and_others(*, current_sid: str | None = None) -> list[dict]:
+    """Finalize idle buffers and buffers outside the active session."""
     results: list[dict] = []
     now = time.time()
     for buf in session_buf.list_open():
@@ -132,12 +132,9 @@ def finalize_idle_and_others(*, current_sid: str | None = None, project: str | N
             continue
         is_current = bool(current_sid and sid == current_sid)
         idle = now - float(buf.get("updated_at") or 0) >= session_buf.IDLE_SEC
-        switched = bool(is_current and project and session_buf.project_switched(buf, project))
-        if is_current and not idle and not switched:
+        if is_current and not idle:
             continue
-        if is_current and switched:
-            reason = "project-switch"
-        elif current_sid and not is_current:
+        if current_sid and not is_current:
             reason = "session-start"
         else:
             reason = "idle"
