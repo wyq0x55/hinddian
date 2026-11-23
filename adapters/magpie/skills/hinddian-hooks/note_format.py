@@ -45,6 +45,8 @@ MANAGED_KEYS = (
 )
 FIELD_SECTIONS = {"场景": "scene", "做法": "practice", "理由": "reason", "影响 / 推广": "extra"}
 GENERATED_PREAMBLE = "> 所属："
+_H2 = re.compile(r"^## ([^\n]+)(?:\n|\Z)", re.M)
+_CODE_FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$")
 
 
 class VaultBusy(RuntimeError):
@@ -220,10 +222,27 @@ def dump_frontmatter(items: list[tuple[str, Any]], *, orig: dict | None = None, 
 
 
 # ------------------------------------------------------------------ body
+def section_parts(body: str) -> list[str]:
+    """Split at level-two headings outside fenced code, retaining the complete input."""
+    offsets = [0]
+    start = 0
+    fence = ""
+    for line in body.splitlines(keepends=True):
+        if mark := _CODE_FENCE.match(line):
+            run, tail = mark.groups()
+            if not fence:
+                fence = run
+            elif run.startswith(fence) and not tail.strip():
+                fence = ""
+        elif not fence and _H2.match(line):
+            offsets.append(start)
+        start += len(line)
+    return [body[left:right] for left, right in zip(offsets, [*offsets[1:], len(body)])]
+
+
 def split_body(body: str) -> tuple[str | None, list[str], list[tuple[str, str, str]]]:
     """Return the title, preamble and sections with their original Markdown."""
-    headings = list(re.finditer(r"^## ([^\n]+)(?:\n|\Z)", body, re.M))
-    head = body[:headings[0].start()] if headings else body
+    head, *parts = section_parts(body)
     title = None
     pre: list[str] = []
     for line in head.splitlines():
@@ -233,9 +252,9 @@ def split_body(body: str) -> tuple[str | None, list[str], list[tuple[str, str, s
         if not line.startswith(GENERATED_PREAMBLE):
             pre.append(line)
     sections = []
-    for index, heading in enumerate(headings):
-        end = headings[index + 1].start() if index + 1 < len(headings) else len(body)
-        sections.append((heading[1].strip(), body[heading.end():end], body[heading.start():end]))
+    for markdown in parts:
+        heading = _H2.match(markdown)
+        sections.append((heading[1].strip(), markdown[heading.end():], markdown))
     return title, pre, sections
 
 
@@ -388,12 +407,12 @@ def new_note(**kw: Any) -> dict:
 
 
 # ------------------------------------------------------------------ files
-def write_atomic(path: pathlib.Path, text: str, *, create: bool = False) -> None:
+def write_atomic(path: pathlib.Path, text: str | bytes, *, create: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as fh:
+    with tempfile.NamedTemporaryFile(mode="wb", dir=path.parent, delete=False) as fh:
         temporary = pathlib.Path(fh.name)
         try:
-            fh.write(text)
+            fh.write(text.encode("utf-8") if isinstance(text, str) else text)
             fh.close()
             if create:
                 os.link(temporary, path)

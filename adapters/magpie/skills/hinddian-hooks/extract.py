@@ -9,9 +9,9 @@ from pathlib import Path
 HEADINGS = ("原行为", "改进", "取舍", "验证")
 _NAMES = "|".join(HEADINGS)
 _HEADING = re.compile(
-    rf"^[ \t]{{0,3}}(?:#{{1,6}}[ \t\u3000]+)?"
+    rf"^[ \t\u3000]{{0,3}}(?:#{{1,6}}[ \t\u3000]+)?"
     rf"(?:\*\*[ \t\u3000]*(?P<bold>{_NAMES})[ \t\u3000]*[:：]?[ \t\u3000]*\*\*|(?P<plain>{_NAMES}))"
-    r"(?P<separator>[ \t\u3000]*[:：][ \t\u3000]*|[ \t\u3000]+|$)(?P<body>.*)$"
+    r"(?:[ \t\u3000]*[:：][ \t\u3000]*|[ \t\u3000]+|(?<=\*\*)|$)(?P<body>.*)$"
 )
 _OTHER_HEADING = re.compile(r"^[ \t]{0,3}#{1,6}[ \t\u3000]+")
 _FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$")

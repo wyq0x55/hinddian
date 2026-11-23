@@ -37,12 +37,20 @@ def test_caddy_templates_leave_certificates_and_listeners_configurable():
 
 @pytest.fixture
 def batch(monkeypatch, vault):
+    git(vault, "init", "-q")
+    git(vault, "config", "user.name", "Test")
+    git(vault, "config", "user.email", "test@example.invalid")
+    git(vault, "commit", "--allow-empty", "-qm", "baseline")
     monkeypatch.syspath_prepend(str(ROOT / "classify"))
     sys.modules.pop("hinddian_batch", None)
     module = importlib.import_module("hinddian_batch")
     monkeypatch.setattr(module, "OWNER", "")
     yield module
     sys.modules.pop("hinddian_batch", None)
+
+
+def git(vault, *args):
+    return subprocess.check_output(["git", "-C", str(vault), *args], text=True).strip()
 
 
 def make_note(batch, title, slug, *, relate=(), practice="A"):
@@ -53,8 +61,9 @@ def make_note(batch, title, slug, *, relate=(), practice="A"):
     return note
 
 
-def put_draft():
-    result = draft_store.save_payload({"project": "P", "session_id": "sess-1", "body": "## LESSONS\n- x"})
+def put_draft(*, commit="abcdef1", body="## LESSONS\n- x"):
+    result = draft_store.save_payload({"project": "P", "session_id": "sess-1", "body": body,
+                                       "meta": {"commit": commit}})
     return Path(result["path"])
 
 
@@ -76,18 +85,19 @@ def test_batch_apply_uses_shared_format(batch, monkeypatch):
     monkeypatch.setattr(batch, "chat", lambda prompt: json.dumps(data))
     assert batch.process("P", [draft])[0]["action"] == "update"
     text = path.read_text()
-    assert "[[项目/P/经验/A|A]]" in text and "### 相关\n- `evil`" in text and "sources: [sess-1]" in text
+    assert "[[项目/P/经验/A|A]]" in text and "### 相关\n- `evil`" in text and "sources: [sess-1@abcdef1]" in text
     assert "custom:\n  owner: 'someone'" in text and "## 我的补充\n保留  \n" in text
     assert "supersedes:\n  - 'legacy/id'" in text and "superseded_by: 'other/id' # historical" in text
     assert legacy in text and banner in text
     assert batch.load_notes()[first["id"]]["status"] == "active"
     hub = batch.VAULT / "项目/P/README.md"
-    hub.write_text("# P\n\n## 决策\nold links\n\n## 经验\n先读现场记录。  \n\n"
+    hub.write_text("# P\n\n```md\n## 经验\n代码示例\n```\n\n## 决策\nold links\n\n## 经验\n先读现场记录。  \n\n"
                    "## 已取代\nlegacy links\n\n## 手写补充\n请保留\n")
     batch.rebuild_hubs()
     assert legacy in path.read_text() and banner in path.read_text()
     hub_text = hub.read_text()
     assert "## 已取代\nlegacy links" in hub_text and "## 手写补充\n请保留" in hub_text
+    assert "```md\n## 经验\n代码示例\n```" in hub_text
     assert "## 经验\n先读现场记录。  \n" in hub_text and "[[项目/P/经验/A|A]]" in hub_text
     index = batch.VAULT / "00-系统/INDEX.md"
     index.write_text(index.read_text().replace("## 全局\n", "## 全局\n手写导航。  \n"))
@@ -117,8 +127,8 @@ def test_same_length_human_edit_with_preserved_mtime_is_visible_and_survives_bat
     monkeypatch.setattr(batch, "chat", chat)
     batch.process("P", [put_draft()])
     after = batch.load_notes()[note["id"]]
-    assert after["practice"] == "rule=C"
-    assert after["reason"] == "新理由" and after["sources"] == ["sess-1"]
+    assert after["practice"].startswith("rule=C")
+    assert "测试理由" in after["reason"] and "新理由" in after["reason"] and after["sources"] == ["sess-1@abcdef1"]
 
 
 def test_batch_create_never_overwrites_an_existing_note(batch):
@@ -129,7 +139,7 @@ def test_batch_create_never_overwrites_an_existing_note(batch):
     second.write_text("# Also occupied\n")
     result = batch._apply("P", [], {"ops": [{"op": "create", "slug": "existing", "title": "缓存命中率",
                                             "type": "lesson", "scene": "缓存未命中", "reason": "前缀参与匹配",
-                                            "practice": "别改前缀"}]}, {}, False)
+                                            "practice": "别改前缀", "sources": ["S01"]}]}, {"S01": "sess-1@abcdef1"}, False)
     assert result[0]["action"] == "create" and result[0]["id"] != old["id"]
     assert batch.load_notes()[old["id"]]["practice"] == "gate.sh"
     assert existing.read_text() == "# A hand-written page with no frontmatter\n"
@@ -144,26 +154,27 @@ def test_batch_similarity_merges_into_existing_note(batch):
     assert nf.similarity(title, "先执行部署门禁脚本", near) > batch.DEDUPE
     results = batch._apply("P", [], {"ops": [{"op": "create", "slug": "new-id", "title": title,
                                              "type": "lesson", "scene": "部署前", "reason": "需要门禁检查",
-                                             "practice": "先执行部署门禁脚本"}]}, {}, False)
+                                             "practice": "先执行部署门禁脚本", "sources": ["S01"]}]}, {"S01": "sess-1@abcdef1"}, False)
     assert results[0]["action"] == "update(dedupe)" and results[0]["id"] == old["id"]
-    assert set(batch.load_notes()) == {old["id"], near["id"]}
+    assert {note["id"] for note in batch.load_notes().values() if note["type"] == "lesson"} == {old["id"], near["id"]}
 
 
 def test_batch_rejects_incomplete_and_deduplicates_creates_in_the_same_batch(batch):
     complete = {"op": "create", "type": "lesson", "title": "先查连接池",
-                "scene": "压测超时", "practice": "先查连接池", "reason": "连接池耗尽后请求排队"}
-    incomplete = {"op": "create", "type": "lesson", "title": "只有标题"}
+                "scene": "压测超时", "practice": "先查连接池", "reason": "连接池耗尽后请求排队", "sources": ["S01"]}
+    incomplete = {"op": "create", "type": "lesson", "title": "只有标题", "sources": ["S01"]}
     results = batch._apply("P", [], {"ops": [incomplete, {**complete, "slug": "first"},
-                                            {**complete, "slug": "second"}]}, {}, False)
+                                            {**complete, "slug": "second"}]}, {"S01": "sess-1@abcdef1"}, False)
     assert [result["action"] for result in results] == ["create", "update(dedupe)"]
-    assert len(batch.load_notes()) == 1 and "incomplete_atomic_note" in batch.LOG.read_text()
+    assert sum(note["type"] == "lesson" for note in batch.load_notes().values()) == 1
+    assert "incomplete_atomic_note" in batch.LOG.read_text()
 
 
 def test_batch_retries_if_capture_replaces_a_draft_during_model_call(batch, monkeypatch):
     draft = put_draft()
 
     def chat(prompt):
-        draft_store.save_payload({"project": "P", "session_id": "sess-1", "body": "## LESSONS\n- newer"})
+        put_draft(body="## LESSONS\n- newer")
         return '{"ops":[]}'
 
     monkeypatch.setattr(batch, "chat", chat)
@@ -184,3 +195,64 @@ def test_batch_refuses_outside_paths(batch, tmp_path):
     with pytest.raises(ValueError, match="invalid project"):
         batch.drafts_of("../outside")
     assert draft.is_file() and list(outside.iterdir()) == []
+
+
+def test_write_allowlist_refuses_external_and_in_vault_symlink_targets(batch, monkeypatch):
+    protected = batch.VAULT / "00-系统/手写.md"
+    protected.parent.mkdir()
+    note = nf.new_note(id="protected", path="00-系统/手写", project="P", title="手写",
+                       scene="原现场", practice="原做法", reason="原原因")
+    original = batch.render(note, {})
+    protected.write_text(original)
+    project = batch.VAULT / "项目"
+    project.mkdir()
+    (project / "shadow").symlink_to(protected.parent, target_is_directory=True)
+    with pytest.raises(nf.UnsafePath):
+        batch.write_file("项目/shadow/手写", "bypass")
+    monkeypatch.setattr(batch, "chat", lambda prompt: json.dumps({"ops": [
+        {"op": "update", "id": "protected", "reason": "覆盖", "sources": ["S01"]},
+    ]}))
+    draft = put_draft()
+    assert batch.process("P", [draft]) == []
+    assert draft.exists() and protected.read_text() == original
+    assert "update_target_outside_allowlist" in batch.LOG.read_text()
+
+
+def test_batch_holds_drafts_without_commit_and_rejects_unknown_sources(batch, monkeypatch):
+    legacy = put_draft(commit="")
+    monkeypatch.setattr(batch, "chat", lambda prompt: pytest.fail("unattributed draft reached model"))
+    assert batch.process("P", [legacy]) == []
+    assert legacy.exists() and "missing_session_or_commit" in batch.LOG.read_text()
+    draft = put_draft()
+    monkeypatch.setattr(batch, "chat", lambda prompt: json.dumps({"ops": [
+        {"op": "create", "title": "完整但无来源", "type": "lesson", "scene": "场景",
+         "practice": "做法", "reason": "理由", "sources": ["S99"]},
+    ]}))
+    assert batch.process("P", [draft]) == []
+    assert draft.exists() and not list(batch.VAULT.rglob("*.md"))
+    assert "missing_or_unknown_source" in batch.LOG.read_text()
+
+
+def test_batch_snapshots_dirty_vault_and_logs_diff_for_all_model_ops(batch, monkeypatch, capsys):
+    head = git(batch.VAULT, "rev-parse", "HEAD")
+    human = batch.VAULT / "手写.md"
+    human.write_text("保留正文")
+    draft = put_draft(body="## LESSONS\n- " + "字" * 2000 + "\n## OPEN QUESTIONS\n独立待验证项")
+    titles = ["backup", "resolver", "latency", "filesystem", "queues", "journal", "network", "volume", "point"]
+    ops = [{"op": "create", "title": title, "type": "lesson", "scene": f"现场 {title}",
+            "practice": title, "reason": f"对应现象 {title}", "sources": ["S01"]} for title in titles]
+
+    def chat(prompt):
+        assert "独立待验证项" in prompt and git(batch.VAULT, "rev-parse", "HEAD") != head
+        assert git(batch.VAULT, "status", "--porcelain") == ""
+        return json.dumps({"ops": ops})
+
+    monkeypatch.setattr(batch, "chat", chat)
+    assert len(batch.process("P", [draft])) == len(ops)
+    events = [json.loads(line) for line in batch.LOG.read_text().splitlines()]
+    baseline = next(event for event in events if event["event"] == "snapshot")
+    diff = next(event for event in events if event["event"] == "diff")
+    assert baseline["created"] and diff["baseline"] == baseline["commit"]
+    assert "point.md" in diff["stat"] in capsys.readouterr().out
+    assert "手写.md" not in diff["stat"] and human.read_text() == "保留正文"
+    assert git(batch.VAULT, "diff", "--cached", "--stat") == ""

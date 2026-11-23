@@ -213,3 +213,36 @@ def test_project_inference_and_setup_without_model(hooks, monkeypatch, capsys):
 
     assert setup.main(["--check"]) == 0
     assert "skip" in capsys.readouterr().out and not hooks.paths.config_path().exists()
+
+
+def test_local_capture_to_processed_obsidian_note(hooks, vault, monkeypatch, tmp_path):
+    repo = tmp_path / "my-app"
+    commit = make_repo(repo)
+    git(vault, "init", "-q")
+    git(vault, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "baseline")
+    sid = "origin/session-123"
+    run(commands(".codex-plugin/hooks.json")["Stop"], session_id=sid, cwd=str(repo), last_assistant_message=REPLY)
+    draft, = (tmp_path / "drafts/my-app").glob("*.md")
+    original = draft.read_bytes()
+    monkeypatch.syspath_prepend(str(ROOT / "classify"))
+    sys.modules.pop("hinddian_batch", None)
+    batch = importlib.import_module("hinddian_batch")
+
+    def chat(prompt):
+        assert "先备份" in prompt and "放弃覆盖，因为无法回滚" in prompt
+        return json.dumps({"ops": [{"op": "create", "title": "部署前先备份", "type": "lesson",
+                                    "scene": "部署", "practice": "先备份", "reason": "推断，放弃覆盖，因为无法回滚。",
+                                    "sources": ["S01"]}]})
+
+    try:
+        monkeypatch.setattr(batch, "chat", chat)
+        batch.cmd_run()
+        note = vault / "项目/my-app/经验/部署前先备份.md"
+        meta, _, body = nf.parse_frontmatter(note.read_text())
+        assert meta["sources"] == [f"{sid}@{commit}"] and "放弃覆盖" in body
+        assert not draft.exists() and (tmp_path / "processed/my-app" / draft.name).read_bytes() == original
+        events = [json.loads(line) for line in batch.LOG.read_text().splitlines()]
+        assert len([ev for ev in events if ev["event"] == "model_call"]) == 1
+        assert "部署前先备份.md" in next(ev["stat"] for ev in events if ev["event"] == "diff")
+    finally:
+        sys.modules.pop("hinddian_batch", None)
