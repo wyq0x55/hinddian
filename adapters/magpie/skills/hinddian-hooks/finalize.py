@@ -17,6 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import extract  # noqa: E402
 import hookcfg  # noqa: E402
 import session_buf  # noqa: E402
 
@@ -100,23 +101,59 @@ def finalize_idle_and_others(*, current_sid: str | None = None, project: str | N
     now = time.time()
     for buf in session_buf.list_open():
         sid = buf.get("session_id")
-        if not session_buf.due(buf, now):
-            continue
-        is_current = bool(current_sid and sid == current_sid)
-        idle = now - float(buf.get("updated_at") or 0) >= session_buf.IDLE_SEC
-        switched = bool(is_current and project and session_buf.project_switched(buf, project))
-        if is_current and not idle and not switched:
-            continue
-        if is_current and switched:
-            reason = "project-switch"
-        elif current_sid and not is_current:
-            reason = "session-start"
-        else:
-            reason = "idle"
         with session_buf.claim(sid) as mine:
-            if mine:
-                results.append(finalize_buffer(buf, reason=reason))
+            if not mine:
+                continue
+            buf = session_buf.load(sid)
+            if not buf or buf.get("finalized") or not session_buf.due(buf, now):
+                continue
+            is_current = bool(current_sid and sid == current_sid)
+            idle = now - float(buf.get("updated_at") or 0) >= session_buf.IDLE_SEC
+            switched = bool(is_current and project and session_buf.project_switched(buf, project))
+            if is_current and not idle and not switched:
+                continue
+            if is_current and switched:
+                reason = "project-switch"
+            elif current_sid and not is_current:
+                reason = "session-start"
+            else:
+                reason = "idle"
+            results.append(finalize_buffer(buf, reason=reason))
     return results
+
+
+def drain_pending() -> None:
+    pending = session_buf.hook_dir() / "pending"
+    queued = []
+    for path in pending.glob("*.json"):
+        try:
+            queued.append((path.stat().st_mtime_ns, path))
+        except FileNotFoundError:
+            continue
+    if not queued:
+        return
+    import recording
+
+    for _, path in sorted(queued):
+        try:
+            job = json.loads(path.read_text(encoding="utf-8"))
+            sid = job["session_id"]
+            with session_buf.claim(sid) as mine:
+                if not mine or not path.exists():
+                    continue
+                event = json.loads(Path(job["event"]).read_text(encoding="utf-8"))
+                messages = recording.legacy_messages(event)
+                text = extract.format_whitelist([(message["role"], message["text"]) for message in messages])
+                text = extract.extract_turn_text(text)
+                if text:
+                    session_buf.append_turn(session_id=sid, turn_text=text, cwd=job["cwd"], event_id=path.stem)
+                path.unlink()
+        except FileNotFoundError:
+            if not path.exists():
+                continue
+            print("hinddian: pending legacy capture: FileNotFoundError", file=sys.stderr)
+        except (OSError, ValueError, KeyError) as error:
+            print(f"hinddian: pending legacy capture: {type(error).__name__}", file=sys.stderr)
 
 
 def main(argv: list[str]) -> None:
@@ -124,6 +161,7 @@ def main(argv: list[str]) -> None:
     if hookcfg.transport_problem():
         print(json.dumps({"skipped": hookcfg.transport_problem()}, ensure_ascii=False))
         return
+    drain_pending()
     results = finalize_idle_and_others(current_sid=current)
     pruned = session_buf.prune()
     stamp = time.strftime("%Y-%m-%dT%H:%M:%S")

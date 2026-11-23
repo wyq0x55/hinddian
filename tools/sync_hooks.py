@@ -31,6 +31,8 @@ CORE = {
     "mcp_bridge.py": ROOT / "hooks/mcp_bridge.py",
     "setup.py": ROOT / "hooks/setup.py",
     "jev.py": ROOT / "src/hinddian/jev.py",
+    "recording.py": ROOT / "src/hinddian/recording.py",
+    "redaction.py": ROOT / "src/hinddian/redaction.py",
 }
 MAGPIE_SKILL = ROOT / "adapters/magpie/skills/hinddian-hooks"
 MAGPIE_EXTRA = ("SKILL.md", "embed_hooks.py", "install.py", "install.ps1")

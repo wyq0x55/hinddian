@@ -230,7 +230,8 @@ def test_unconfigured_session_start_is_silent(hooks, monkeypatch, capsys):
 
 
 @pytest.mark.parametrize("host", ["claude", "codex", "magpie"])
-def test_host_buffers_turns_and_finalizes_silently(host, hooks, vault, monkeypatch, tmp_path):
+@pytest.mark.parametrize("capture_notes", [False, True])
+def test_host_buffers_turns_and_finalizes_silently(host, capture_notes, hooks, vault, monkeypatch, tmp_path):
     from hinddian import jev, memory_mcp, notes, session_finalize
     from hinddian.api import app
     from hinddian.config import Settings
@@ -272,6 +273,10 @@ def test_host_buffers_turns_and_finalizes_silently(host, hooks, vault, monkeypat
             monkeypatch.delenv("HINDDIAN_HOOK_SYNC", raising=False)
             monkeypatch.setenv("HINDDIAN_AUTO_RECALL", "1")
             monkeypatch.setenv("HINDDIAN_SESSION_IDLE_SEC", "1800")
+            if capture_notes:
+                monkeypatch.setenv("HINDDIAN_NOTES_SPOOL", str(tmp_path / "sources"))
+            else:
+                monkeypatch.delenv("HINDDIAN_NOTES_SPOOL", raising=False)
             plugin = SCRIPTS.parent
             if host == "magpie":
                 skill = plugin.parents[1] / "adapters/magpie/skills/hinddian-hooks"
@@ -311,7 +316,32 @@ def test_host_buffers_turns_and_finalizes_silently(host, hooks, vault, monkeypat
             draft = (tmp_path / "drafts/my-app/session-old.md").read_text(encoding="utf-8")
             assert "# 降低并发后重试成功" in draft and "## OPEN QUESTIONS\n- 并发上限受连接池限制吗？" in draft
             assert old_note.read_bytes() == original_note
-            assert json.loads(run(stop, "new", prompt="排查超时", last_assistant_message="调低并发后复测通过"))["buffered"]
+            new_turn = {"turn_id": "compare", "prompt": "排查超时", "last_assistant_message": "调低并发后复测通过"}
+            result = run(stop, "new", **new_turn)
+            if capture_notes:
+                from hinddian import recording
+
+                assert result == ""
+                session = next((tmp_path / "sources").glob("session-*"))
+                _, _, records = recording.materialize(session)
+                assert [record["text"] for record in records] == ["排查超时", "调低并发后复测通过"]
+                deadline = time.monotonic() + 5
+                while not buffer.load("new") and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                if host == "codex":
+                    run(stop, "new", turn_id="second", last_assistant_message="补充复测结果")
+                    pending = buffer.hook_dir() / "pending"
+                    deadline = time.monotonic() + 5
+                    while list(pending.glob("*.json")) and time.monotonic() < deadline:
+                        time.sleep(0.02)
+                    run(stop, "new", **new_turn)
+                    deadline = time.monotonic() + 5
+                    while list(pending.glob("*.json")) and time.monotonic() < deadline:
+                        time.sleep(0.02)
+                    assert not list(pending.glob("*.json"))
+                    assert len(buffer.load("new")["turns"]) == 2
+            else:
+                assert json.loads(result)["buffered"]
             assert "调低并发后复测通过" in buffer.load("new")["turns"][0]["text"]
             assert [(method, path) for method, path, _ in requests] == [("POST", "/api/memory/finalize")]
             assert requests[0][2]["turns"] == [{"text": "ASSISTANT:\nPrevious closing"}]

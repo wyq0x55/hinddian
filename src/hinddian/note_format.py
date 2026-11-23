@@ -20,6 +20,8 @@ import threading
 import time
 from typing import Any, Iterator
 
+from .redaction import redact  # noqa: F401
+
 try:
     import fcntl
 except ImportError:  # pragma: no cover — Windows dev boxes; vault writes only run on the vault host
@@ -29,12 +31,6 @@ SKIP_DIRS = (".obsidian", "_归档", ".git", ".trash", "_模板")
 FOLDER = {"decision": "决策", "lesson": "经验"}
 NOTE_TYPES = ("tip", "decision", "lesson")
 
-SECRET_RE = [
-    re.compile(r"(?i)(password|passwd|secret|token|api[_-]?key|bearer)\s*[:=]\s*['\"]?[A-Za-z0-9_\-\.]{12,}"),
-    re.compile(r"sk-[A-Za-z0-9]{16,}"),
-    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
-    re.compile(r"\b(ghp|gho|github_pat)_[A-Za-z0-9_]{20,}"),
-]
 WIKI = re.compile(r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]")
 
 # Frontmatter keys render() owns; everything else in a note's frontmatter is carried through.
@@ -111,18 +107,6 @@ def apply_supersedes(successor: dict, predecessors: list[str], notes: dict[str, 
 
 
 # ------------------------------------------------------------------ text helpers
-# <private>…</private> in a conversation never leaves the user's machine (the hooks strip it);
-# stripped again here in case an older hook copy sent it. Unclosed → to the end.
-PRIVATE_RE = re.compile(r"<private>.*?(?:</private>|\Z)", re.S | re.I)
-
-
-def redact(t: str) -> str:
-    t = PRIVATE_RE.sub("[private]", t)
-    for r in SECRET_RE:
-        t = r.sub("[REDACTED]", t)
-    return t
-
-
 _BAD_SEG = re.compile(r'[\\/:*?"<>|#\[\]^\x00-\x1f\x7f]')
 
 

@@ -179,7 +179,7 @@ def _post_jev(state: Any, questions: dict) -> tuple[dict, str]:
     raise RuntimeError("; ".join(errors)[:300] or "jev_failed")
 
 
-def _llm_json(prompt: str) -> dict:
+def chat_json(prompt: str) -> dict:
     body = {
         "model": FALLBACK_MODEL,
         "messages": [{"role": "user", "content": prompt}],
@@ -259,7 +259,7 @@ def should_recall(cwd: str, first_message: str, projects: list[str]) -> GateResu
     else:
         return r
     try:
-        data = _llm_json(
+        data = chat_json(
             "用 JSON 回答是否需要召回项目记忆。字段: {\"should_recall\": true|false, \"confidence\": 0-1, \"project\": \"名或空\"}\n"
             f"cwd={cwd}\nmessage={first_message[:1500]}\nprojects={projects}"
         )
@@ -291,7 +291,7 @@ def match_project(cwd: str, message: str, projects: list[str]) -> GateResult:
     if (r.source == "jev" or str(r.source).startswith("jev:")) and (not r.ok or r.value == "none"):
         if r.error == "low_confidence" or r.value == "none":
             try:
-                data = _llm_json(
+                data = chat_json(
                     "用 JSON 选择项目。字段 {\"project\": \"名或 null\", \"confidence\": 0-1}\n"
                     f"可选: {projects}\ncwd={cwd}\nmessage={message[:1500]}"
                 )
@@ -374,7 +374,7 @@ def classify_turn(turn_text: str, projects: list[str], cwd: str = "") -> GateRes
         return GateResult(True, payload, payload["confidence"], keep.source, {"keep": keep.raw, "type": typ.raw})
     # Structured short sentences via Jev noul is heavy; use LLM enrich ONLY after keep=true
     try:
-        data = _llm_json(
+        data = chat_json(
             "从白名单用户/助手原文抽取短句。JSON: "
             '{"title":"中文短标题","summary":"一句话",'
             '"decision":["决策短句"],"lesson":["经验短句"],"preference":["偏好短句"],'
@@ -425,7 +425,7 @@ def write_verdict(new_summary: str, candidates: list[dict]) -> GateResult:
     if r.ok:
         return r
     try:
-        data = _llm_json(
+        data = chat_json(
             "四态裁决 JSON: {\"verdict\": \"add|update|supersede|noop\", \"target_id\": \"或空\", "
             "\"confidence\": 0-1, \"reason\": \"…\"}\n"
             f"NEW:\n{new_summary[:2500]}\nCANDIDATES:\n{json.dumps(candidates[:12], ensure_ascii=False)[:4000]}"

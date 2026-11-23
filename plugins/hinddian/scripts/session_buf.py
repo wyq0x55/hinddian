@@ -102,6 +102,7 @@ def append_turn(
     turn_text: str,
     cwd: str = "",
     project_hint: str | None = None,
+    event_id: str | None = None,
 ) -> dict[str, Any]:
     text = strip_private(turn_text).strip()
     now = time.time()
@@ -114,6 +115,8 @@ def append_turn(
         "turns": [],
         "finalized": False,
     }
+    if event_id and any(turn.get("event_id") == event_id for turn in buf["turns"]):
+        return buf
     if buf.get("finalized"):
         # reopen for more turns in same session (unusual but ok)
         buf["finalized"] = False
@@ -127,7 +130,10 @@ def append_turn(
         # de-dupe identical last turn
         turns = buf.setdefault("turns", [])
         if not turns or turns[-1].get("text") != text:
-            turns.append({"at": now, "text": text})
+            turn = {"at": now, "text": text}
+            if event_id:
+                turn["event_id"] = event_id
+            turns.append(turn)
     buf["updated_at"] = now
     save(buf)
     return buf
