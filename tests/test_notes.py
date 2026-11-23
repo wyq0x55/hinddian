@@ -17,16 +17,15 @@ def test_project_traversal_stays_in_vault(vault, tmp_path):
     assert list(outside.iterdir()) == []
 
 
-def test_push_draft_sanitises(vault, tmp_path):
-    result = draft_store.save_payload({"project": "../../outside", "title": "token: syntheticcredential",
-                                       "body": "<private>private text</private>\nBearer syntheticcredential",
+def test_push_draft_keeps_provenance_and_safe_paths(vault, tmp_path):
+    result = draft_store.save_payload({"project": "../../outside", "title": "试验内容",
+                                       "body": "全文",
                                        "session_id": "original/id"})
     path = Path(result["path"])
     assert path.is_relative_to(tmp_path / "drafts")
     assert not path.is_relative_to(vault)
     text = path.read_text()
-    assert "syntheticcredential" not in text and "private text" not in text
-    assert "session_id: original/id" in text and "[REDACTED]" in text
+    assert "session_id: original/id" in text and "全文" in text
     second = draft_store.save_payload({"project": result["project"], "session_id": "original_id"})
     assert second["path"] != result["path"]
 

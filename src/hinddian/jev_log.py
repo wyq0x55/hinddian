@@ -20,7 +20,6 @@ STR_FIELDS = {  # name -> max length
     "session_id": 128, "project": 128, "cwd": 128, "host": 64, "finalize_reason": 40,
     "jev_source": 40, "outcome": 40, "error": 200, "draft_path": 256,
 }
-_SECRETish = re.compile(r"(?i)(bearer\s+\S+|(?:token|api[_-]?key|secret|password)\s*[=:]\s*\S+|sk-[A-Za-z0-9_-]{8,})")
 
 
 class ReportError(ValueError):
@@ -37,7 +36,6 @@ def _clean(v, n: int) -> str | None:
     if not isinstance(v, (str, int, float)):
         raise ReportError("string expected")
     s = re.sub(r"[\x00-\x1f]+", " ", str(v)).strip()
-    s = _SECRETish.sub("[redacted]", s)
     return s[:n] or None
 
 

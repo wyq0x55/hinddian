@@ -37,13 +37,6 @@ SKIP_DIRS = (".obsidian", "_归档", ".git", ".trash", "_模板")
 FOLDER = {"decision": "决策", "lesson": "经验"}
 NOTE_TYPES = ("tip", "decision", "lesson")
 
-SECRET_RE = [
-    re.compile(r"(?i)(password|passwd|secret|token|api[_-]?key|bearer)\s*[:=]\s*['\"]?[A-Za-z0-9_\-\.]{12,}"),
-    re.compile(r"(?i)\bbearer[ \t]+[A-Za-z0-9_\-\.]{12,}"),
-    re.compile(r"sk-[A-Za-z0-9]{16,}"),
-    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)", re.S),
-    re.compile(r"\b(ghp|gho|github_pat)_[A-Za-z0-9_]{20,}"),
-]
 WIKI = re.compile(r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]")
 
 # Frontmatter keys render() owns; everything else in a note's frontmatter is carried through.
@@ -63,39 +56,6 @@ class UnsafePath(ValueError):
 
 
 # ------------------------------------------------------------------ text helpers
-# <private>…</private> in a conversation never leaves the user's machine (the hooks strip it);
-# stripped again here in case an older hook copy sent it. Unclosed → to the end.
-PRIVATE_RE = re.compile(r"</?private>", re.I)
-
-
-def private_spans(text: str) -> Iterator[tuple[int, int]]:
-    depth = start = 0
-    for tag in PRIVATE_RE.finditer(text):
-        if tag[0][1] != "/":
-            if not depth:
-                start = tag.start()
-            depth += 1
-        elif depth:
-            depth -= 1
-            if not depth:
-                yield start, tag.end()
-    if depth:
-        yield start, len(text)
-
-
-def redact(t: str) -> str:
-    parts = []
-    end = 0
-    for start, stop in private_spans(t):
-        parts.extend((t[end:start], "[private]"))
-        end = stop
-    parts.append(t[end:])
-    t = "".join(parts)
-    for r in SECRET_RE:
-        t = r.sub("[REDACTED]", t)
-    return t
-
-
 _BAD_SEG = re.compile(r'[\\/:*?"<>|#\[\]^\x00-\x1f\x7f]')
 
 

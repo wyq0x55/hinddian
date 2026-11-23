@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 from typing import Any, Iterator
 
-from hookcfg import redact, write_atomic
+from hookcfg import write_atomic
 
 IDLE_SEC = int(os.environ.get("HINDDIAN_SESSION_IDLE_SEC", "1800"))  # 30 min
 RETAIN_SEC = int(os.environ.get("HINDDIAN_BUFFER_RETAIN_SEC", str(3 * 86400)))
@@ -111,7 +111,7 @@ def append_turn(
 
 
 def _append_turn(session_id: str, turn_text: str, cwd: str, project_hint: str | None) -> dict[str, Any]:
-    text = redact(turn_text).strip()
+    text = turn_text.strip()
     now = time.time()
     buf = load(session_id) or {
         "session_id": session_id,

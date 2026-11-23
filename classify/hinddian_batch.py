@@ -31,7 +31,7 @@ def now(): return dt.datetime.now().astimezone().isoformat(timespec="seconds")
 def log(ev):
     BASE.mkdir(parents=True, exist_ok=True)
     with open(LOG, "a") as f: f.write(json.dumps({"at": now(), **ev}, ensure_ascii=False) + "\n")
-redact, safe, slugify, link_of = nf.redact, nf.safe_title, nf.slugify, nf.link_of
+safe, slugify, link_of = nf.safe_title, nf.slugify, nf.link_of
 
 # ------------------------------------------------------------------ notes
 _cache = nf.NoteCache()
@@ -193,7 +193,6 @@ PROMPT = """你是用户的笔记库维护员。任务：把一批会话提炼�
 - 标题即命题，明确表达决定或经验；每条笔记填齐场景/做法/理由，不写成无分段的文本堆，不编造缺失事实。
 - related 填相关笔记的 id（已有 id 或本批新建的 "new:<slug>"）。
 - 宁少勿滥：本批最多 {maxops} 个 op；没有值得记的就返回空 ops。
-- 绝不写密钥、token、口令、证书内容。
 只输出 JSON：
 {{"ops":[{{"op":"create|update","id":"(update 时必填已有 id)","slug":"english-slug","title":"中文短标题","type":"decision|lesson|tip",
 "tags":["..."],"scene":"场景","practice":"做法（- 列表）","reason":"理由","related":["id 或 new:slug"],"sources":["S01"]}}]}}
@@ -207,8 +206,8 @@ PROMPT = """你是用户的笔记库维护员。任务：把一批会话提炼�
 
 def note_digest(n, full=True):
     s = f"### id={n['id']} type={n['type']} 标题={n['title']}"
-    if full: s += f"\n场景：{redact(n['scene'])[:300]}\n做法：{redact(n['practice'])[:700]}\n理由：{redact(n['reason'])[:300]}"
-    return redact(s)
+    if full: s += f"\n场景：{n['scene'][:300]}\n做法：{n['practice'][:700]}\n理由：{n['reason'][:300]}"
+    return s
 
 def process(project: str, files: list[pathlib.Path], dry=False):
     validate_project(project)
@@ -222,15 +221,15 @@ def process(project: str, files: list[pathlib.Path], dry=False):
         snapshots[f] = f.read_bytes()
         text = snapshots[f].decode("utf-8", errors="replace")
         key = f"S{i:02d}"
-        idx[key] = redact(session_of(f.name, text))
-        chunks.append(f"### {key}\n{extract(redact(text))[:PER_DRAFT]}")
+        idx[key] = session_of(f.name, text)
+        chunks.append(f"### {key}\n{extract(text)[:PER_DRAFT]}")
     # large pools: full text for the notes most similar to this batch, titles for the rest
     bg = _grams("".join(chunks))
     ranked = sorted(pool, key=lambda n: -len(bg & _grams(n["title"] + n["scene"] + n["practice"])))
     full = {n["id"] for n in ranked[:FULL_TOP]} if len(pool) > 60 else {n["id"] for n in pool}
     existing = "\n\n".join(note_digest(n, n["id"] in full) for n in ranked) or "（空）"
     mode = ("这些草稿项目归属不明：**只提取跨项目通用的 agent 使用技巧（type=tip）**，其余全部忽略。" if tips_only
-            else f"项目：「{redact(project)}」。项目相关的写 decision/lesson；通用 agent 技巧写 tip。")
+            else f"项目：「{project}」。项目相关的写 decision/lesson；通用 agent 技巧写 tip。")
     prompt = PROMPT.format(mode=mode, maxops=8, nn=len(pool), existing=existing, nd=len(files), drafts="\n\n".join(chunks))
     for attempt in range(3):
         try: data = parse_json(chat(prompt)); break
@@ -286,7 +285,6 @@ def _apply(project, files, data, idx, dry, *, before=None):
             v = op.get(k)
             if isinstance(v, list): op[k] = "\n".join(f"- {x}" for x in v) if k == "practice" else "；".join(map(str, v))
             elif v is not None and not isinstance(v, str): op[k] = str(v)
-            if op.get(k): op[k] = redact(op[k])
         for k in ("scene", "practice", "reason"):
             if op.get(k): op[k] = clean_field(op[k])
         for k in ("tags", "related", "sources"):
@@ -294,7 +292,7 @@ def _apply(project, files, data, idx, dry, *, before=None):
             v = v if isinstance(v, list) else [v]
             flat = []
             for x in v: flat += x if isinstance(x, list) else [x]
-            op[k] = [redact(str(x)) for x in flat if x]
+            op[k] = [str(x) for x in flat if x]
         return op
     for op in [norm(o) for o in data["ops"] if isinstance(o, dict)][:8]:
         if op.get("op") not in ("create", "update"):

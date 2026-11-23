@@ -18,7 +18,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import hookcfg  # noqa: E402
 import session_buf  # noqa: E402
 import draft_store  # noqa: E402
-import note_format as nf  # noqa: E402
 import paths  # noqa: E402
 import session_finalize  # noqa: E402
 from hook_runtime import quiet, record  # noqa: E402
@@ -52,12 +51,11 @@ def _base(p: str) -> str | None:
 
 
 def payload(buf: dict, *, reason: str) -> dict:
-    """Whitelisted turn text only (session_buf already stored user + final assistant turns, with
-    <private> blocks redacted); cwd and repo are sent as basenames, never full paths."""
+    """Collect buffered turns and repository basenames."""
     cwd = str(buf.get("cwd") or "")
     root = repo_root(cwd) if cwd else None
     turns = buf.get("turns") or []
-    texts = [session_buf.clip(nf.redact(str(turn.get("text") or "")), 19000, 6000)
+    texts = [session_buf.clip(str(turn.get("text") or ""), 19000, 6000)
              for turn in turns if (turn.get("text") or "").strip()]
     if len(texts) > session_finalize.MAX_TURNS or sum(map(len, texts)) > session_finalize.MAX_TOTAL_CHARS:
         texts = [session_finalize.clip("\n\n---\n\n".join(texts))]

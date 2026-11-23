@@ -28,7 +28,7 @@ if not (HERE / "paths.py").is_file():
     sys.path.insert(0, str(HERE.parent / "src/hinddian"))
 
 from paths import config_path, load_config
-from note_format import redact, write_atomic
+from note_format import write_atomic
 
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 _FILE_KEYS = {

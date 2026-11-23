@@ -58,10 +58,10 @@ def write_draft(
 ) -> dict:
     """Atomically replace the draft for the same session and keep the original session ID."""
     paths.check_draft_root(root, vault)
-    project = nf.safe_project(nf.redact(str(project)))
+    project = nf.safe_project(project)
     if project == "holdout":
         project = "通用-未定"
-    title = nf.safe_title(nf.redact(str(title)))
+    title = nf.safe_title(title)
     meta = meta or {}
     sid = str(meta.get("session_id") or "").strip()
     if sid:
@@ -76,7 +76,7 @@ def write_draft(
     items: list[tuple[str, Any]] = [
         ("title", title),
         ("project", project),
-        ("origin", nf.redact(str(meta.get("origin") or ("session-finalize" if sid else "turn-end")))[:120]),
+        ("origin", str(meta.get("origin") or ("session-finalize" if sid else "turn-end"))[:120]),
         ("created", today),
         ("updated", today),
     ]
@@ -84,8 +84,8 @@ def write_draft(
         if key in ("title", "project", "body", "origin", "created", "updated") or not _META_KEY.fullmatch(key):
             continue
         if isinstance(value, (str, int, float, bool)):
-            items.append((key, nf.redact(str(value))[:200]))
-    text = nf.dump_frontmatter(items) + f"\n\n# {title}\n\n" + nf.redact(body).strip() + "\n"
+            items.append((key, str(value)))
+    text = nf.dump_frontmatter(items) + f"\n\n# {title}\n\n" + body.strip() + "\n"
     with nf.vault_lock():
         path = nf.within(root, f"{project}/{name}")
         paths.check_draft_root(path, vault)

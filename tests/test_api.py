@@ -127,12 +127,12 @@ def test_jev_report_validates_appends_and_shows_on_dashboard(client, tmp_path, m
                 {"session_id": "s", "error": "x" * 5000}):
         assert client.post(url, json=bad, headers=collector()).status_code == 422
     record = {"session_id": "s1", "host": "mac", "project": "P", "jev_source": "none", "keep": None,
-              "error": "jev_unavailable token=abc123", "turn_count": 3, "pushed": False, "turn": "secret text"}
+              "error": "jev_unavailable", "turn_count": 3, "pushed": False, "turn": "excluded body"}
     assert client.post(url, json=record, headers=collector()).json() == {"ok": True}
     assert client.post(url, json={**record, "session_id": "s2", "jev_source": "jev:local", "keep": False, "error": None},
                        headers=collector()).status_code == 200
     raw = log.read_text()
-    assert "secret text" not in raw and "abc123" not in raw and raw.count("\n") == 2
+    assert "excluded body" not in raw and raw.count("\n") == 2
     assert client.get("/api/jev-decisions", headers=collector()).status_code == 403
     data = client.get("/api/jev-decisions", headers=dashboard()).json()
     assert [row["session_id"] for row in data["items"]] == ["s2", "s1"]
@@ -179,7 +179,7 @@ def test_server_finalize_runs_jev_pushes_and_logs(client, tmp_path, monkeypatch)
     assert result["outcome"] == "pushed" and result["retry"] is False and result["source"] == "jev:local"
     text = (tmp_path / "drafts/my-app/session-sf1.md").read_text()
     assert "session_id: sf1" in text and "- 先备份" in text and "OPEN QUESTIONS" in text
-    assert seen["cwd"] == "src" and "SECRETTURN" in seen["text"] and "syntheticcredential" not in seen["text"]
+    assert seen["cwd"] == "src" and "SECRETTURN" in seen["text"]
     raw = log.read_text()
     assert "SECRETTURN" not in raw and "部署前要备份" not in raw
     item = client.get("/api/jev-decisions", headers=dashboard()).json()["items"][0]

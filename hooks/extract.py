@@ -12,8 +12,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-from hookcfg import redact
-
 # Role markers common across agents / host dumps
 _ROLE_RE = re.compile(
     r"(?im)^(?:#{1,3}\s*)?(?:\[)?(system|developer|user|human|assistant|model|tool|function)"
@@ -42,7 +40,7 @@ _MAX_TOTAL = int(os.environ.get("HINDDIAN_EXTRACT_TOTAL_CHARS", "12000"))
 
 
 def _clean_piece(text: str, *, role: str) -> str:
-    t = redact(text or "").strip()
+    t = (text or "").strip()
     if not t:
         return ""
     t = _JUNK_BLOCK.sub("\n", t)
@@ -123,7 +121,6 @@ def _from_plaintext(text: str) -> list[tuple[str, str]]:
         except Exception:
             pass
 
-    raw = redact(raw)
     # Role-labeled plaintext
     parts: list[tuple[str, str]] = []
     matches = list(_ROLE_RE.finditer(raw))

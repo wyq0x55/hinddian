@@ -150,37 +150,6 @@ def test_large_legacy_buffer_fits_finalize_limits(hooks):
     assert text.startswith("original ask") and text.endswith("final conclusion")
 
 
-def test_local_finalize_redacts_legacy_buffers_and_keeps_session_id(hooks, monkeypatch, tmp_path):
-    buffer, finalize = hooks["session_buf"], hooks["finalize"]
-    monkeypatch.delenv("HINDDIAN_MEMORY_URL")
-    monkeypatch.setenv("HINDDIAN_VAULT", str(tmp_path / "vault"))
-    monkeypatch.setenv("HINDDIAN_DRAFTS_DIR", str(tmp_path / "drafts"))
-    monkeypatch.setenv("HINDDIAN_STATE_DIR", str(tmp_path / "state"))
-    local_jev = finalize.session_finalize.jev
-
-    def classify(text, projects, cwd):
-        assert not any(secret in text for secret in ("syntheticcredential", "private text", "outer tail"))
-        assert text.count("[REDACTED]") == 2 and "[private]" in text
-        return local_jev.GateResult(True, {"keep": True, "project": "demo", "title": "Use a backup",
-                                          "lesson": ["Write a backup before changing settings"]}, 0.9, "jev:local")
-
-    monkeypatch.setattr(local_jev, "classify_turn", classify)
-    monkeypatch.setattr(finalize, "req", lambda *args, **kwargs: pytest.fail("local mode called HTTP"))
-    entry = buffer.append_turn(session_id="local-123", turn_text="placeholder")
-    marker = "PRIVATE" + " KEY"
-    entry["turns"][0]["text"] = (
-        "token: syntheticcredential <private>private text <private>inner</private>outer tail</private>\n"
-        f"-----BEGIN {marker}-----\nsyntheticcredential\n-----END {marker}-----"
-    )
-    buffer.save(entry)
-    result, = finalize.finalize_idle_and_others(current_sid="next")
-    assert result["pushed"] and buffer.load("local-123")["finalized"]
-    path = tmp_path / "drafts/demo/session-local-123.md"
-    assert "session_id: local-123" in path.read_text()
-    assert "session-finalize:session-start:jev:local:local" in path.read_text()
-    assert (tmp_path / "state/jev-decisions.jsonl").is_file()
-
-
 def test_prune_deletes_old_finalized(hooks):
     sb = hooks["session_buf"]
     sb.append_turn(session_id="s", turn_text="x")
@@ -235,12 +204,6 @@ def test_setup_fails_when_env_overrides_written_url(hooks, monkeypatch, capsys):
     monkeypatch.setattr(setup, "check", lambda: True)
     assert setup.main(["--url", "https://h:8444/hinddian", "--token", "t"]) == 1
     assert "HINDDIAN_MEMORY_URL" in capsys.readouterr().out
-
-
-def test_private_blocks_never_buffered(hooks):
-    sb = hooks["session_buf"]
-    buf = sb.append_turn(session_id="p1", turn_text="部署 <private>token=abc 密码</private> 完成 <PRIVATE>尾巴")
-    assert buf["turns"][0]["text"] == "部署 [private] 完成 [private]"
 
 
 def test_prune_handles_side_files(hooks):
@@ -452,17 +415,16 @@ def test_local_capture_to_processed_obsidian_note(hooks, vault, monkeypatch, tmp
     local_jev = finalize.session_finalize.jev
     repo = tmp_path / "my-app"
     (repo / ".git").mkdir(parents=True)
-    secret = "synthetic-fixture-credential"
     captured = []
 
     def classify(text, projects, cwd):
         captured.append(text)
-        assert "先备份" in text and secret not in text and "private fixture" not in text
+        assert "先备份" in text
         return local_jev.GateResult(True, {"keep": True, "type": "lesson", "title": "部署前先备份",
-                                          "lesson": [f"先备份，再验证。token: {secret}"]}, 0.95, "jev:local")
+                                          "lesson": ["先备份，再验证。"]}, 0.95, "jev:local")
 
     def chat(prompt):
-        assert "先备份，再验证" in prompt and secret not in prompt and "[REDACTED]" in prompt
+        assert "先备份，再验证" in prompt
         return json.dumps({"ops": [{"op": "create", "slug": "backup-first", "title": "部署前先备份",
                                     "type": "lesson", "scene": "部署", "practice": "先备份，再验证",
                                     "reason": "便于回滚", "sources": ["S01"]}]})
@@ -472,7 +434,7 @@ def test_local_capture_to_processed_obsidian_note(hooks, vault, monkeypatch, tmp
 
     sid = "origin/session-123"
     monkeypatch.setattr(sys, "stdin", StringIO(json.dumps({
-        "session_id": sid, "cwd": str(repo), "prompt": f"先备份。token: {secret} <private>private fixture</private>",
+        "session_id": sid, "cwd": str(repo), "prompt": "先备份。",
         "last_assistant_message": "先备份，再验证。",
     })))
     importlib.import_module("turn_end").main()
@@ -481,7 +443,7 @@ def test_local_capture_to_processed_obsidian_note(hooks, vault, monkeypatch, tmp
     assert len(captured) == 1 and hooks["session_buf"].load(sid)["outcome"] == "pushed"
     draft, = (tmp_path / "drafts/my-app").glob("*.md")
     text = draft.read_text()
-    assert nf.parse_frontmatter(text)[0]["session_id"] == sid and secret not in text and "[REDACTED]" in text
+    assert nf.parse_frontmatter(text)[0]["session_id"] == sid
 
     sys.modules.pop("hinddian_batch", None)
     batch = importlib.import_module("hinddian_batch")

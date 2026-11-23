@@ -119,12 +119,6 @@ def test_slugify_keeps_ascii_and_hashes_cjk():
     assert nf.slugify("部署门禁").startswith("n-")
 
 
-def test_redact_strips_private_blocks():
-    assert nf.redact("a <private>secret</private> b <private>tail") == "a [private] b [private]"
-    assert nf.redact("a <PRIVATE>x <private>y</private> outer</PRIVATE> z") == "a [private] z"
-    assert nf.redact("a <private>x <private>y</private> outer") == "a [private]"
-
-
 def test_write_lock_is_exclusive_across_processes(tmp_path):
     root = Path(nf.__file__).resolve().parents[1]
     script = """

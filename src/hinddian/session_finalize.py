@@ -33,7 +33,7 @@ def _s(v: Any, n: int) -> str:
         return ""
     if not isinstance(v, (str, int, float)):
         raise FinalizeError("string expected")
-    return re.sub(r"[\x00-\x1f]+", " ", nf.redact(str(v))).strip()[:n]
+    return re.sub(r"[\x00-\x1f]+", " ", str(v)).strip()[:n]
 
 
 def _base(v: Any) -> str:
@@ -60,7 +60,7 @@ def parse(args: dict) -> dict:
         total += len(tx)
         if total > MAX_TOTAL_CHARS:
             raise FinalizeError("buffer too large")
-        tx = nf.redact(tx).strip()[:MAX_TURN_CHARS]
+        tx = tx.strip()[:MAX_TURN_CHARS]
         if tx:
             texts.append(tx)
     tc = args.get("turn_count")
@@ -149,7 +149,7 @@ def _run(p: dict, projects, push, mode: str) -> dict:
     if not p["texts"]:
         return {"ok": True, "outcome": "empty", "retry": False, "source": "none", "keep": None, "pushed": False}
     try:
-        names = [nf.redact(name) for name in projects()]
+        names = projects()
     except Exception:
         names = []
     try:
