@@ -1,139 +1,17 @@
-# Architecture — hinddian (v0.6+)
+# hinddian 架构
 
-## 一句话
-
-**会话是原料，Obsidian 是阅读和编辑入口。Hindsight 提供索引，hinddian-memory MCP 兼容显式查询和写入。宿主无关（Claude / Codex / 其它）；Magpie 是可选适配器。**
-
-## 流水线
-
-```
-Agent 会话
-  ├─ session-start：静默启动后台 finalize → Jev(keep) → 一次 push_draft
-  └─ turn-end：白名单抽取（用户 + 最终回复）→ 本机会话缓冲（不远程写）
-                       ↓（空闲 ~30min / 换项目 也会 finalize）
-              /var/lib/hinddian/drafts/<project>/session-*.md
-                       ↓
-         分析：新项目攒到阈值(20 会话草稿)你批准 | 已批准增量自动 | 技巧自动
-              + 定时 run-force（已批准项目草稿不足阈值也分析）
-                       ↓
-              batch → 原子笔记（status: active|superseded|obsolete）
-                       ↓
-              Obsidian（人读 SoT）→ hinddian-hindsight-sync.timer → Hindsight（检索索引）
+```text
+宿主 SessionStart / Stop
+  → 本机会话缓冲
+  → finalize + Jev
+  → drafts/<project>/session-*.md
+  → hinddian_batch.py
+  → Obsidian 原子笔记 + processed/<project>/
 ```
 
-旁路：`upsert_note` / `suggest_correction` 对所有类型直接写 vault；成功后 API 主机异步 kick 现有 sync service。人在 Obsidian 直接改删同样管理记忆；两分钟 timer 捕获文件变化。
+- `hooks/` 按会话 ID 缓冲白名单用户消息和助手最终回复，后台运行 finalize。`tools/sync_hooks.py` 为 Claude Code、Codex 和 Magpie 生成可独立运行的标准库脚本副本。
+- `src/hinddian/session_finalize.py` 负责校验、再次脱敏、调用 Jev 和处理保留结果。`draft_store.py` 用原始会话 ID 标记草稿，使用安全路径及原子写入。可选的 HTTP 采集器使用同一套 finalize 与落盘逻辑。
+- `classify/hinddian_batch.py` 根据草稿和库内已有笔记生成 `create` / `update` 操作，按相似度合并并维护相关链接。模型调用之后，在写锁内重新读取笔记和校验草稿。内容指纹可识别大小和 mtime 都没变的编辑。旧笔记中的自定义 frontmatter、段落和历史取代信息由通用保留逻辑透传。
+- `web/` 仪表盘展示流水线计数、草稿和 Jev 判断。Obsidian 是正式笔记的阅读与编辑入口，跨设备同步由 LiveSync 管理。
 
-**禁止**：Agent 调 Hindsight `retain`；静默硬删笔记。
-
-## 会话桶 + 白名单抽取
-
-| 项 | 行为 |
-|----|------|
-| 粒度 | 同一 `session_id` 多轮合并为 **一条** 草稿 |
-| turn-end | 只追加缓冲，不 `push_draft` |
-| finalize | 下次 session-start、空闲默认 1800s（`HINDDIAN_SESSION_IDLE_SEC`）、或换项目；在**后台进程**里跑，宿主的 hook 立即返回 |
-| 失败 | Jev / 服务器暂时不可用 → 缓冲保留，指数退避重试（5min 起，最多 8 次或 7 天后放弃） |
-| 长会话 | 送 Jev 时保留开头 4k + 结尾 8k 字符（结论通常在结尾） |
-| 清理 | 已定稿缓冲（含对话原文）3 天后删除；目录 `~/.config/hinddian/hooks/sessions`（旧 magpie 目录自动迁移） |
-| 传输 | 只走 https（本机 loopback 例外）；未配置 `HINDDIAN_MEMORY_URL` 时 hooks 不缓冲任何内容 |
-| 白名单 | **用户消息 + 最终助手回复**（截断） |
-| 剥掉 | 系统/人设、路由表、MCP/工具 schema、skills 目录、recall 旧记忆正文、工具日志、hook 噪声 |
-| 结构化字段 | 定稿后倾向 `decision` / `lesson` / `preference`（Jev 分类） |
-
-阈值 20 = **会话草稿数**，不是回合碎片数。
-
-## Jev（System One，可选）
-
-**写路径（keep / 是否入库）严格：**
-
-1. 本机 / 隧道：`POST {JEV_BASE_URL}`（默认 `http://127.0.0.1:3425/v1/systemone`）
-2. 可选云端 TypeSafe（`TYPESAFE_API_KEY`）
-3. 都失败 → **本轮暂不写**（无松弛 LLM auto-keep），缓冲留着退避重试
-
-**显式查询**：`recall` 走 Hindsight 或 vault 本地检索。旧 Jev 读侧接口仍可显式调用。
-
-- 任意暴露 System One 的本机网关均可；与 Magpie 产品身份无关
-- API 主机 API 可选经 SSH LocalForward 使用远端 `:3425`（infra，非产品品牌）
-- 仪表盘 / 日志：`source=jev:local|cloud|none`（`jev:magpie` 旧标签归一为 `jev:local`）
-
-用于：项目匹配、本会话是否值得记、类型/项目分类、写入四态辅助。
-
-## MCP：hinddian-memory
-
-| 工具 | 作用 |
-|------|------|
-| `routing_global` / `routing_project` | 路由表 |
-| `recall` | 默认返回 id/title/type/date/score 索引；`format="full"` 保留原摘要；经 Hindsight，失败可本地笔记兜底 |
-| `timeline` | 围绕 anchor_id 返回同项目按 updated 排序的相邻 active 笔记索引 |
-| `get_note` / `list_notes` | 读笔记；get_note 的 id 可为字符串或最多 20 个 id 的数组 |
-| `upsert_note` | 全类型直写：add / update / supersede / obsolete / noop |
-| `suggest_correction` | 与 upsert_note 相同的直写兼容入口 |
-| `push_draft` | **仅 hooks** 会话 finalize 推草稿；Agent 纠正勿用 |
-
-任何宿主 **只挂**本 MCP，不挂原生 Hindsight MCP 给 Agent。
-
-### 两个通道，两把钥匙
-
-| 通道 | 路由 | 凭据 | 能做什么 |
-|------|------|------|----------|
-| Agent | `/mcp`、`/api/memory/*` | `HINDDIAN_MCP_TOKEN` | 读、直写笔记、推草稿、应用修正 |
-| 仪表盘 | `/`、`/api/*` | `AUTH_TOKEN`（≠ MCP token；:8443 mTLS 后由 Caddy 注入） | 批准 / 拒绝修正、批准项目批处理 |
-
-两把钥匙缺一或相同 → 503（fail closed）。批准接口只在仪表盘通道。
-
-`recall`：Hindsight 原样查询，项目 / 类型作 tag 过滤（不拼进查询文本）；Hindsight 不可用时退回 vault 本地 bigram 检索（中文可用）。
-
-### 直接写入政策
-
-| 类型 | 策略 |
-|------|------|
-| `tip` / `preference` / `lesson` | 可直写 `upsert_note` |
-| 新增 / 修改 / 取代 / 作废 `decision` | 与其它类型一样直写；不需要用户批准，旧确认标记不影响路径 |
-| 删除 | **禁止硬删**；用 `supersede` / `obsolete` |
-| Hindsight | **禁止** Agent `retain` |
-
-可选审阅/旧修正队列落盘：vault 主机 `/var/lib/hinddian/agent_corrections/`（`HB_CORRECTIONS`）。
-
-并发：MCP 直写与 vault 主机 batch 共用 `$HB_BASE/vault.lock`（`HINDDIAN_VAULT_LOCK` 可改）。batch 的 LLM 调用在锁外，落盘前在锁内重读 vault 再应用；batch 互斥锁被占时以退出码 75 报 busy，不再静默成功。
-
-格式：Agent 新建/取代必须提供命题标题、项目（tip 除外）及场景/做法/理由；更新可沿用已有字段，软退役只需 id。frontmatter 自动填 type/project/status。重渲染只改受管字段与段落；人在 Obsidian 里加的 frontmatter 键、段落、引用行、悬空链接原样保留。
-
-标题地图：全局项目列表 + routing_project 按 decision/lesson 分组的 id/title/updated。
-compact recall 的 date 沿用 vault updated。
-get_note/list_notes/本地 recall 始终从 vault 文件读；Hindsight 命中也用 vault 校验删除、退役和类型/项目，并在 full 模式取当前正文。
-vault 暂时不可达时 Hindsight 结果标 vault_verified=false。
-
-索引同步：日历 timer 每两分钟（AccuracySec=1s，无随机延迟），MCP 写入成功另由 API 后台 kick
-现有 sync service；人工改删/CLI/批处理靠 timer。正常空闲时最多两分钟开始同步，
-完成还需导出/索引时间；积压与故障看同步状态。gone（含所有非 active）优先 DELETE，再 retain。
-
-## OTLP
-
-记忆主路径是 host hooks + MCP，不是 OTLP。各宿主自行关闭无关遥测即可。
-
-## 组件
-
-| 模块 | 职责 |
-|------|------|
-| `src/hinddian/memory_mcp.py` | Agent 通道：MCP + hook REST |
-| `src/hinddian/api.py` | 仪表盘通道 + 挂载 Agent 通道 |
-| `src/hinddian/notes.py` | 原子笔记 / 标题地图 / 直写 / 可选修正队列 / 草稿 |
-| `src/hinddian/note_format.py` | 笔记文件格式（frontmatter / 段落往返保真）、路径安全、vault 锁、解析缓存；notes.py 与 batch 共用 |
-| `hooks/` | hook 运行时源码；`tools/sync_hooks.py` 生成 plugin / skill 副本 |
-| `src/hinddian/jev.py` | System One 闸门（核心，宿主无关） |
-| `plugins/hinddian/` | Claude / Codex 插件包（**首选安装**） |
-| `classify/hinddian_batch.py` | 草稿批量/增量（vault 主机） |
-| `deploy/api-host/obsidian_hindsight_sync.py` | Obsidian → Hindsight；timer `hinddian-hindsight-sync` |
-| `adapters/magpie/` | **可选** Magpie skill / install / vault 主机 apply_library |
-| `web/` | 仪表盘（图谱、批准、Agent 修正） |
-
-## Agent plugins (Claude / Codex)
-
-- 包：`plugins/hinddian/` — `.claude-plugin/` 与 `.codex-plugin/` 各一份清单；MCP 为本地 stdio 桥 `scripts/mcp_bridge.py`（转发到服务端 `/mcp`）；hooks（SessionStart + Stop）；skills
-- 客户端配置：`scripts/setup.py` 写 `~/.config/hinddian/config.json`（600），hooks 与 MCP 桥共用；环境变量可覆盖
-- 市场清单：`.claude-plugin/marketplace.json`、`.agents/plugins/marketplace.json`
-- Codex 公开目录不接受带 lifecycle hooks 的插件；用 CLI/桌面 + trust hooks
-
-## Magpie adapter（可选）
-
-见 [`adapters/magpie/README.md`](adapters/magpie/README.md)。hook 脚本源码在 `hooks/`，安装器在 `adapters/magpie/skills/hinddian-hooks/`；改完跑 `python tools/sync_hooks.py` 生成各副本；仅 vault 主机 跑 `apply_library.py`。
+见[入库流程](docs/PIPELINE.md)、[目录配置](README.md#路径配置)和[批处理说明](classify/README.md)。

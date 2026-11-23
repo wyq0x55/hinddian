@@ -1,109 +1,40 @@
-# hinddian
+# hinddian · Obsidian 笔记
 
-hinddian 正从 Agent 记忆转向供人回看的 **Obsidian / Markdown 笔记**。目前 hooks 采集会话并交给后台整理，**hinddian-memory MCP** 和 **Hindsight** 索引继续服务已有的显式查询与写入流程。
+采集 Claude Code、Codex 或 Magpie 的会话，提炼成草稿，再按项目批量整理成供人阅读、编辑的 Obsidian 笔记。笔记之间的同步由 Obsidian LiveSync 负责。
 
-**与 Magpie 无关。** Magpie 若仍在用，见可选适配器 [`adapters/magpie/`](adapters/magpie/README.md)。
+## 本机运行
 
-| 层 | 职责 |
-|----|------|
-| Host hooks（Claude / Codex / 可选 Magpie adapter） | 会话桶缓冲 + Jev keep → `push_draft` |
-| hinddian-memory MCP | 路由、recall、直接 `upsert_note` / `suggest_correction` |
-| vault 主机 批处理 | 草稿 → 原子笔记（新项目需仪表盘批准） |
-| Obsidian vault | 人读 SoT |
-| Hindsight bank（`HINDSIGHT_BANK`，默认 `hinddian`） | 索引；`hinddian-hindsight-sync.timer` 对齐 |
+1. 按[宿主插件安装说明](plugins/INSTALL.md)启用 `SessionStart` 和 `Stop` 采集 hooks。Magpie 使用[独立适配器](adapters/magpie/README.md)。
+2. hooks 在新会话启动、旧会话闲置后触发 finalize。Jev 在默认的 `http://127.0.0.1:3425/v1/systemone` 做保留判断，符合条件的会话写成一份草稿。已有远端采集地址时，可用 `HINDDIAN_CAPTURE_MODE=local` 切到本地。
+3. 运行 `python3 classify/hinddian_batch.py run`。它按项目合并待处理草稿、写入笔记库，并把草稿移到 `processed`。定时运行方式见[批处理说明](classify/README.md)。
 
-## 文档地图
+## 路径配置
 
-| 文档 | 内容 |
-|------|------|
-| [`ARCHITECTURE.md`](ARCHITECTURE.md) | 流水线、Jev、会话桶、直写、组件 |
-| [`docs/DASHBOARD.md`](docs/DASHBOARD.md) | 仪表盘：图谱 / 批准项目 / Agent 修正 |
-| [`docs/MEMORY-MCP.md`](docs/MEMORY-MCP.md) | Agent 只挂 hinddian-memory（现行） |
-| [`docs/PIPELINE.md`](docs/PIPELINE.md) | 一轮会话如何进笔记 |
-| [`docs/notes-pivot.md`](docs/notes-pivot.md) | 人读笔记转型方案与迁移步骤 |
-| [`plugins/INSTALL.md`](plugins/INSTALL.md) | Claude Code / Codex 插件市场安装（首选） |
-| [`adapters/magpie/README.md`](adapters/magpie/README.md) | **可选** Magpie 宿主适配器 |
-| [`deploy/api-host/DEPLOY.md`](deploy/api-host/DEPLOY.md) | API 主机 部署与组件 |
-| [`classify/README.md`](classify/README.md) | vault 主机 批处理 / 原子笔记 |
+hooks、batch 和可选仪表盘共用 `~/.config/hinddian/config.json`（支持 `XDG_CONFIG_HOME` 或 `HINDDIAN_CONFIG`）。环境变量优先，同一行内按列出的顺序取值，路径支持 `~`。
 
----
+| JSON 键 | 环境变量 | 默认 |
+| --- | --- | --- |
+| `vault` | `HINDDIAN_VAULT`、`VAULT_ROOT`、`HC_VAULT` | `~/Obsidian/vault` |
+| `drafts_dir` | `HINDDIAN_DRAFTS_DIR`、`HB_DRAFTS` | `~/Obsidian/drafts` |
+| `processed_dir` | `HINDDIAN_PROCESSED_DIR`、`HB_PROCESSED` | 草稿目录的同级 `processed` |
+| `state_dir` | `HINDDIAN_STATE_DIR`、`HB_BASE` | `$XDG_STATE_HOME/hinddian` 或 `~/.local/state/hinddian` |
+| `jev_log` | `HINDDIAN_JEV_LOG` | 状态目录下的 `jev-decisions.jsonl` |
 
-## Agent 插件安装（Claude Code / Codex）— 首选
-
-装插件 → 跑一次 `setup.py` → 新开会话。插件内置本地 MCP 桥，插件配置里不写服务器地址。
-Hooks 在后台处理会话缓冲。用户可显式调用 `/hinddian:recall`、`/hinddian:remember`、`/hinddian:doctor`。
-
-```bash
-# Claude Code
-claude plugin marketplace add wyq0x55/hinddian
-claude plugin install hinddian@hinddian-plugins
-# Codex（启用后 trust 插件 hooks）
-codex plugin marketplace add wyq0x55/hinddian
-codex plugin add hinddian@hinddian-plugins
-
-# 一次性配置 + 自检
-python3 <插件目录>/scripts/setup.py --url https://<host>:8444/hinddian --token <HINDDIAN_MCP_TOKEN>
-# 必须 https + :8444；http://<host>/hinddian（旧 :80）已关闭，会返回 410
-```
-
-细节：[`plugins/INSTALL.md`](plugins/INSTALL.md)。
-
----
-
-## 可选：Magpie 宿主
-
-产品 **不依赖** Magpie。若某台机器仍跑 Magpie，用适配器（WebDAV **不同步** Library Hooks）：
-
-见 [`adapters/magpie/README.md`](adapters/magpie/README.md)。SoT：`adapters/magpie/skills/hinddian-hooks/`。不要在非 vault 主机跑 `apply_library.py`。
-
----
-
-## API 主机 Quick start
-
-```bash
-cp .env.example .env   # HINDSIGHT_API_KEY、HINDDIAN_MCP_TOKEN、AUTH_TOKEN（两者不同）；Jev 用 JEV_BASE_URL
-pip install -e .
-uvicorn hinddian.api:app --host 127.0.0.1 --port 8787
-```
-
-- MCP：`POST http://127.0.0.1:8787/mcp`（Bearer `HINDDIAN_MCP_TOKEN`）；本地开发用 `scripts/run_dev.sh`（未设 token 时自动 `HINDDIAN_ALLOW_NO_AUTH`）
-- 公网：`https://<api-host>:8444/hinddian/mcp`（Caddy TLS，只暴露 Agent 通道）；hooks 基址 env：`HINDDIAN_MEMORY_URL`
-- 仪表盘：`https://<api-host>:8443/`（mTLS；Caddy 注入 `AUTH_TOKEN`）
+兼容旧批处理配置。只设 `HB_BASE` 时，草稿默认读 `$HB_BASE/drafts`。`HINDDIAN_VAULT_LOCK` 可覆盖状态目录下的 `vault.lock`。草稿和已处理目录都在笔记库外。会话缓冲默认位于 `~/.config/hinddian/hooks/sessions`，可由 `HINDDIAN_HOOK_DIR` 指定其他 hooks 数据目录。
 
 ## 开发
 
-```bash
+```sh
 pip install -e '.[dev]'
-pytest                          # 直写 / 路径 / 笔记格式往返 / hooks / API 双通道
-python tools/sync_hooks.py      # 改了 hooks/ 或 src/hinddian/jev.py 后重新生成各副本（CI 用 --check 校验）
+python tools/sync_hooks.py
+python -m pytest
 ```
 
-源码位置：hook 运行时 `hooks/`；Jev `src/hinddian/jev.py`；笔记文件格式 `src/hinddian/note_format.py`（MCP 与 vault 主机 batch 共用）。
-`plugins/hinddian/scripts/`、`skills/hinddian-hooks/`、`adapters/magpie/skills/hinddian-hooks/` 里的脚本是生成物，不要手改。
+修改 `hooks/` 或共享的 finalize、脱敏、Jev 和路径模块后，重新生成 Claude Code、Codex 和 Magpie 的脚本副本。CI 用 `tools/sync_hooks.py --check` 校验。
 
-完整部署：[`deploy/api-host/DEPLOY.md`](deploy/api-host/DEPLOY.md)。
+## 进一步说明
 
----
-
-## 记忆怎么写（摘要）
-
-1. **turn-end**：只抽 **用户话 + 最终助手回复** → 本机会话缓冲（不按回合推草稿）。
-2. **session-start / 空闲约 30 分钟 / 换项目**：Jev keep → 一次 `push_draft`（`session-<id>`）。
-3. **Jev 写路径**：本机 System One（`JEV_BASE_URL`，默认 `127.0.0.1:3425/v1/systemone`）→ 可选云端 TypeSafe → 都失败则**暂不记、退避重试**（不会用松弛 LLM 自动保留）。
-4. **批处理**：新项目草稿满阈值（默认 20 **会话草稿**）→ 仪表盘批准；已批准增量自动；技巧可自动。
-5. **Agent 直写**：`upsert_note` / `suggest_correction` 均直接写入 Obsidian，涵盖所有类型（包括 decision）的新增、修改、取代和作废。仪表盘审批只用于可选审阅及旧队列；禁止 Agent 硬删（用 `supersede`/`obsolete`）和 Hindsight `retain`。
-6. **人在 Obsidian 管记忆**：改正文/frontmatter、软退役或删文件，读取立即以 vault 文件为准。索引每两分钟对齐，MCP 写入另异步 kick sync；正常空闲时最多两分钟开始同步，完成还需索引处理时间，积压/故障看同步状态。
-7. **人读 ↔ Agent 读**：标题即命题，正文分场景/做法/理由；Agent 先看项目列表和类型分组的标题地图（id/updated），按需 get_note 展开。详见 [双可读笔记契约](docs/MEMORY-MCP.md#双可读笔记契约)。
-
-仪表盘：[`docs/DASHBOARD.md`](docs/DASHBOARD.md)。
-
----
-
-## Jev（System One，可选）
-
-- URL：`POST http://127.0.0.1:3425/v1/systemone`（**`JEV_BASE_URL`**；旧别名 `MAGPIE_JEV_URL`）
-- Auth：`Bearer` + **`JEV_API_KEY`**（旧别名 `MAGPIE_GATEWAY_KEY`；默认 token 字符串与部分本机网关约定有关，**不是**产品绑定 Magpie）
-- Model：`JEV_MODEL`（默认 `typesafe/jev-latest`）
-- API 主机 可选：SSH 隧道把远端 System One 映到本机 `:3425`（infra，见 `deploy/api-host`）
-- 可选云端：`TYPESAFE_API_KEY` → `api.typesafe.ai`
-- 写失败策略：**不写**（漏记优于脏记）；日志 `source=jev:local|cloud|none`
+- [架构与边界](ARCHITECTURE.md)
+- [采集、脱敏和来源](docs/PIPELINE.md)
+- [可选的仪表盘](docs/DASHBOARD.md)
+- [可选的 HTTP 采集与运维迁移](deploy/api-host/DEPLOY.md)

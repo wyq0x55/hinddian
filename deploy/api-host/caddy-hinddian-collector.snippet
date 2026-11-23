@@ -1,0 +1,14 @@
+# Optional HTTPS collector. HINDDIAN_MEMORY_URL=https://<host>:8444/hinddian
+# The upstream checks the collector's bearer credential.
+:8444 {
+	tls /etc/caddy/certs/fullchain.pem /etc/caddy/certs/privkey.pem
+	encode gzip
+	@capture path /hinddian/api/health /hinddian/api/memory/finalize /hinddian/api/memory/push_draft /hinddian/api/memory/gates/backend /hinddian/api/memory/jev-backend /hinddian/api/memory/gates/classify_turn /hinddian/api/memory/gates/report
+	handle @capture {
+		uri strip_prefix /hinddian
+		reverse_proxy 127.0.0.1:8787 {
+			header_up -X-Hinddian-Dashboard
+		}
+	}
+	respond 404
+}

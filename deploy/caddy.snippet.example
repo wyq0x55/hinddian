@@ -1,7 +1,6 @@
 # Example Caddy snippet — adapt host/path; do not commit real tokens.
 #
-# Option A: Bearer via forward auth / header check (preferred if you already
-# use the same pattern for Hindsight MCP).
+# Option A: Bearer auth provided by the dashboard API.
 #
 # Option B: basic auth in front of the dashboard.
 

@@ -8,8 +8,11 @@ services:
       - ./data:/app/data
     command: bash -c "pip install -r requirements.txt && ./scripts/run_dev.sh"
     ports:
-      - "8787:8787"
+      - "127.0.0.1:8787:8787"
     environment:
       HINDDIAN_HOST: "0.0.0.0"
       HINDDIAN_PORT: "8787"
       HINDDIAN_ALLOW_NO_AUTH: "true"  # local stub only — never in production
+      HINDDIAN_VAULT: "/app/data/vault"
+      HINDDIAN_DRAFTS_DIR: "/app/data/drafts"
+      HINDDIAN_STATE_DIR: "/app/data/state"
