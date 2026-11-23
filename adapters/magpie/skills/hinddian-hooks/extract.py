@@ -77,6 +77,8 @@ def _last_assistant(messages) -> str:
 
 
 def _transcript(path: Path) -> str:
+    if not path.is_file():
+        raise ValueError("transcript must be a regular file")
     with path.open("rb") as stream:
         size = stream.seek(0, os.SEEK_END)
         start = max(0, size - 2_000_000)

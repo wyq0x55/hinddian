@@ -90,14 +90,18 @@ def _rebuild_hubs(changed_projects=None):
     global_links = ["- [[00-系统/ASKS|ASKS]] — 人→Agent 待办"] if (VAULT / "00-系统/ASKS.md").is_file() else []
     global_links.append(f"- [[技巧/技巧|agent使用技巧]] — {len(tips)} 条")
     entries = []
+    recent_entries = []
     for proj in projects:
         k = sum(1 for n in notes.values() if n["project"] == proj and n["type"] in FOLDER and n["status"] == "active")
         if (VAULT / "项目" / proj / "README.md").is_file():
-            entries.append(f"- [[项目/{proj}/README|{proj}]] — {k} 条决策/经验")
+            line = f"- [[项目/{proj}/README|{proj}]] — {k} 条决策/经验"
+            entries.append(line)
+            if changed_projects is None or proj in changed_projects:
+                recent_entries.append(line)
     others = sorted(p.stem for p in VAULT.glob("*.md") if not p.is_symlink())
     write_hub("00-系统/INDEX", "system/index", "\n".join(idx),
-              {"全局": global_links,
-               "项目": entries, "其他": [f"- [[{o}]]" for o in others]})
+              {"全局": global_links, "项目": entries, "其他": [f"- [[{o}]]" for o in others]},
+              legacy_counts=global_links + recent_entries)
 
 
 def hub_links(text, sections):
@@ -132,15 +136,15 @@ def _hub_section(marker, part, lines, targets):
     return manual + ("" if manual.endswith("\n") else "\n") + block
 
 
-def write_hub(rel, note_id, text, sections):
+def write_hub(rel, note_id, text, sections, *, legacy_counts=()):
     path = allowed(rel)
     if path.is_file():
         old = path.read_text(encoding="utf-8")
         parsed = nf.parse_frontmatter(old)
         if not parsed or parsed[0].get("id") != note_id:
             return
-        if note_id == "system/index" and parsed[0].get("generated") == "true":
-            counts = {line.rsplit(" — ", 1)[0]: line for links in sections.values() for line in links if " — " in line}
+        if legacy_counts and parsed[0].get("generated") == "true":
+            counts = {line.rsplit(" — ", 1)[0]: line for line in legacy_counts if " — " in line}
             pattern = re.compile(r"(?m)^(- \[\[.+?\]\]) — \d+ 条(?:决策/经验)?$")
             body = parsed[2]
             prefix = old[:len(old) - len(body)]
@@ -563,7 +567,12 @@ def organization(*, dry=False):
         raise RuntimeError("vault Git operation failed") from exc
 
 def run_project(project, max_batches):
-    files = drafts_of(project)
+    files = []
+    for file in drafts_of(project):
+        if draft_source(file.read_text(encoding="utf-8")):
+            files.append(file)
+        else:
+            log({"event": "draft_skipped", "project": project, "draft": file.name, "reason": "missing_session_or_commit"})
     for start in range(0, min(len(files), BATCH * max_batches), BATCH):
         result = _process(project, files[start:start + BATCH])
         print(project, json.dumps(result, ensure_ascii=False))

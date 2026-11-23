@@ -235,6 +235,34 @@ def test_batch_holds_drafts_without_commit_and_rejects_unknown_sources(batch, mo
     assert "missing_or_unknown_source" in batch.LOG.read_text()
 
 
+def test_pending_legacy_drafts_do_not_block_eligible_batches(batch, monkeypatch):
+    legacy = put_draft(commit="")
+    modern = legacy.with_stem("z-modern")
+    modern.write_text(legacy.read_text().replace('commit: ""', "commit: abcdef1"))
+    monkeypatch.setattr(batch, "BATCH", 1)
+    monkeypatch.setattr(batch, "RUN_MAX_BATCHES", 1)
+    monkeypatch.setattr(batch, "chat", lambda prompt: '{"ops":[]}')
+    batch.cmd_run()
+    assert legacy.exists() and not modern.exists()
+
+
+def test_batch_leaves_another_projects_legacy_index_count(batch, monkeypatch):
+    other = batch.VAULT / "项目/Other/README.md"
+    other.parent.mkdir(parents=True)
+    other.write_text("# Other\n")
+    index = batch.VAULT / "00-系统/INDEX.md"
+    index.parent.mkdir()
+    entry = "- [[项目/Other/README|Other]] — 71 条决策/经验"
+    index.write_text(f"---\nid: system/index\ngenerated: true\n---\n# INDEX\n\n## 项目\n{entry}\n")
+    monkeypatch.setattr(batch, "chat", lambda prompt: json.dumps({"ops": [
+        {"op": "create", "title": "现场经验", "type": "lesson", "scene": "场景",
+         "practice": "做法", "reason": "理由", "sources": ["S01"]},
+    ]}))
+    batch.process("P", [put_draft()])
+    assert entry in index.read_text()
+    assert "- [[项目/P/README|P]] — 1 条决策/经验" in index.read_text()
+
+
 def test_batch_snapshots_dirty_vault_and_logs_diff_for_all_model_ops(batch, monkeypatch, capsys):
     head = git(batch.VAULT, "rev-parse", "HEAD")
     human = batch.VAULT / "手写.md"
