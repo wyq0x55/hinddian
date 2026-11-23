@@ -16,6 +16,10 @@ sources: []
 updated: 2026-01-01
 reviewer: alice
 generated: true
+负责小组: 工具
+"定制: 标签": [甲, 乙]
+'编辑者''备注': |-
+  手写内容
 ---
 # A
 
@@ -33,6 +37,9 @@ r
 
 ## 我的补充
 人手写的段落，不能丢。
+
+## 相关
+手写说明和手写 [[P/Other|别名]]。
 """
 
 
@@ -46,7 +53,7 @@ def test_block_list_and_unknown_keys_parse(tmp_path):
     n = _parse(tmp_path, HUMAN_NOTE)
     assert n["tags"] == ["alpha", "beta"]
     assert n["_fm"]["reviewer"] == "alice"
-    assert "## 我的补充\n人手写的段落，不能丢。\n" in n["_sections"]
+    assert "## 我的补充\n人手写的段落，不能丢。\n\n" in n["_sections"]
 
 
 def test_render_preserves_human_content(tmp_path):
@@ -57,6 +64,9 @@ def test_render_preserves_human_content(tmp_path):
     out = nf.render(n, notes, today="2026-02-02")
     assert "reviewer: alice" in out
     assert "generated: true" in out  # unchanged value written back verbatim
+    assert "负责小组: 工具" in out and '"定制: 标签": [甲, 乙]' in out
+    assert "'编辑者''备注': |-\n  手写内容" in out
+    assert "## 相关\n手写说明和手写 [[P/Other|别名]]。" in out
     assert "tags:\n  - alpha\n  - beta" in out
     assert "## 我的补充\n人手写的段落，不能丢。" in out
     assert "> 人写的一行引用" in out

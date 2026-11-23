@@ -87,45 +87,77 @@ def _rebuild_hubs():
         pdir = VAULT / "项目" / proj
         mine = [n for n in notes.values() if n["project"] == proj and n["type"] in FOLDER]
         rd = nf.within(VAULT, f"项目/{proj}/README")
-        head = ""
-        if rd.exists():
-            sections = re.split(r"(?m)(?=^## )", rd.read_text(encoding="utf-8"))
-            head = "".join(part for part in sections if part.split("\n", 1)[0].rstrip()
-                           not in ("## 决策", "## 经验", "## 已取代", "## 说明文档"))
-        if not head.strip():
-            head = "\n".join(["---", f"id: proj/{proj}/readme", "type: state", f"project: {proj}", f"tags: [{proj}, hub]",
-                              "status: active", f"updated: {today()}", "---", f"# {proj}", "",
-                              "> 项目枢纽页：当前状态（覆盖写）+ 全部决策/经验链接。上级：[[00-系统/INDEX|INDEX]]", "", "## 当前状态", "（待补）"])
+        head = rd.read_text(encoding="utf-8") if rd.exists() else "\n".join([
+            nf.dump_frontmatter([("id", f"proj/{proj}/readme"), ("type", "state"), ("project", proj),
+                                 ("tags", [proj, "hub"]), ("status", "active"), ("updated", today())]),
+            f"# {proj}", "", "> 上级：[[00-系统/INDEX|INDEX]]", "", "## 当前状态", "（待补）", "",
+        ])
         act = lambda t: sorted([n for n in mine if n["type"] == t and n["status"] == "active"], key=lambda n: n["title"])
         docs = sorted(p.stem for p in pdir.glob("*.md") if p.name != "README.md")
-        out = [head.rstrip(), "", "## 决策", *[f"- {link_of(n)}" for n in act("decision")], "", "## 经验", *[f"- {link_of(n)}" for n in act("lesson")], ""]
-        if docs: out += ["## 说明文档", *[f"- [[项目/{proj}/{d}|{d}]]" for d in docs], ""]
-        write_file(f"项目/{proj}/README", "\n".join(out))
+        sections = {"决策": [f"- {link_of(n)}" for n in act("decision")],
+                    "经验": [f"- {link_of(n)}" for n in act("lesson")],
+                    "说明文档": [f"- [[项目/{proj}/{d}|{d}]]" for d in docs]}
+        out = hub_links(head, sections)
+        if out != head or not rd.exists():
+            write_file(f"项目/{proj}/README", out, create=not rd.exists())
     tips = sorted([n for n in notes.values() if n["type"] == "tip" and n["status"] == "active"], key=lambda n: n["title"])
     th = ["---", "id: topic/agent-usage-tips", "type: hub", "project: global", "tags: [agent使用技巧, hub]", f"updated: {today()}", "---",
-          "# agent使用技巧", "", "> 一条技巧一个文件；本页由 hinddian 生成。上级：[[00-系统/INDEX|INDEX]]", "",
-          *[f"- {link_of(t)} — {t['scene'][:40].replace(chr(10), ' ')}…" for t in tips], ""]
-    write_hub("技巧/技巧", "topic/agent-usage-tips", "\n".join(th))
+          "# agent使用技巧", "", "> 上级：[[00-系统/INDEX|INDEX]]", ""]
+    write_hub("技巧/技巧", "topic/agent-usage-tips", "\n".join(th),
+              {"技巧": [f"- {link_of(t)}" for t in tips]})
     idx = ["---", "id: system/index", "type: hub", f"updated: {today()}", "generated: true", "---", "# 笔记库地图（INDEX）", "",
-           "> 由 hinddian 生成，供阅读和图谱导航。", "",
-           "## 全局", "- [[00-系统/ASKS|ASKS]] — 人→Agent 待办", f"- [[技巧/技巧|agent使用技巧]] — {len(tips)} 条", "", "## 项目"]
+           "## 全局", "- [[00-系统/ASKS|ASKS]] — 人→Agent 待办", ""]
+    entries = []
     for proj in projects:
         k = sum(1 for n in notes.values() if n["project"] == proj and n["type"] in FOLDER and n["status"] == "active")
-        idx.append(f"- [[项目/{proj}/README|{proj}]] — {k} 条决策/经验")
+        entries.append(f"- [[项目/{proj}/README|{proj}]] — {k} 条决策/经验")
     others = sorted(p.stem for p in VAULT.glob("*.md"))
-    idx += ["", "## 其他", *[f"- [[{o}]]" for o in others], "- 旧格式原件：`_归档/`", ""]
-    write_hub("00-系统/INDEX", "system/index", "\n".join(idx))
+    write_hub("00-系统/INDEX", "system/index", "\n".join(idx),
+              {"全局": [f"- [[技巧/技巧|agent使用技巧]] — {len(tips)} 条"],
+               "项目": entries, "其他": [f"- [[{o}]]" for o in others]})
 
 
-def write_hub(rel, note_id, text):
+def hub_links(text, sections):
+    """Keep the existing page byte for byte outside generated link blocks."""
+    marker = re.compile(r"(?m)^<!-- hinddian:links -->\n[\s\S]*?^<!-- /hinddian:links -->\n")
+    parts = re.split(r"(?m)(?=^## )", text)
+    sections = sections.copy()
+    targets = {match[1] for match in nf.WIKI.finditer(marker.sub("", text))}
+    for index, part in enumerate(parts[1:], 1):
+        heading = part.split("\n", 1)[0][3:].strip()
+        if heading in sections:
+            parts[index] = _hub_section(marker, part, sections.pop(heading), targets)
+    for heading, lines in sections.items():
+        section = _hub_section(marker, f"## {heading}\n", lines, targets)
+        if "<!-- hinddian:links -->" in section:
+            prefix = "" if "".join(parts).endswith("\n\n") else "\n"
+            parts.append(prefix + section)
+    return "".join(parts)
+
+
+def _hub_section(marker, part, lines, targets):
+    manual = marker.sub("", part)
+    generated = [line for line in lines if (match := nf.WIKI.search(line)) and match[1] not in targets]
+    if not generated:
+        return manual
+    block = "<!-- hinddian:links -->\n" + "\n".join(generated) + "\n<!-- /hinddian:links -->\n"
+    if found := marker.search(part):
+        return part[:found.start()] + block + part[found.end():]
+    return manual + ("" if manual.endswith("\n") else "\n") + block + "\n"
+
+
+def write_hub(rel, note_id, text, sections):
     path = nf.within(VAULT, rel)
     if path.is_file():
-        parsed = nf.parse_frontmatter(path.read_text(encoding="utf-8"))
+        old = path.read_text(encoding="utf-8")
+        parsed = nf.parse_frontmatter(old)
         if not parsed or parsed[0].get("id") != note_id:
             return
-        write_file(rel, text)
+        new = hub_links(old, sections)
+        if new != old:
+            write_file(rel, new)
     else:
-        write_file(rel, text, create=True)
+        write_file(rel, hub_links(text, sections), create=True)
 
 # ------------------------------------------------------------------ llm
 def chat(prompt: str) -> str:

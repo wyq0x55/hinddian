@@ -184,7 +184,7 @@ def _split_inline(s: str) -> list[str]:
     return [_unquote(x) for x in items if x.strip()]
 
 
-_KEY = re.compile(r"^([A-Za-z0-9_][A-Za-z0-9_\-]*):(?:\s+(.*))?$")
+_KEY = re.compile(r"""^("(?:\\.|[^"\\])*"|'(?:''|[^'])*'|[^\s#?:][^:]*?):(?:[ \t]+(.*))?$""")
 
 
 def parse_frontmatter(text: str) -> tuple[dict[str, Any], dict[str, str], str] | None:
@@ -208,7 +208,7 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], dict[str, str], str] |
         if not m:
             i += 1
             continue
-        key, val = m.group(1), (m.group(2) or "").strip()
+        key, val = _unquote(m.group(1).rstrip()), (m.group(2) or "").strip()
         j = i + 1
         while j < len(lines) and (lines[j].startswith((" ", "\t", "-")) or not lines[j].strip()) and not _KEY.match(lines[j]):
             j += 1
@@ -326,6 +326,7 @@ def parse_note(p: pathlib.Path, vault: pathlib.Path, *, text: str | None = None)
         "_raw": raw,
         "_preamble": "\n".join(pre).strip("\n").split("\n") if any(line.strip() for line in pre) else [],
         "_sections": [markdown for h, _, markdown in sections if h not in FIELD_SECTIONS and h != "相关"],
+        "_related_body": "".join(markdown for h, _, markdown in sections if h == "相关"),
     }
     for h, k in FIELD_SECTIONS.items():
         n[k] = secd.get(h, "")
@@ -403,9 +404,14 @@ def render(n: dict, notes: dict[str, dict], *, today: str) -> str:
     if sections := n.get("_sections"):
         text += "\n" + "".join(sections)
     rel = _links(n.get("related") or [], notes)
-    if rel:
+    related_body = n.get("_related_body", "")
+    if related_body or rel:
         separator = "" if text.endswith("\n\n") else "\n" if text.endswith("\n") else "\n\n"
-        text += separator + "## 相关\n" + "".join(f"- {link}\n" for link in rel)
+        text += separator + (related_body or "## 相关\n")
+        existing = {link_target(link[0]) for link in WIKI.finditer(related_body)}
+        additions = [link for link in rel if link_target(link) not in existing]
+        if additions:
+            text += ("" if text.endswith("\n") else "\n") + "".join(f"- {link}\n" for link in additions)
     return text
 
 

@@ -73,10 +73,18 @@ def test_batch_apply_uses_shared_format(batch, monkeypatch):
     assert legacy in text and banner in text
     assert batch.load_notes()[first["id"]]["status"] == "active"
     hub = batch.VAULT / "项目/P/README.md"
-    hub.write_text("# P\n\n## 决策\nold links\n\n## 已取代\nlegacy links\n\n## 手写补充\n请保留\n")
+    hub.write_text("# P\n\n## 决策\nold links\n\n## 经验\n先读现场记录。  \n\n"
+                   "## 已取代\nlegacy links\n\n## 手写补充\n请保留\n")
     batch.rebuild_hubs()
     assert legacy in path.read_text() and banner in path.read_text()
-    assert "## 已取代" not in hub.read_text() and "## 手写补充\n请保留" in hub.read_text()
+    hub_text = hub.read_text()
+    assert "## 已取代\nlegacy links" in hub_text and "## 手写补充\n请保留" in hub_text
+    assert "## 经验\n先读现场记录。  \n" in hub_text and "[[项目/P/经验/A|A]]" in hub_text
+    index = batch.VAULT / "00-系统/INDEX.md"
+    index.write_text(index.read_text().replace("## 全局\n", "## 全局\n手写导航。  \n"))
+    index_text = index.read_text()
+    batch.rebuild_hubs()
+    assert hub.read_text() == hub_text and index.read_text() == index_text
     assert not draft.exists() and (batch.PROCESSED / "P" / draft.name).is_file()
 
 
