@@ -10,7 +10,8 @@ import argparse, contextlib, datetime as dt, hashlib, json, os, pathlib, re, sub
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from hinddian import draft_store, note_format as nf, paths  # noqa: E402
-from organizer_guard import diff_stat, has_source, snapshot, source_ref, writable_path  # noqa: E402
+from organizer_guard import (check_regular_file, diff_stat, external_path, has_source, no_symlinks,
+                             open_ledger, snapshot, source_ref, writable_path)  # noqa: E402
 
 VAULT = paths.vault_dir()
 BASE = paths.state_dir()
@@ -28,8 +29,8 @@ OWNER = os.environ.get("HC_OWNER")
 def today(): return dt.date.today().isoformat()
 def now(): return dt.datetime.now().astimezone().isoformat(timespec="seconds")
 def log(ev):
-    BASE.mkdir(parents=True, exist_ok=True)
-    with open(LOG, "a", encoding="utf-8") as f: f.write(json.dumps({"at": now(), **ev}, ensure_ascii=False) + "\n")
+    with open_ledger(VAULT, BASE, LOG) as stream:
+        stream.write(json.dumps({"at": now(), **ev}, ensure_ascii=False) + "\n")
 safe, slugify, link_of = nf.safe_title, nf.slugify, nf.link_of
 
 # ------------------------------------------------------------------ notes
@@ -279,9 +280,8 @@ def _process(project: str, files: list[pathlib.Path], dry=False):
             and (n["type"] == "tip" or (not tips_only and n["project"] == project))]
     idx, chunks, snapshots = {}, [], {}
     for i, f in enumerate(files, 1):
-        paths.check_draft_root(f, VAULT)
-        if f.is_symlink() or f.parent.is_symlink():
-            raise nf.UnsafePath("draft file must not use a symlink")
+        external_path(VAULT, f)
+        check_regular_file(f)
         original = f.read_bytes()
         text = original.decode("utf-8")
         source = draft_source(text)
@@ -310,6 +310,9 @@ def _process(project: str, files: list[pathlib.Path], dry=False):
         except (ValueError, KeyError) as e:
             if attempt == 2: raise RuntimeError(f"model output unparseable after 3 tries: {e}")
     with nf.vault_lock(timeout=300):
+        for source in snapshots:
+            external_path(VAULT, source)
+            check_regular_file(source)
         if any(f.read_bytes() != original for f, original in snapshots.items()):
             raise RuntimeError("a draft changed during the model call; retry with the latest drafts")
         return _apply(project, list(snapshots), data, idx, dry, before=notes)
@@ -322,7 +325,7 @@ def validate_project(project):
 
 def check_draft_paths():
     for root in (DRAFTS, PROCESSED):
-        paths.check_draft_root(root, VAULT)
+        external_path(VAULT, root)
     pending, processed = DRAFTS.resolve(), PROCESSED.resolve()
     if pending.is_relative_to(processed) or processed.is_relative_to(pending):
         raise ValueError("drafts and processed must be separate directories")
@@ -344,10 +347,8 @@ def _apply(project, files, data, idx, dry, *, before=None):
     destinations = []
     if not dry:
         for source in files:
-            destination = nf.within(PROCESSED, f"{project}/{source.name.removesuffix('.md')}")
-            paths.check_draft_root(destination, VAULT)
-            if (PROCESSED / project).is_symlink() or (PROCESSED / project / source.name).is_symlink():
-                raise nf.UnsafePath("processed path must not use a symlink")
+            destination = external_path(VAULT, PROCESSED / project / source.name)
+            check_regular_file(destination)
             destinations.append((source, destination))
     notes = load_notes()
     tips_only = project == UNKNOWN
@@ -523,6 +524,10 @@ def prepare_update(note):
 
 
 def archive(source, destination):
+    external_path(VAULT, source)
+    check_regular_file(source)
+    external_path(VAULT, destination)
+    check_regular_file(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     data = source.read_bytes()
     if destination.exists():
@@ -531,8 +536,8 @@ def archive(source, destination):
             return
         digest = hashlib.sha256(data).hexdigest()
         destination = destination.with_stem(f"{destination.stem}-{digest}")
-        if destination.is_symlink():
-            raise nf.UnsafePath("processed archive must not use a symlink")
+        external_path(VAULT, destination)
+        check_regular_file(destination)
         if destination.exists():
             if destination.read_bytes() != data:
                 raise FileExistsError("processed archive name collision")
@@ -550,8 +555,12 @@ def drafts_of(project, d=None):
 
 @contextlib.contextmanager
 def organization(*, dry=False):
-    paths.check_draft_root(BASE, VAULT)
-    paths.check_draft_root(nf.default_lock_path(), VAULT)
+    no_symlinks(VAULT)
+    no_symlinks(VAULT / ".git")
+    for path in (BASE / "batch.lock", nf.default_lock_path()):
+        check_regular_file(external_path(VAULT, path), private=True)
+    with open_ledger(VAULT, BASE, LOG):
+        pass
     try:
         with nf.vault_lock(BASE / "batch.lock", timeout=0):
             with nf.vault_lock():
@@ -561,7 +570,7 @@ def organization(*, dry=False):
                 yield
             finally:
                 with nf.vault_lock():
-                    summary = diff_stat(VAULT, BASE, baseline)
+                    summary = diff_stat(VAULT, external_path(VAULT, BASE), baseline)
                 log({"event": "diff", "baseline": baseline, "stat": summary})
                 print(f"Git baseline {baseline}\n{summary or 'No vault changes.'}")
     except nf.VaultBusy:

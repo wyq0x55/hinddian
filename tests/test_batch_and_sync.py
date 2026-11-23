@@ -220,6 +220,50 @@ def test_write_allowlist_refuses_external_and_in_vault_symlink_targets(batch, mo
     assert "update_target_outside_allowlist" in batch.LOG.read_text()
 
 
+@pytest.mark.parametrize("destination", ["in-vault", "outside", "hardlink"])
+def test_batch_rejects_redirected_ledger_before_snapshot(batch, monkeypatch, tmp_path, destination):
+    protected = (tmp_path / "outside.md" if destination == "outside" else batch.VAULT / "00-系统/手写.md")
+    protected.parent.mkdir(parents=True, exist_ok=True)
+    protected.write_text("白名单外的手写正文\n")
+    batch.BASE.mkdir(exist_ok=True)
+    if destination == "hardlink":
+        batch.LOG.hardlink_to(protected)
+    else:
+        batch.LOG.symlink_to(protected)
+    original = git(batch.VAULT, "rev-parse", "HEAD")
+    monkeypatch.setattr(batch, "chat", lambda prompt: pytest.fail("unsafe ledger reached model"))
+    draft = put_draft()
+    with pytest.raises(nf.UnsafePath):
+        batch.process("P", [draft])
+    assert protected.read_text() == "白名单外的手写正文\n" and draft.exists()
+    assert git(batch.VAULT, "rev-parse", "HEAD") == original
+
+
+@pytest.mark.parametrize("directory", ["state", "processed"])
+def test_batch_rejects_symlink_in_configured_write_root(batch, monkeypatch, tmp_path, directory):
+    target = tmp_path / "outside"
+    target.mkdir()
+    alias = tmp_path / "aliased-parent"
+    alias.symlink_to(target, target_is_directory=True)
+    if directory == "state":
+        monkeypatch.setattr(batch, "BASE", alias / "state")
+        monkeypatch.setattr(batch, "LOG", batch.BASE / "batch-ledger.jsonl")
+    else:
+        monkeypatch.setattr(batch, "PROCESSED", alias / "processed")
+    monkeypatch.setattr(batch, "chat", lambda prompt: pytest.fail("unsafe root reached model"))
+    draft = put_draft()
+    with pytest.raises(nf.UnsafePath):
+        batch.process("P", [draft])
+    assert draft.exists() and not list(target.iterdir())
+
+
+def test_legacy_project_state_entry_cannot_run(batch):
+    script = ROOT / "tools/project_state.py"
+    result = subprocess.run([sys.executable, str(script), "P"], capture_output=True, text=True, timeout=3)
+    assert result.returncode == 2 and "can't open file" in result.stderr
+    assert not script.exists() and not list(batch.VAULT.rglob("*.md"))
+
+
 def test_batch_holds_drafts_without_commit_and_rejects_unknown_sources(batch, monkeypatch):
     legacy = put_draft(commit="")
     monkeypatch.setattr(batch, "chat", lambda prompt: pytest.fail("unattributed draft reached model"))
