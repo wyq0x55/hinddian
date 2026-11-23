@@ -129,7 +129,7 @@ def _split_inline(s: str) -> list[str]:
                 esc = True
             elif ch == quote:
                 quote = None
-        elif ch in "\"'":
+        elif ch in "\"'" and not cur.strip():
             quote = ch
             cur += ch
         elif ch == "[":
@@ -192,13 +192,13 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], dict[str, str], str] |
         key = _unquote(m.group(1).rstrip())
         val = yaml_comment(m.group(2) or "")[0].strip()
         j = i + 1
-        while j < len(lines) and (lines[j].startswith((" ", "\t", "-")) or not lines[j].strip()) and not _KEY.match(lines[j]):
+        while j < len(lines) and (lines[j].startswith((" ", "\t", "-", "#")) or not lines[j].strip()):
             j += 1
         while j > i + 1 and not lines[j - 1].strip():
             j -= 1
         block = lines[i:j]
         raw[key] = "\n".join(block)
-        cont = [x for x in block[1:] if x.strip()]
+        cont = [x for x in block[1:] if yaml_comment(x)[0].strip()]
         if not val and cont and all(x.lstrip().startswith("- ") or x.strip() == "-" for x in cont):
             fm[key] = [_unquote(yaml_comment(x.lstrip()[1:])[0]) for x in cont if x.lstrip()[1:].strip()]
         elif cont:
@@ -211,7 +211,7 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], dict[str, str], str] |
     return fm, raw, body
 
 
-_PLAIN = re.compile(r"^[^\s\-?:,\[\]{}#&*!|>'\"%@`][^:#\n]*$")
+_PLAIN = re.compile(r"^[^\s\-?:,\[\]{}#&*!|>'\"%@`][^:#,\[\]{}\x00-\x1f\x7f]*$")
 _RESERVED = {"true", "false", "null", "yes", "no", "on", "off", "~"}
 
 

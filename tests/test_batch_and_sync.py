@@ -263,6 +263,46 @@ def test_batch_leaves_another_projects_legacy_index_count(batch, monkeypatch):
     assert "- [[项目/P/README|P]] — 1 条决策/经验" in index.read_text()
 
 
+def test_batch_rebuild_preserves_manual_lines_inside_generated_block(batch, monkeypatch):
+    hub = batch.VAULT / "项目/P/README.md"
+    hub.parent.mkdir(parents=True)
+    manual = "- [[手工链接|手记链接]] — 手工注释。\n手填段落应保留。\n<!-- 手工评论 -->\n- [[裸手工链接]]\n"
+    stale = "- [[旧自动链接]] <!-- hinddian:generated -->\n"
+    hub.write_text(f"# P\n\n## 经验\n手记保留在块外。\n<!-- hinddian:links -->\n{manual}{stale}"
+                   "<!-- /hinddian:links -->\n")
+    monkeypatch.setattr(batch, "chat", lambda prompt: json.dumps({"ops": [
+        {"op": "create", "title": "先备份", "type": "lesson", "scene": "场景",
+         "practice": "做法", "reason": "理由", "sources": ["S01"]},
+    ]}))
+    batch.process("P", [put_draft()])
+    result = hub.read_text()
+    assert "手记保留在块外。\n<!-- hinddian:links -->\n" + manual in result
+    assert "[[项目/P/经验/先备份|先备份]]" in result and stale not in result
+    batch.rebuild_hubs()
+    assert hub.read_text() == result
+
+
+def test_batch_update_keeps_commented_yaml_list_and_original_source_id(batch, monkeypatch):
+    note = batch.VAULT / "项目/P/经验/独立手改.md"
+    note.parent.mkdir(parents=True)
+    note.write_text("---\nid: manual\nproject: P\ntype: lesson\ntags:\n# 手写列表说明\n"
+                    "  - handwritten # 行尾说明\nsources: [origin@abcdef1]\n# 来源说明\n"
+                    "---\n# 独立手改\n\n## 理由\n手写说明\n")
+    draft = put_draft()
+    draft.write_text(draft.read_text().replace("session_id: sess-1", "session_id: alpha,beta"))
+    monkeypatch.setattr(batch, "chat", lambda prompt: json.dumps({"ops": [
+        {"op": "update", "id": "manual", "tags": ["new"], "reason": "新证据", "sources": ["S01"]},
+    ]}))
+    batch.process("P", [draft])
+    result = note.read_text()
+    assert "tags:\n# 手写列表说明\n  - handwritten # 行尾说明\n  - new\n" in result
+    assert 'sources: [origin@abcdef1, "alpha,beta@abcdef1"]\n# 来源说明\n' in result
+    parsed = batch.load_notes()["manual"]
+    assert parsed["tags"] == ["handwritten", "new"]
+    assert parsed["sources"] == ["origin@abcdef1", "alpha,beta@abcdef1"]
+    assert parsed["reason"] == "手写说明\n\n新证据"
+
+
 def test_batch_snapshots_dirty_vault_and_logs_diff_for_all_model_ops(batch, monkeypatch, capsys):
     head = git(batch.VAULT, "rev-parse", "HEAD")
     human = batch.VAULT / "手写.md"

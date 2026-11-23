@@ -106,34 +106,39 @@ def _rebuild_hubs(changed_projects=None):
 
 def hub_links(text, sections):
     """Keep the existing page byte for byte outside generated link blocks."""
-    marker = re.compile(r"(?m)^<!-- hinddian:links -->\n[\s\S]*?^<!-- /hinddian:links -->\n")
+    marker = re.compile(r"(?m)^<!-- hinddian:links -->\n(.*?)^<!-- /hinddian:links -->(?:\n|$)", re.S)
+    owned = re.compile(r"^- \[\[[^\]]+\]\](?: — \d+ 条(?:决策/经验)?| — 人→Agent 待办)? <!-- hinddian:generated -->$")
+    without_generated = lambda match: "\n".join(line for line in match[1].split("\n") if not owned.fullmatch(line))
     parsed = nf.parse_frontmatter(text)
     body = parsed[2] if parsed else text
     front = text[:len(text) - len(body)]
     parts = nf.section_parts(body)
     sections = sections.copy()
-    targets = {match[1] for match in nf.WIKI.finditer(marker.sub("", text))}
+    targets = {match[1] for match in nf.WIKI.finditer(marker.sub(without_generated, text))}
     for index, part in enumerate(parts[1:], 1):
         heading = part.split("\n", 1)[0][3:].strip()
         if heading in sections:
-            parts[index] = _hub_section(marker, part, sections.pop(heading), targets)
+            parts[index] = _hub_section(marker, without_generated, part, sections.pop(heading), targets)
     for heading, lines in sections.items():
-        section = _hub_section(marker, f"## {heading}\n", lines, targets)
+        section = _hub_section(marker, without_generated, f"## {heading}\n", lines, targets)
         if "<!-- hinddian:links -->" in section:
             prefix = "" if "".join(parts).endswith("\n\n") else "\n"
             parts.append(prefix + section)
     return front + "".join(parts)
 
 
-def _hub_section(marker, part, lines, targets):
-    manual = marker.sub("", part)
-    generated = [line for line in lines if (match := nf.WIKI.search(line)) and match[1] not in targets]
-    if not generated:
-        return manual
-    block = "<!-- hinddian:links -->\n" + "\n".join(generated) + "\n<!-- /hinddian:links -->\n"
+def _hub_section(marker, without_generated, part, lines, targets):
+    generated = [line + " <!-- hinddian:generated -->" for line in lines
+                 if (match := nf.WIKI.search(line)) and match[1] not in targets]
     if found := marker.search(part):
+        manual = without_generated(found)
+        content = manual + "".join(line + "\n" for line in generated)
+        block = "<!-- hinddian:links -->\n" + content + "<!-- /hinddian:links -->\n" if content else ""
         return part[:found.start()] + block + part[found.end():]
-    return manual + ("" if manual.endswith("\n") else "\n") + block
+    if not generated:
+        return part
+    block = "<!-- hinddian:links -->\n" + "\n".join(generated) + "\n<!-- /hinddian:links -->\n"
+    return part + ("" if part.endswith("\n") else "\n") + block
 
 
 def write_hub(rel, note_id, text, sections, *, legacy_counts=()):
@@ -201,12 +206,12 @@ def extend_frontmatter(key, raw, previous, values):
     value, comment = nf.yaml_comment(header)
     if isinstance(previous, list) and values[:len(previous)] == previous:
         additions = values[len(previous):]
-        if sep and (item := re.match(r"([ \t]*)- ", body)):
+        if sep and (item := re.search(r"(?m)^([ \t]*)-(?:[ \t]|$)", body)):
             return raw + "".join(f"\n{item[1]}- {nf.dump_value(key, entry).split(': ', 1)[1]}" for entry in additions)
         if value.endswith("]"):
             tail = nf.dump_value(key, additions).split("[", 1)[1]
-            return value[:-1] + (", " if previous else "") + tail + comment
-    return nf.dump_value(key, values) + comment
+            return value[:-1] + (", " if previous else "") + tail + comment + sep + body
+    return nf.dump_value(key, values) + comment + sep + body
 
 
 # ------------------------------------------------------------------ llm
