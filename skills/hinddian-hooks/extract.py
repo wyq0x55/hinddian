@@ -280,7 +280,7 @@ def parse_hook_payload(stdin_text: str = "", env: dict | None = None, *, include
         or ""
     )
     payload = {
-        "session_id": str(session_id or "").strip() or None,
+        "session_id": str(session_id) if str(session_id or "").strip() else None,
         "cwd": str(cwd).strip(),
         "turn_text": "",
         "raw_data": data,

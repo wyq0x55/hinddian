@@ -52,7 +52,7 @@ def sessions_dir() -> Path:
 
 def stable_session_id(explicit: str | None, cwd: str = "", seed: str = "") -> str:
     if explicit and str(explicit).strip():
-        return str(explicit).strip()[:120]
+        return str(explicit)
     base = (cwd or "") + "|" + (seed or "")[:200]
     if not base.strip("|"):
         base = f"anon-{int(time.time() // 3600)}"
@@ -65,23 +65,35 @@ def _path(sid: str) -> Path:
 
 def side_file(sid: str, kind: str) -> Path:
     """Per-session file next to the buffer: <sid>.json (buffer), <sid>.recalled.json, <sid>.project."""
+    digest = hashlib.sha256(sid.encode()).hexdigest()
+    return sessions_dir() / f"{digest}.{kind}"
+
+
+def _legacy_path(sid: str) -> Path:
     safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in sid)[:100]
-    return sessions_dir() / f"{safe}.{kind}"
+    return sessions_dir() / f"{safe}.json"
 
 
 def load(sid: str) -> dict[str, Any] | None:
-    p = _path(sid)
-    if not p.is_file():
-        return None
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
+    for path in (_path(sid), _legacy_path(sid)):
+        try:
+            buf = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(buf, dict) and buf.get("session_id") == sid:
+            return buf
+    return None
 
 
 def save(buf: dict[str, Any]) -> Path:
-    p = _path(buf["session_id"])
+    sid = buf["session_id"]
+    p = _path(sid)
     write_atomic(p, json.dumps(buf, ensure_ascii=False, indent=2) + "\n")
+    legacy = _legacy_path(sid)
+    if legacy != p:
+        with contextlib.suppress(OSError, ValueError, AttributeError):
+            if json.loads(legacy.read_text(encoding="utf-8")).get("session_id") == sid:
+                legacy.unlink()
     return p
 
 
@@ -136,7 +148,8 @@ def list_open() -> list[dict[str, Any]]:
             b = json.loads(p.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        if isinstance(b, dict) and not b.get("finalized") and b.get("turns"):
+        if (isinstance(b, dict) and isinstance(sid := b.get("session_id"), str)
+                and not b.get("finalized") and b.get("turns") and (p == _path(sid) or not _path(sid).exists())):
             out.append(b)
     return out
 

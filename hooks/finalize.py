@@ -62,7 +62,7 @@ def payload(buf: dict, *, reason: str) -> dict:
     if len(texts) > session_finalize.MAX_TURNS or sum(map(len, texts)) > session_finalize.MAX_TOTAL_CHARS:
         texts = [session_finalize.clip("\n\n---\n\n".join(texts))]
     return {
-        "session_id": str(buf.get("session_id") or "")[:128],
+        "session_id": str(buf.get("session_id") or ""),
         "project": str(buf.get("project") or "")[:128] or None,
         "cwd": _base(cwd),
         "repo": root.name[:128] if root else None,

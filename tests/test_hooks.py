@@ -110,6 +110,21 @@ def test_claim_is_exclusive(hooks):
             assert a is True and b is False
 
 
+@pytest.mark.parametrize("ids", [("origin/a", "origin?a"), ("a" * 150 + "/", "a" * 150 + "?")])
+def test_similar_session_ids_keep_separate_buffers(hooks, ids):
+    state = hooks["session_buf"]
+    state._legacy_path(ids[0]).write_text(json.dumps({
+        "session_id": ids[0], "turns": [{"text": "legacy first"}],
+    }))
+    for sid, text in zip(ids, ("first", "second")):
+        state.append_turn(session_id=state.stable_session_id(sid), turn_text=text)
+    assert state._path(ids[0]) != state._path(ids[1])
+    assert [[turn["text"] for turn in state.load(sid)["turns"]] for sid in ids] == [
+        ["legacy first", "first"], ["second"],
+    ]
+    assert sorted(entry["session_id"] for entry in state.list_open()) == sorted(ids)
+
+
 def test_finalize_keeps_a_turn_that_arrives_during_the_model_call(hooks, monkeypatch):
     buffer, finalize = hooks["session_buf"], hooks["finalize"]
     buffer.append_turn(session_id="active", turn_text="original")

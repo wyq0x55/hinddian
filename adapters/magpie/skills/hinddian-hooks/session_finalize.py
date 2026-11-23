@@ -44,8 +44,8 @@ def parse(args: dict) -> dict:
     """Validate the hook payload. Only turn text (already whitelisted by the hook) is accepted."""
     if not isinstance(args, dict):
         raise FinalizeError("object expected")
-    sid = _s(args.get("session_id"), 128)
-    if not sid:
+    sid = args.get("session_id")
+    if not isinstance(sid, str) or not sid.strip():
         raise FinalizeError("session_id required")
     turns = args.get("turns")
     if not isinstance(turns, list):
