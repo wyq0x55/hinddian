@@ -5,7 +5,7 @@
 The holdout tree is reserved for manual comparisons. 通用-未定 only produces tips.
 """
 from __future__ import annotations
-import argparse, datetime as dt, fcntl, json, os, pathlib, re, shutil, sys, urllib.request
+import argparse, contextlib, datetime as dt, json, os, pathlib, re, shutil, sys, urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -380,13 +380,14 @@ def drafts_of(project, d=None):
     directory = pathlib.Path(d).expanduser()
     return sorted(path for path in directory.glob("*.md") if path.is_file() and not path.is_symlink())
 
-class Lock:
-    def __enter__(self):
-        BASE.mkdir(parents=True, exist_ok=True); self.f = open(BASE / "batch.lock", "w")
-        try: fcntl.flock(self.f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            print("busy: another batch run holds batch.lock", file=sys.stderr); sys.exit(75)  # EX_TEMPFAIL
-    def __exit__(self, *a): self.f.close()
+@contextlib.contextmanager
+def Lock():
+    try:
+        with nf.vault_lock(BASE / "batch.lock", timeout=0):
+            yield
+    except nf.VaultBusy:
+        print("busy: another batch run holds a write lock", file=sys.stderr)
+        sys.exit(75)
 
 def run_project(project, max_batches):
     k = 0

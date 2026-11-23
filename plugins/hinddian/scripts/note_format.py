@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import errno
 import hashlib
 import json
 import os
@@ -27,10 +28,10 @@ if __package__:
 else:
     import paths
 
-try:
+if os.name == "nt":
+    import msvcrt
+else:
     import fcntl
-except ImportError:  # pragma: no cover — Windows dev boxes; vault writes only run on the vault host
-    fcntl = None  # type: ignore[assignment]
 
 SKIP_DIRS = (".obsidian", "_归档", ".git", ".trash", "_模板")
 FOLDER = {"decision": "决策", "lesson": "经验"}
@@ -517,36 +518,41 @@ def default_lock_path() -> pathlib.Path:
 @contextlib.contextmanager
 def vault_lock(path: pathlib.Path | None = None, timeout: float = 60.0) -> Iterator[None]:
     """Exclusive, re-entrant (per thread) lock around a vault read-modify-write."""
-    depth = getattr(_tls, "depth", 0)
-    if depth:
-        _tls.depth = depth + 1
-        try:
-            yield
-        finally:
-            _tls.depth -= 1
+    path = (path or default_lock_path()).resolve()
+    held = getattr(_tls, "held", set())
+    if path in held:
+        yield
         return
-    path = path or default_lock_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     deadline = time.monotonic() + timeout
     if not _proc_lock.acquire(timeout=timeout):
         raise VaultBusy("vault busy (in-process)")
     try:
-        with open(path, "a") as fh:
-            if fcntl is not None:
-                while True:
-                    try:
+        with path.open("a+b") as fh:
+            fh.seek(0)
+            while True:
+                try:
+                    if os.name == "nt":
+                        msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                    else:
                         fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                        break
-                    except BlockingIOError:
-                        if time.monotonic() > deadline:
-                            raise VaultBusy(f"vault busy: {path}") from None
-                        time.sleep(0.1)
-            _tls.depth = 1
+                    break
+                except OSError as exc:
+                    if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                        raise
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise VaultBusy(f"vault busy: {path}") from None
+                    time.sleep(min(0.1, remaining))
+            _tls.held = held
+            held.add(path)
             try:
                 yield
             finally:
-                _tls.depth = 0
-                if fcntl is not None:
+                held.remove(path)
+                if os.name == "nt":
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
                     fcntl.flock(fh, fcntl.LOCK_UN)
     finally:
         _proc_lock.release()

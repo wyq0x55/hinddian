@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import subprocess
+import sys
+from pathlib import Path
+
 from hinddian import note_format as nf
 
 HUMAN_NOTE = """---
@@ -119,3 +123,24 @@ def test_redact_strips_private_blocks():
     assert nf.redact("a <private>secret</private> b <private>tail") == "a [private] b [private]"
     assert nf.redact("a <PRIVATE>x <private>y</private> outer</PRIVATE> z") == "a [private] z"
     assert nf.redact("a <private>x <private>y</private> outer") == "a [private]"
+
+
+def test_write_lock_is_exclusive_across_processes(tmp_path):
+    root = Path(nf.__file__).resolve().parents[1]
+    script = """
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from hinddian.note_format import VaultBusy, vault_lock
+try:
+    with vault_lock(Path(sys.argv[2]), timeout=0):
+        pass
+except VaultBusy:
+    sys.exit(75)
+"""
+    lock = tmp_path / "first.lock"
+    command = [sys.executable, "-c", script, str(root), str(lock)]
+    with nf.vault_lock(lock, timeout=0), nf.vault_lock(tmp_path / "second.lock", timeout=0):
+        with nf.vault_lock(lock, timeout=0):
+            assert subprocess.run(command, timeout=3).returncode == 75
+    assert subprocess.run(command, timeout=3).returncode == 0
