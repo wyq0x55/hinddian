@@ -217,6 +217,7 @@ def test_stop_keeps_distinct_message_ids(manifest, shape, hooks, tmp_path):
     "**实测日志附录**\n", "**实测数据附录：原始记录**\n",
     "**【推断配置差异附录Ｂ：回退记录】**\n",
     "**实测日志附录A**　", "**实测日志附录A**：",
+    "**实测文件来源统计附录A** ",
 ])
 def test_stop_excludes_appendix(manifest, hooks, tmp_path, heading):
     stop = commands(manifest)["Stop"]
@@ -231,6 +232,7 @@ def test_stop_excludes_appendix(manifest, hooks, tmp_path, heading):
     pytest.param("**实测日志附录A**：", id="colon"),
     pytest.param("**实测日志附录A**\n", id="standalone"),
     pytest.param("**实测数据源自定义配置附录A** ", id="source-like-topic"),
+    pytest.param("**实测文件来源统计附录A** ", id="document-like-topic"),
 ])
 def test_stop_skips_empty_verification_before_appendix(manifest, hooks, tmp_path, heading):
     reply = REPLY.replace("通过", f"\n{heading}环境清单，供追溯。")
@@ -280,6 +282,34 @@ def test_stop_keeps_bold_evidence_in_closing(manifest, verification, hooks, tmp_
     stop = commands(manifest)["Stop"]
     reply = REPLY.replace("通过", "\n" + verification) + "**其他**　无关附录\n附录第二行\n"
     run(stop, session_id="s", project="P", last_assistant_message=reply)
+    draft, = (tmp_path / "drafts/P").glob("*.md")
+    assert draft.read_text().endswith(f"## 验证\n{verification}\n")
+
+
+@pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
+@pytest.mark.parametrize("label", [
+    "实测日志来自上述 的文档附录 A",
+    "实测日志来自上述的 文档附录 A",
+    "实测日志来自上述\u3000的文档附录 A",
+    "实测日志来自前述 的 报告附录 A",
+    "实测日志来自上述的文件附录 A",
+    "实测日志来自这本报告附录 A",
+    "实测数据取自那本报告附录 A",
+    "实测日志来自这次的报告附录 A",
+    "实测日志来自该次的报告附录 A",
+    "实测日志来自上述附录 A",
+    "实测数据取自前述附录 A",
+    "实测结果源自上述的附录 A",
+    "实测数据取自于附录 A",
+    "实测结果来源于本报告附录 A",
+    "实测日志见本报告附录 A",
+    "实测日志见上述附录 A",
+    "实测日志来源于　前述 的 文件中 的附录A",
+])
+def test_stop_keeps_appendix_reference_before_appendix(manifest, label, hooks, tmp_path):
+    verification = f"**{label}** 构建通过，退出码为 0。"
+    reply = REPLY.replace("通过", verification) + "\n**实测日志附录A：环境清单**\n原始记录\n"
+    run(commands(manifest)["Stop"], session_id="s", project="P", last_assistant_message=reply)
     draft, = (tmp_path / "drafts/P").glob("*.md")
     assert draft.read_text().endswith(f"## 验证\n{verification}\n")
 

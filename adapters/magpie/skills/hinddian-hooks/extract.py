@@ -22,14 +22,18 @@ _APPENDIX_SUFFIX = re.compile(
     r"(?:[ \t\u3000]*(?:[A-Za-zＡ-Ｚａ-ｚ]|\d+))?"
     r"(?:[ \t\u3000:：—–(（【\[\-]|[】\]）)」』]*$)"
 )
+_REFERENCE_SPACE = r"[ \t\u3000]*"
+_REFERENCE_POSSESSIVE = rf"(?:{_REFERENCE_SPACE}的)?{_REFERENCE_SPACE}"
+_PRIOR_REFERENCE = r"(?:上述|前述)"
+_DOCUMENT_REFERENCE = (
+    rf"(?:{_PRIOR_REFERENCE}|[本该此这那][次份篇本]?){_REFERENCE_POSSESSIVE}"
+    rf"(?:报告|文档|文件|记录|说明|文)(?:{_REFERENCE_SPACE}[中内里])?"
+)
 _APPENDIX_REFERENCE = re.compile(
-    r"(?:"
-    r"(?:见|见于|参阅|参照|参考|查阅|查看|请看|在|从|(?:收录|记录|载|列|附)于)"
-    r"[ \t\u3000]*(?:[上下][方文面])?"
-    r"|[来取源]自[ \t\u3000]*(?:(?:[上下][方文面]|"
-    r"(?:[本该此这那][次份篇]?|(?:上述|前述)的?)"
-    r"(?:报告|文档|记录|说明|文)[中内里]?)(?:[ \t\u3000]*的)?)?"
-    r")$"
+    r"(?:见于?|参阅|参照|参考|查阅|查看|请看|在|从|(?:收录|记录|载|列|附)于"
+    r"|[来取源]自(?:于)?|来源于)"
+    rf"(?:{_REFERENCE_SPACE}"
+    rf"(?:[上下][方文面]|{_DOCUMENT_REFERENCE}|{_PRIOR_REFERENCE}){_REFERENCE_POSSESSIVE})?$"
 )
 _FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$")
 
