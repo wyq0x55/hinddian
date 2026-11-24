@@ -226,10 +226,14 @@ def test_stop_excludes_appendix(manifest, hooks, tmp_path, heading):
 
 
 @pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
-@pytest.mark.parametrize("separator", [" ", "：", "\n"], ids=["inline", "colon", "standalone"])
-def test_stop_skips_empty_verification_before_appendix(manifest, hooks, tmp_path, separator):
-    appendix = f"\n**实测日志附录A**{separator}环境清单，供追溯。"
-    reply = REPLY.replace("通过", appendix)
+@pytest.mark.parametrize("heading", [
+    pytest.param("**实测日志附录A** ", id="inline"),
+    pytest.param("**实测日志附录A**：", id="colon"),
+    pytest.param("**实测日志附录A**\n", id="standalone"),
+    pytest.param("**实测数据源自定义配置附录A** ", id="source-like-topic"),
+])
+def test_stop_skips_empty_verification_before_appendix(manifest, hooks, tmp_path, heading):
+    reply = REPLY.replace("通过", f"\n{heading}环境清单，供追溯。")
     run(commands(manifest)["Stop"], session_id="s", project="P", last_assistant_message=reply)
     assert not list((tmp_path / "drafts").glob("**/*.md"))
     entry = json.loads((tmp_path / "hooks/capture.log").read_text())
@@ -254,6 +258,10 @@ def test_stop_skips_empty_verification_before_appendix(manifest, hooks, tmp_path
     "**实测日志来自附录 A** 构建通过",
     "**实测数据取自附录A** 构建通过",
     "**实测结果源自下方附录Ａ** 构建通过",
+    "**实测日志来自本报告附录 A** 构建通过，退出码为 0。",
+    "**实测数据取自本次报告的附录 A** 构建通过，退出码为 0。",
+    "**实测结果源自下文的附录 A** 构建通过，退出码为 0。",
+    "**实测结果源自该文档中的附录Ｂ** 构建通过",
     "通过\n\n**实测日志在附录 A**\n日志路径已核对",
     "通过\n**实测数据详见下文附录A**：构建通过",
     "**[推断结果]**\n根据运行日志判断",

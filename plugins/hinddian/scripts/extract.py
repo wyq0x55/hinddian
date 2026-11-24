@@ -23,8 +23,12 @@ _APPENDIX_SUFFIX = re.compile(
     r"(?:[ \t\u3000:：—–(（【\[\-]|[】\]）)」』]*$)"
 )
 _APPENDIX_REFERENCE = re.compile(
-    r"(?:见|见于|参阅|参照|参考|查阅|查看|请看|在|从|(?:来|取|源)自|(?:收录|记录|载|列|附)于)"
-    r"[ \t\u3000]*(?:[上下][方文面][ \t\u3000]*)?$"
+    r"(?:"
+    r"(?:见|见于|参阅|参照|参考|查阅|查看|请看|在|从|(?:收录|记录|载|列|附)于)"
+    r"[ \t\u3000]*(?:[上下][方文面])?"
+    r"|[来取源]自[ \t\u3000]*(?:(?:[上下][方文面]|"
+    r"[本该此][次份篇]?(?:报告|文档|记录|说明|文)[中内里]?)(?:[ \t\u3000]*的)?)?"
+    r")$"
 )
 _FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$")
 
@@ -38,7 +42,7 @@ def _other_heading(line: str) -> bool:
     if evidence is None:
         return True
     appendix = _APPENDIX_SUFFIX.match(label, evidence.end())
-    return appendix is not None and _APPENDIX_REFERENCE.search(appendix["topic"]) is None
+    return appendix is not None and _APPENDIX_REFERENCE.search(appendix["topic"].rstrip()) is None
 
 
 def closing(text: str) -> str:
