@@ -211,6 +211,8 @@ def test_stop_keeps_distinct_message_ids(manifest, shape, hooks, tmp_path):
 @pytest.mark.parametrize("heading", [
     "**其他**\n", "**其他**　", "## 实测附录\n",
     "**实测附录**\n", "**推断过程附录**\n", "**【实测附录】**\n", "**实测附录：环境清单**\n",
+    "**实测附录 A：环境清单**\n", "**实测附录A：环境清单**\n", "**【推断过程附录２】**\n",
+    "**实测 附录**\n",
 ])
 def test_stop_excludes_appendix(manifest, hooks, tmp_path, heading):
     stop = commands(manifest)["Stop"]
@@ -226,6 +228,9 @@ def test_stop_excludes_appendix(manifest, hooks, tmp_path, heading):
     "**【实测】** 构建通过",
     "**实测结果** 构建通过",
     "**实测结果：已核对附录** 构建通过",
+    "**实测结果（详见附录）** 构建通过",
+    "**【实测结果，日志见附录 A】** 构建通过",
+    "**实测结果详见附录A** 构建通过",
     "**[推断结果]**\n根据运行日志判断",
     "**猜测（原会话）** 可能由缓存引起",
 ])

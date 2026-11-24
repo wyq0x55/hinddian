@@ -17,7 +17,11 @@ _OTHER_HEADING = re.compile(
     r"^[ \t\u3000]{0,3}(?:#{1,6}[ \t\u3000]+|\*\*(?P<bold>[^*\n]+)\*\*(?:[ \t\u3000:：]|$))"
 )
 _EVIDENCE_LABEL = re.compile(r"[ \t\u3000【\[（(「『]*(?:实测|推断|猜测)")
-_APPENDIX_LABEL = re.compile(r"[^:：]*附录(?:[ \t\u3000:：—–(（【\[\-]|[】\]）)」』]*$)")
+_APPENDIX_SUFFIX = re.compile(
+    r"[ \t\u3000]*(?:(?:结果|过程)[ \t\u3000]*)?附录"
+    r"(?:[ \t\u3000]*(?:[A-Za-zＡ-Ｚａ-ｚ]|\d+))?"
+    r"(?:[ \t\u3000:：—–(（【\[\-]|[】\]）)」』]*$)"
+)
 _FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$")
 
 
@@ -26,7 +30,8 @@ def _other_heading(line: str) -> bool:
     if not heading:
         return False
     label = heading["bold"] or ""
-    return not _EVIDENCE_LABEL.match(label) or _APPENDIX_LABEL.match(label) is not None
+    evidence = _EVIDENCE_LABEL.match(label)
+    return evidence is None or _APPENDIX_SUFFIX.match(label, evidence.end()) is not None
 
 
 def closing(text: str) -> str:
