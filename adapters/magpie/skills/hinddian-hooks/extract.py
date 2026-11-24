@@ -14,8 +14,7 @@ _HEADING = re.compile(
     r"(?:[ \t\u3000]*[:：][ \t\u3000]*|[ \t\u3000]+|(?<=\*\*)|$)(?P<body>.*)$"
 )
 _OTHER_HEADING = re.compile(
-    r"^[ \t\u3000]{0,3}(?:#{1,6}[ \t\u3000]+|"
-    r"\*\*(?P<bold>[^*\n]+)\*\*(?=[ \t\u3000:：]|$)(?P<tail>.*))"
+    r"^[ \t\u3000]{0,3}(?:#{1,6}[ \t\u3000]+|\*\*(?P<bold>[^*\n]+)\*\*(?:[ \t\u3000:：]|$))"
 )
 _EVIDENCE_LABEL = re.compile(r"[ \t\u3000【\[（(「『]*(?:实测|推断|猜测)")
 _APPENDIX_SUFFIX = re.compile(
@@ -24,13 +23,13 @@ _APPENDIX_SUFFIX = re.compile(
     r"(?:[ \t\u3000:：—–(（【\[\-]|[】\]）)」』]*$)"
 )
 _APPENDIX_REFERENCE = re.compile(
-    r"(?:见|见于|参阅|参照|参考|查阅|查看|请看|在|(?:收录|记录|载|列|附)于)"
+    r"(?:见|见于|参阅|参照|参考|查阅|查看|请看|在|从|(?:收录|记录|载|列|附)于)"
     r"[ \t\u3000]*(?:[上下][方文面][ \t\u3000]*)?$"
 )
 _FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$")
 
 
-def _other_heading(line: str, *, first_content: bool) -> bool:
+def _other_heading(line: str) -> bool:
     heading = _OTHER_HEADING.match(line)
     if not heading:
         return False
@@ -39,11 +38,7 @@ def _other_heading(line: str, *, first_content: bool) -> bool:
     if evidence is None:
         return True
     appendix = _APPENDIX_SUFFIX.match(label, evidence.end())
-    if appendix is None or _APPENDIX_REFERENCE.search(appendix["topic"]):
-        return False
-    tail = heading["tail"].strip()
-    return (not first_content or not tail or tail.startswith((":", "："))
-            or ":" in label or "：" in label)
+    return appendix is not None and _APPENDIX_REFERENCE.search(appendix["topic"]) is None
 
 
 def closing(text: str) -> str:
@@ -67,12 +62,10 @@ def closing(text: str) -> str:
                 sections = {}
             value = re.sub(r"[ \t\u3000]+#+[ \t\u3000]*$", "", heading["body"]).strip()
             sections[active] = [value] if value else []
+        elif active and not fence and _other_heading(line):
+            active = None
         elif active:
-            section = sections[active]
-            if not fence and _other_heading(line, first_content=not section):
-                active = None
-            elif section or line.strip():
-                section.append(line)
+            sections[active].append(line)
     if set(sections) != set(HEADINGS) or any(not any(line.strip() for line in lines) for lines in sections.values()):
         return ""
     return "\n\n".join("## " + heading + "\n" + "\n".join(sections[heading]).strip() for heading in HEADINGS)

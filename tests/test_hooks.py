@@ -226,6 +226,17 @@ def test_stop_excludes_appendix(manifest, hooks, tmp_path, heading):
 
 
 @pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
+@pytest.mark.parametrize("separator", [" ", "：", "\n"], ids=["inline", "colon", "standalone"])
+def test_stop_skips_empty_verification_before_appendix(manifest, hooks, tmp_path, separator):
+    appendix = f"\n**实测日志附录A**{separator}环境清单，供追溯。"
+    reply = REPLY.replace("通过", appendix)
+    run(commands(manifest)["Stop"], session_id="s", project="P", last_assistant_message=reply)
+    assert not list((tmp_path / "drafts").glob("**/*.md"))
+    entry = json.loads((tmp_path / "hooks/capture.log").read_text())
+    assert (entry["event"], entry["reason"]) == ("skip", "no_closing")
+
+
+@pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
 @pytest.mark.parametrize("verification", [
     "通过\n开关由环境控制\n**推断** 仍需验证失败回退\n这行补充依据",
     "**实测** 构建通过",
