@@ -13,7 +13,10 @@ _HEADING = re.compile(
     rf"(?:\*\*[ \t\u3000]*(?P<bold>{_NAMES})[ \t\u3000]*[:：]?[ \t\u3000]*\*\*|(?P<plain>{_NAMES}))"
     r"(?:[ \t\u3000]*[:：][ \t\u3000]*|[ \t\u3000]+|(?<=\*\*)|$)(?P<body>.*)$"
 )
-_OTHER_HEADING = re.compile(r"^[ \t\u3000]{0,3}(?:#{1,6}[ \t\u3000]+|\*\*[^*\n]+\*\*(?:[ \t\u3000:：]|$))")
+_OTHER_HEADING = re.compile(
+    r"^[ \t\u3000]{0,3}(?:#{1,6}[ \t\u3000]+|"
+    r"\*\*(?!(?:实测|推断|猜测)(?=[* \t\u3000。:：·／/（(]))[^*\n]+\*\*(?:[ \t\u3000:：]|$))"
+)
 _FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$")
 
 
@@ -128,8 +131,9 @@ def final_message(payload: dict) -> tuple[str, str]:
         if message_id or any(isinstance(payload.get(field), str) and payload[field].strip()
                              for field in ("turn_id", "turnId", "message_id")):
             return text, message_id
+        lines = text.strip().splitlines()
         message_text, message_id = _last_assistant(payload.get("messages"))
-        if message_id and message_text.strip() == text.strip():
+        if message_id and message_text.strip().splitlines() == lines:
             return text, message_id
         if path:
             try:
@@ -137,7 +141,7 @@ def final_message(payload: dict) -> tuple[str, str]:
             except (OSError, TypeError, ValueError):
                 pass
             else:
-                if transcript_text.strip() == text.strip():
+                if transcript_text.strip().splitlines() == lines:
                     return text, message_id
         return text, ""
     if path:

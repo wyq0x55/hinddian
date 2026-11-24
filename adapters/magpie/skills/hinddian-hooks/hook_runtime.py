@@ -6,7 +6,6 @@ import datetime
 import functools
 import json
 import os
-import stat
 import sys
 import threading
 from pathlib import Path
@@ -25,25 +24,16 @@ def record(event: str, **metadata) -> None:
     line = (data + "\n").encode("ascii")
     if len(line) > LOG_LIMIT:
         return
-    from note_format import vault_lock, write_atomic
+    from note_format import private_append, vault_lock, write_atomic
 
-    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT
-    flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
     for directory in dict.fromkeys((root, default)):
         try:
             directory = directory.absolute()
             if any(part.is_symlink() for part in (*directory.parents, directory)):
                 continue
-            with vault_lock(directory / "hook-log.lock", timeout=0):
+            with vault_lock(directory / "hook-log.lock", timeout=0, private=True):
                 path = directory / "capture.log"
-                with contextlib.suppress(FileNotFoundError):
-                    info = path.lstat()
-                    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-                        continue
-                with os.fdopen(os.open(path, flags, 0o600), "ab") as stream:
-                    info = os.fstat(stream.fileno())
-                    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or not os.path.samestat(info, path.lstat()):
-                        continue
+                with private_append(path, "ab") as (stream, info):
                     if info.st_size + len(line) <= LOG_LIMIT:
                         stream.write(line)
                         return

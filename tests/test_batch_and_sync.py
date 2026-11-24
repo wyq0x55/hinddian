@@ -365,6 +365,25 @@ def test_rebuild_hubs_migrates_legacy_generated_links(batch):
     assert hub.read_text() == result
 
 
+def test_rebuild_hubs_preserves_manual_links_and_fenced_examples(batch):
+    hub = batch.VAULT / "项目/P/README.md"
+    retired = hub.parent / "经验/已退役.md"
+    retired.parent.mkdir(parents=True)
+    retired.write_text("---\nid: retired\nproject: P\ntype: lesson\nstatus: retired\n---\n# 已退役\n")
+    manual_links = ("- [[项目/P/经验/已退役|手写别名，仍需查阅]]\n- [[项目/P/经验/已退役|已退役]]\n"
+                    "- [[项目/P/经验/悬空链接|手写待补入口]]\n")
+    marked_link = "- [[项目/P/经验/示例|示例]] <!-- hinddian:generated -->\n"
+    example = f"```md\n<!-- hinddian:links -->\n{manual_links}{marked_link}<!-- /hinddian:links -->\n```\n"
+    original = f"# P\n\n## 经验\n{example}<!-- hinddian:links -->\n{manual_links}手写说明。\n"
+    original += f"~~~md\n{marked_link}~~~\n<!-- /hinddian:links -->\n"
+    hub.write_text(original)
+
+    batch.rebuild_hubs()
+
+    assert hub.read_text() == original
+    assert retired.is_file()
+
+
 @pytest.mark.parametrize(("overlay", "expected"), [
     ("tags: [handwritten,] # 手写说明", "tags: [handwritten, new,] # 手写说明"),
     ("tags: [handwritten]\n-手写: 不能丢", "tags: [handwritten, new]\n-手写: 不能丢"),
@@ -388,6 +407,46 @@ def test_batch_update_keeps_valid_yaml_frontmatter(batch, monkeypatch, overlay, 
     assert parsed["sources"] == ["origin@abcdef1", "sess-1@abcdef1"]
     if "-手写:" in overlay:
         assert parsed["-手写"] == "不能丢"
+    assert "手写说明\n\n新证据" in result
+    assert not draft.exists() and (batch.PROCESSED / "P" / draft.name).is_file()
+
+
+@pytest.mark.parametrize("overlay", [
+    "tags: [handwritten]\nhistory: &past [origin@abcdef1]\nsources: *past # 原来源",
+    "tags: !!seq [handwritten] # 手写标签\nsources: [origin@abcdef1]",
+    "tags: &original !!seq [handwritten]\nmanual_tags: *original\nsources: [origin@abcdef1]",
+])
+def test_batch_update_preserves_yaml_alias_and_sequence_values(batch, monkeypatch, overlay):
+    note = batch.VAULT / "项目/P/经验/手写.md"
+    note.parent.mkdir(parents=True)
+    original = f"---\nid: manual\nproject: P\ntype: lesson\n{overlay}\n---\n# 手写\n\n## 理由\n手写说明\n"
+    note.write_text(original)
+    draft = put_draft()
+    draft.write_text(draft.read_text().replace("session_id: sess-1", "session_id: alpha,beta"))
+    monkeypatch.setattr(batch, "chat", lambda prompt: json.dumps({"ops": [
+        {"op": "update", "id": "manual", "tags": ["handwritten", "new"], "reason": "新证据", "sources": ["S01"]},
+    ]}))
+
+    if "manual_tags:" in overlay:
+        with pytest.raises(ValueError, match="would change existing values"):
+            batch.process("P", [draft])
+        assert note.read_text() == original and draft.exists()
+        return
+
+    batch.process("P", [draft])
+
+    result = note.read_text()
+    expected = yaml.safe_load(original.split("---\n", 2)[1])
+    expected["sources"] = ["origin@abcdef1", "alpha,beta@abcdef1"]
+    expected["tags"] = ["handwritten", "new"]
+    assert yaml.safe_load(result.split("---\n", 2)[1]) == expected
+    if "*past" in overlay:
+        assert "history: &past [origin@abcdef1]\n" in result
+    else:
+        assert "tags: !!seq [handwritten, new] # 手写标签\n" in result
+    for comment in ("# 原来源", "# 手写标签"):
+        if comment in original:
+            assert comment in result
     assert "手写说明\n\n新证据" in result
     assert not draft.exists() and (batch.PROCESSED / "P" / draft.name).is_file()
 

@@ -243,9 +243,8 @@ def dump_frontmatter(items: list[tuple[str, Any]], *, orig: dict | None = None, 
 
 
 # ------------------------------------------------------------------ body
-def section_parts(body: str) -> list[str]:
-    """Split at level-two headings outside fenced code, retaining the complete input."""
-    offsets = [0]
+def unfenced_lines(body: str) -> Iterator[tuple[int, str]]:
+    """Yield the source offset and text of each line outside fenced code."""
     start = 0
     fence = ""
     for line in body.splitlines(keepends=True):
@@ -255,9 +254,14 @@ def section_parts(body: str) -> list[str]:
                 fence = run
             elif run.startswith(fence) and not tail.strip():
                 fence = ""
-        elif not fence and _H2.match(line):
-            offsets.append(start)
+        elif not fence:
+            yield start, line
         start += len(line)
+
+
+def section_parts(body: str) -> list[str]:
+    """Split at level-two headings outside fenced code, retaining the complete input."""
+    offsets = [0, *(start for start, line in unfenced_lines(body) if _H2.match(line))]
     return [body[left:right] for left, right in zip(offsets, [*offsets[1:], len(body)])]
 
 
@@ -516,9 +520,28 @@ def default_lock_path() -> pathlib.Path:
 
 
 @contextlib.contextmanager
-def vault_lock(path: pathlib.Path | None = None, timeout: float = 60.0) -> Iterator[None]:
+def private_append(path: pathlib.Path, mode: str):
+    """Open an append file without following links or waiting on special files."""
+    with contextlib.suppress(FileNotFoundError):
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise UnsafePath(f"unsafe append file: {path}")
+    flags = (os.O_RDWR if "+" in mode else os.O_WRONLY) | os.O_APPEND | os.O_CREAT
+    flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+    with os.fdopen(os.open(path, flags, 0o600), mode) as stream:
+        info = os.fstat(stream.fileno())
+        named = path.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or not stat.S_ISREG(named.st_mode) or not os.path.samestat(info, named)):
+            raise UnsafePath(f"unsafe append file: {path}")
+        yield stream, info
+
+
+@contextlib.contextmanager
+def vault_lock(path: pathlib.Path | None = None, timeout: float = 60.0, *, private: bool = False) -> Iterator[None]:
     """Exclusive, re-entrant (per thread) lock around a vault read-modify-write."""
-    path = (path or default_lock_path()).resolve()
+    path = path or default_lock_path()
+    path = path.absolute() if private else path.resolve()
     held = getattr(_tls, "held", set())
     if path in held:
         yield
@@ -528,7 +551,11 @@ def vault_lock(path: pathlib.Path | None = None, timeout: float = 60.0) -> Itera
     if not _proc_lock.acquire(timeout=timeout):
         raise VaultBusy("vault busy (in-process)")
     try:
-        with path.open("a+b") as fh:
+        with contextlib.ExitStack() as stack:
+            if private:
+                fh, _ = stack.enter_context(private_append(path, "a+b"))
+            else:
+                fh = stack.enter_context(path.open("a+b"))
             fh.seek(0)
             while True:
                 try:

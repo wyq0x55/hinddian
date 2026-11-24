@@ -107,9 +107,35 @@ def _rebuild_hubs(changed_projects=None):
               legacy_counts=global_links + recent_entries)
 
 
+_HUB_OPEN = "<!-- hinddian:links -->\n"
+_HUB_CLOSE = "<!-- /hinddian:links -->"
+
+
+def hub_block(part):
+    start = None
+    for offset, line in nf.unfenced_lines(part):
+        if line == _HUB_OPEN:
+            start = offset
+        elif start is not None and line.rstrip("\n") == _HUB_CLOSE:
+            return start, offset, offset + len(line)
+    return None
+
+
+def legacy_hub_link(line, pattern, current):
+    if not pattern or not re.fullmatch(pattern, line):
+        return False
+    if line in current:
+        return True
+    target, alias = nf.WIKI.search(line).groups()
+    path = pathlib.PurePosixPath(target)
+    if path.is_absolute() or ".." in path.parts:
+        return False
+    default_alias = path.parent.name if path.name == "README" else path.name
+    return alias in (None, default_alias) and not (VAULT / f"{target}.md").exists()
+
+
 def hub_links(text, sections, *, project=None):
-    """Keep the existing page byte for byte outside generated link blocks."""
-    marker = re.compile(r"(?m)^<!-- hinddian:links -->\n(.*?)^<!-- /hinddian:links -->(?:\n|$)", re.S)
+    """Keep hand-written content and fenced code when rebuilding generated links."""
     owned = re.compile(r"^- \[\[[^\]]+\]\](?: — \d+ 条(?:决策/经验)?| — 人→Agent 待办)? <!-- hinddian:generated -->$")
     alias = r"\|[^\]]+\]\]"
     project_path = re.escape(project or "")
@@ -131,35 +157,47 @@ def hub_links(text, sections, *, project=None):
     for index, part in enumerate(parts[1:], 1):
         heading = part.split("\n", 1)[0][3:].strip()
         if heading in sections:
-            existing[index] = sections.pop(heading)
-            if found := marker.search(part):
-                pattern = legacy.get(heading)
-                manual = "".join(line for line in found[1].splitlines(keepends=True)
-                                 if not owned.fullmatch(line.rstrip("\n"))
-                                 and not (pattern and re.fullmatch(pattern, line.rstrip("\n"))))
-                parts[index] = part[:found.start(1)] + manual + part[found.end(1):]
-    targets = {match[1] for match in nf.WIKI.finditer(front + "".join(parts))}
+            lines = sections.pop(heading)
+            existing[index] = lines
+            if found := hub_block(part):
+                start, end, _ = found
+                inside = [(offset, line) for offset, line in nf.unfenced_lines(part) if start < offset < end]
+                remove = [(offset, line) for offset, line in inside if owned.fullmatch(line.rstrip("\n"))]
+                if not remove:
+                    current = set(lines)
+                    remove = [(offset, line) for offset, line in inside
+                              if legacy_hub_link(line.rstrip("\n"), legacy.get(heading), current)]
+                preserved = []
+                cursor = 0
+                for offset, line in remove:
+                    preserved.append(part[cursor:offset])
+                    cursor = offset + len(line)
+                parts[index] = "".join(preserved) + part[cursor:]
+    targets = {match[1] for _, line in nf.unfenced_lines(front + "".join(parts))
+               for match in nf.WIKI.finditer(line)}
     for index, lines in existing.items():
-        parts[index] = _hub_section(marker, parts[index], lines, targets)
+        parts[index] = _hub_section(parts[index], lines, targets)
     for heading, lines in sections.items():
-        section = _hub_section(marker, f"## {heading}\n", lines, targets)
-        if "<!-- hinddian:links -->" in section:
+        section = _hub_section(f"## {heading}\n", lines, targets)
+        if _HUB_OPEN in section:
             prefix = "" if "".join(parts).endswith("\n\n") else "\n"
             parts.append(prefix + section)
     return front + "".join(parts)
 
 
-def _hub_section(marker, part, lines, targets):
+def _hub_section(part, lines, targets):
     generated = [line + " <!-- hinddian:generated -->" for line in lines
                  if (match := nf.WIKI.search(line)) and match[1] not in targets]
-    if found := marker.search(part):
-        content = found[1] + "".join(line + "\n" for line in generated)
-        block = "<!-- hinddian:links -->\n" + content + "<!-- /hinddian:links -->\n" if content else ""
-        return part[:found.start()] + block + part[found.end():]
+    if found := hub_block(part):
+        start, end, after = found
+        content = part[start + len(_HUB_OPEN):end] + "".join(line + "\n" for line in generated)
+        block = _HUB_OPEN + content + part[end:after] if content else ""
+        return part[:start] + block + part[after:]
     if not generated:
         return part
-    block = "<!-- hinddian:links -->\n" + "\n".join(generated) + "\n<!-- /hinddian:links -->\n"
-    return part + ("" if part.endswith("\n") else "\n") + block
+    block = _HUB_OPEN + "\n".join(generated) + "\n" + _HUB_CLOSE + "\n"
+    candidate = part + ("" if part.endswith("\n") else "\n") + block
+    return candidate if hub_block(candidate) else part
 
 
 def write_hub(rel, note_id, text, sections, *, legacy_counts=()):
@@ -192,20 +230,13 @@ def render_update(note, notes):
     original = note["text"]
     fm, raw, body = nf.parse_frontmatter(original)
     front = original[:len(original) - len(body)].removesuffix("\n")
-    fields = {key: note[key] for key in ("sources", "tags") if note[key] != note["_initial_" + key]}
+    fields = {key: additions for key in ("sources", "tags")
+              if (additions := [value for value in note[key] if value not in note["_initial_" + key]])}
     links = [link_of(notes[nid]) for nid in note["related"] if nid in notes and nid not in note["_initial_related"]]
     if links:
-        fields["related"] = list(dict.fromkeys(note["related_raw"] + links))
-    for key, value in fields.items():
-        if key in raw and fm[key] is None:
-            raise ValueError(f"cannot update opaque frontmatter field {key}")
-        line = extend_frontmatter(key, raw.get(key, ""), fm.get(key), value)
-        if key in raw:
-            front = re.sub(r"(?m)^" + re.escape(raw[key]) + r"(?=\n|$)", lambda _: line, front, count=1)
-        else:
-            front = front.removesuffix("---") + line + "\n---"
+        fields["related"] = links
     if fields:
-        yaml.compose(front[4:].removesuffix("\n---"), Loader=yaml.SafeLoader)
+        front = update_frontmatter(front, fm, raw, fields)
     updates = {heading: note["_additions"][field] for heading, field in nf.FIELD_SECTIONS.items()
                if field in note["_additions"]}
     if links:
@@ -224,18 +255,50 @@ def render_update(note, notes):
     return front + "\n" + "".join(parts)
 
 
+def update_frontmatter(front, fm, raw, fields):
+    original = yaml.safe_load(front[4:].removesuffix("\n---"))
+    expected = original.copy()
+    for key, additions in fields.items():
+        if key in raw and fm[key] is None:
+            raise ValueError(f"cannot update opaque frontmatter field {key}")
+        previous = original.get(key)
+        existing = previous if isinstance(previous, list) else [] if previous in (None, "") else [previous]
+        additions = [item for item in additions if item not in existing]
+        if not additions:
+            continue
+        values = existing + additions
+        expected[key] = values
+        line = extend_frontmatter(key, raw.get(key, ""), previous, values)
+        if key in raw:
+            front = re.sub(r"(?m)^" + re.escape(raw[key]) + r"(?=\n|$)", lambda _: line, front, count=1)
+        else:
+            front = front.removesuffix("---") + line + "\n---"
+    if yaml.safe_load(front[4:].removesuffix("\n---")) != expected:
+        raise ValueError("frontmatter update would change existing values")
+    return front
+
+
+def dump_list(key, values):
+    line = nf.dump_value(key, values)
+    if yaml.safe_load(line)[key] == values:
+        return line
+    value = yaml.safe_dump(values, default_flow_style=True, allow_unicode=True, width=sys.maxsize).strip()
+    return f"{key}: {value}"
+
+
 def extend_frontmatter(key, raw, previous, values):
     header, sep, body = raw.partition("\n")
     value, comment = nf.yaml_comment(header)
     if isinstance(previous, list) and values[:len(previous)] == previous:
         additions = values[len(previous):]
         if sep and (item := re.search(r"(?m)^([ \t]*)-(?:[ \t]|$)", body)):
-            return raw + "".join(f"\n{item[1]}- {nf.dump_value(key, entry).split(': ', 1)[1]}" for entry in additions)
+            return raw + "".join(f"\n{item[1]}- {dump_list(key, [entry]).split('[', 1)[1][:-1]}"
+                                 for entry in additions)
         if value.endswith("]"):
-            items = nf.dump_value(key, additions).split("[", 1)[1][:-1]
+            items = dump_list(key, additions).split("[", 1)[1][:-1]
             prefix = value[:-1].rstrip().removesuffix(",")
             return prefix + (", " if previous else "") + items + value[len(prefix):] + comment + sep + body
-    return nf.dump_value(key, values) + comment + sep + body
+    return dump_list(key, values) + comment + sep + body
 
 
 # ------------------------------------------------------------------ llm

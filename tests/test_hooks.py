@@ -147,6 +147,26 @@ def test_stop_bypasses_unsafe_capture_log(manifest, kind, hooks, vault, tmp_path
     assert not (tmp_path / "drafts").exists()
 
 
+@pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
+@pytest.mark.parametrize("kind", ["dangling-symlink", "fifo"])
+def test_stop_bypasses_unsafe_capture_log_lock(manifest, kind, hooks, vault, tmp_path):
+    protected = vault / "00-系统/未存在.md"
+    protected.parent.mkdir()
+    lock = tmp_path / "hooks/hook-log.lock"
+    lock.parent.mkdir()
+    if kind == "dangling-symlink":
+        lock.symlink_to(protected)
+    else:
+        os.mkfifo(lock)
+
+    run(commands(manifest)["Stop"], timeout=1.5, session_id="test", last_assistant_message="短答")
+
+    assert not protected.exists()
+    assert not (lock.parent / "capture.log").exists()
+    fallback = tmp_path / "cfg/hinddian/hooks/capture.log"
+    assert json.loads(fallback.read_text())["event"] == "skip"
+
+
 def test_closing_headings_ignore_fenced_examples_and_unrelated_headings(hooks):
     result = hooks.extract.closing("```md\n**改进** fence\n```\n" + REPLY + "## 其他\n不能采集\n")
     assert result == "## 原行为\n旧流程\n\n## 改进\n先备份\n\n## 取舍\n推断，放弃覆盖，因为无法回滚。\n\n## 验证\n通过"
@@ -157,7 +177,8 @@ def test_closing_headings_ignore_fenced_examples_and_unrelated_headings(hooks):
 
 @pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
 @pytest.mark.parametrize("shape", ["transcript", "text_and_transcript", "object_and_transcript",
-                                   "text_and_messages", "object_with_id"])
+                                   "text_and_messages", "object_with_id", "crlf_and_messages",
+                                   "crlf_and_transcript"])
 def test_stop_keeps_distinct_message_ids(manifest, shape, hooks, tmp_path):
     transcript = tmp_path / "transcript.jsonl"
     stop = commands(manifest)["Stop"]
@@ -170,7 +191,7 @@ def test_stop_keeps_distinct_message_ids(manifest, shape, hooks, tmp_path):
             event = {"type": "response_item", "payload": {**transcript_msg, "phase": "final_answer"}}
         transcript.write_text(json.dumps(event) + "\n")
         payload = {"session_id": "s", "project": "P"}
-        if shape == "text_and_messages":
+        if shape in ("text_and_messages", "crlf_and_messages"):
             payload["messages"] = [msg]
         else:
             payload["transcript_path"] = str(transcript)
@@ -178,6 +199,8 @@ def test_stop_keeps_distinct_message_ids(manifest, shape, hooks, tmp_path):
             payload["last_assistant_message"] = {
                 "object_and_transcript": {"content": REPLY},
                 "object_with_id": {"content": REPLY, "id": message_id},
+                "crlf_and_messages": REPLY.replace("\n", "\r\n"),
+                "crlf_and_transcript": REPLY.replace("\n", "\r\n"),
             }.get(shape, REPLY)
         run(stop, **payload)
     draft, = (tmp_path / "drafts/P").glob("*.md")
@@ -190,6 +213,20 @@ def test_stop_excludes_bold_appendix(hooks, tmp_path, heading):
     run(stop, session_id="s", project="P", last_assistant_message=REPLY + heading + "无关附录\n附录第二行\n")
     draft, = (tmp_path / "drafts/P").glob("*.md")
     assert draft.read_text().endswith("## 验证\n通过\n")
+
+
+@pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
+@pytest.mark.parametrize("verification", [
+    "通过\n开关由环境控制\n**推断** 仍需验证失败回退\n这行补充依据",
+    "**实测** 构建通过",
+    "**猜测（原会话）** 可能由缓存引起",
+])
+def test_stop_keeps_bold_evidence_in_closing(manifest, verification, hooks, tmp_path):
+    stop = commands(manifest)["Stop"]
+    reply = REPLY.replace("通过", verification) + "**其他**　无关附录\n附录第二行\n"
+    run(stop, session_id="s", project="P", last_assistant_message=reply)
+    draft, = (tmp_path / "drafts/P").glob("*.md")
+    assert draft.read_text().endswith(f"## 验证\n{verification}\n")
 
 
 def test_duplicate_stop_is_detected_across_pending_and_archived_projects(hooks, tmp_path):
