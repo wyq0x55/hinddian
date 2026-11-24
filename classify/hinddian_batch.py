@@ -37,7 +37,33 @@ safe, slugify, link_of = nf.safe_title, nf.slugify, nf.link_of
 
 # ------------------------------------------------------------------ notes
 _cache = nf.NoteCache()
-def load_notes(): return _cache.load(VAULT)
+
+
+def load_notes():
+    notes = _cache.load(VAULT)
+    resolve_related = False
+    for note in notes.values():
+        raw, fm = note["_raw"], note["_fm"]
+        candidates = {key for key in ("sources", "tags", "related")
+                      if "[" in raw.get(key, "") and raw[key] != nf.dump_value(key, fm[key])}
+        if not candidates:
+            continue
+        document = note["text"][4:].partition("\n---\n")[0].rstrip().removesuffix("\n---")
+        try:
+            flows = multiline_flows(document, candidates)
+            values = yaml.safe_load(document) if flows else {}
+        except yaml.YAMLError:
+            continue
+        for key in flows:
+            note["related_raw" if key == "related" else key] = [
+                str(value) for value in values[key] if str(value).strip()
+            ]
+        resolve_related |= "related" in flows
+    if resolve_related:
+        nf.resolve_links(notes)
+    return notes
+
+
 def render(n, notes): return nf.render(n, notes, today=today())
 def allowed(rel):
     try:
@@ -229,8 +255,6 @@ def update_frontmatter(front, fm, raw, fields):
     original = yaml.safe_load(front[4:].removesuffix("\n---"))
     expected = original.copy()
     for key, additions in fields.items():
-        if key in raw and fm[key] is None:
-            raise ValueError(f"cannot update opaque frontmatter field {key}")
         previous = original.get(key)
         existing = previous if isinstance(previous, list) else [] if previous in (None, "") else [previous]
         additions = [item for item in additions if item not in existing]
@@ -238,6 +262,13 @@ def update_frontmatter(front, fm, raw, fields):
             continue
         values = existing + additions
         expected[key] = values
+        if isinstance(previous, list):
+            flow = multiline_flows(front[4:].removesuffix("\n---"), {key}).get(key)
+            if flow is not None:
+                front = append_multiline_flow(front, key, flow, additions)
+                continue
+        if key in raw and fm[key] is None:
+            raise ValueError(f"cannot update opaque frontmatter field {key}")
         line = extend_frontmatter(key, raw.get(key, ""), previous, values)
         if key in raw:
             front = re.sub(r"(?m)^" + re.escape(raw[key]) + r"(?=\n|$)", lambda _: line, front, count=1)
@@ -246,6 +277,36 @@ def update_frontmatter(front, fm, raw, fields):
     if yaml.safe_load(front[4:].removesuffix("\n---")) != expected:
         raise ValueError("frontmatter update would change existing values")
     return front
+
+
+def multiline_flows(document, keys):
+    root = yaml.compose(document, Loader=yaml.SafeLoader)
+    if not isinstance(root, yaml.MappingNode):
+        return {}
+    fields = {name.value: (name, value) for name, value in root.value
+              if isinstance(name, yaml.ScalarNode) and name.value in keys}
+    return {key: value for key, (name, value) in fields.items()
+            if isinstance(value, yaml.SequenceNode) and value.flow_style and value.tag == "tag:yaml.org,2002:seq"
+            and name.end_mark.index <= value.start_mark.index
+            and name.end_mark.line < value.end_mark.line}
+
+
+def append_multiline_flow(front, key, flow, additions):
+    start = 4 + flow.start_mark.index
+    end = 4 + flow.end_mark.index
+    tokens = list(yaml.scan(front[start:end], Loader=yaml.SafeLoader))
+    previous, close = tokens[-3:-1]
+    entry_end = start + previous.end_mark.index
+    bracket = start + close.start_mark.index
+    trailing = isinstance(previous, yaml.FlowEntryToken)
+    needs_comma = not trailing and not isinstance(previous, yaml.FlowSequenceStartToken)
+    items = dump_list(key, additions).split("[", 1)[1][:-1] + ("," if trailing else "")
+    if "\n" not in front[entry_end:bracket]:
+        separator = ", " if needs_comma else " " if trailing else ""
+        return front[:entry_end] + separator + items + front[entry_end:]
+    indent = front[front.rfind("\n", 0, bracket) + 1:bracket]
+    insertion = ("" if indent else "  ") + items + "\n" + indent
+    return front[:entry_end] + ("," if needs_comma else "") + front[entry_end:bracket] + insertion + front[bracket:]
 
 
 def dump_list(key, values):

@@ -412,6 +412,21 @@ def test_rebuild_hubs_preserves_manual_links_and_fenced_examples(batch):
 @pytest.mark.parametrize(("overlay", "expected"), [
     ("tags: [handwritten,] # 手写说明", "tags: [handwritten, new,] # 手写说明"),
     ("tags: [handwritten]\n-手写: 不能丢", "tags: [handwritten, new]\n-手写: 不能丢"),
+    pytest.param(
+        "tags: [\n  handwritten, # 手写标签\n  ]",
+        "tags: [\n  handwritten, # 手写标签\n  new,\n  ]",
+        id="multiline-trailing-comma",
+    ),
+    pytest.param(
+        'tags: [ # 开始，]不是结束\n  "handwritten" # 手写标签，逗号 ,\n] # 结束',
+        'tags: [ # 开始，]不是结束\n  "handwritten", # 手写标签，逗号 ,\n  new\n] # 结束',
+        id="multiline-comment-without-trailing-comma",
+    ),
+    pytest.param(
+        "'tags': !!seq [\n  'handwritten' ] # 手写标签",
+        "'tags': !!seq [\n  'handwritten', new ] # 手写标签",
+        id="multiline-close-on-last-item-line",
+    ),
 ])
 def test_batch_update_keeps_valid_yaml_frontmatter(batch, monkeypatch, overlay, expected):
     note = batch.VAULT / "项目/P/经验/独立手改.md"
@@ -436,10 +451,53 @@ def test_batch_update_keeps_valid_yaml_frontmatter(batch, monkeypatch, overlay, 
     assert not draft.exists() and (batch.PROCESSED / "P" / draft.name).is_file()
 
 
+def test_batch_updates_and_reloads_multiline_flow_fields(batch, monkeypatch):
+    previous = make_note(batch, "已有经验", "old")
+    added = make_note(batch, "新增经验", "new")
+    note = batch.VAULT / "项目/P/经验/独立手改.md"
+    old_link, new_link = map(batch.link_of, (previous, added))
+    original = ("---\nid: manual\nproject: P\ntype: lesson\n"
+                "tags: [\n  # 手写空列表\n  ]\n"
+                "sources: [\norigin@abcdef1\n] # 来源说明\n"
+                f'related:\n  [\n  "{old_link}",\n  ]\n'
+                "manual:\n  owner: '某人' # 手写属性\n"
+                "---\n# 独立手改\n\n## 相关\n手写关联说明\n")
+    note.write_text(original)
+    draft = put_draft()
+    draft.write_text(draft.read_text().replace("session_id: sess-1", "session_id: alpha,beta"))
+    draft_text = draft.read_bytes()
+    monkeypatch.setattr(batch, "chat", lambda prompt: json.dumps({"ops": [
+        {"op": "update", "id": "manual", "tags": ["new"], "sources": ["S01"],
+         "related": [previous["id"], added["id"]]},
+    ]}))
+
+    batch.process("P", [draft])
+
+    result = note.read_text()
+    expected = yaml.safe_load(original.split("---\n", 2)[1])
+    expected.update(tags=["new"], sources=["origin@abcdef1", "alpha,beta@abcdef1"], related=[old_link, new_link])
+    assert yaml.safe_load(result.split("---\n", 2)[1]) == expected
+    assert "tags: [\n  # 手写空列表\n  new\n  ]\n" in result
+    assert 'sources: [\norigin@abcdef1,\n  "alpha,beta@abcdef1"\n] # 来源说明\n' in result
+    assert f'related:\n  [\n  "{old_link}",\n  "{new_link}",\n  ]\n' in result
+    assert "manual:\n  owner: '某人' # 手写属性\n" in result
+    assert result.endswith(f"## 相关\n手写关联说明\n\n- {new_link}\n")
+    loaded = batch.load_notes()["manual"]
+    assert loaded["tags"] == expected["tags"] and loaded["sources"] == expected["sources"]
+    assert loaded["related"] == [previous["id"], added["id"]]
+    archive = batch.PROCESSED / "P" / draft.name
+    assert not draft.exists() and archive.read_bytes() == draft_text
+
+    draft.write_bytes(draft_text)
+    batch.process("P", [draft])
+    assert note.read_text() == result and not draft.exists() and archive.read_bytes() == draft_text
+
+
 @pytest.mark.parametrize("overlay", [
     "tags: [handwritten]\nhistory: &past [origin@abcdef1]\nsources: *past # 原来源",
     "tags: !!seq [handwritten] # 手写标签\nsources: [origin@abcdef1]",
     "tags: &original !!seq [handwritten]\nmanual_tags: *original\nsources: [origin@abcdef1]",
+    "tags: &original [\n  handwritten,\n  ]\nmanual_tags: *original\nsources: [origin@abcdef1]",
 ])
 def test_batch_update_preserves_yaml_alias_and_sequence_values(batch, monkeypatch, overlay):
     note = batch.VAULT / "项目/P/经验/手写.md"
