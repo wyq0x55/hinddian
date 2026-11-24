@@ -390,8 +390,11 @@ def check_draft_paths():
 
 
 def check_input_directory(directory, archive_dir):
-    if directory.resolve() == archive_dir.resolve():
+    resolved_input = directory.resolve()
+    if resolved_input == archive_dir.resolve():
         raise ValueError(f"input directory is the archive directory: {directory}")
+    if resolved_input.is_relative_to(PROCESSED.resolve()):
+        raise ValueError(f"input directory is inside the processed archive: {directory}")
 
 
 def new_path(base, notes):

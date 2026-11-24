@@ -218,6 +218,30 @@ def test_batch_rejects_archive_dir_as_input(batch, monkeypatch):
     assert archived.read_bytes() == original and not batch.LOG.exists()
 
 
+@pytest.mark.parametrize("relative_directory", [".", "Q", "Q/nested"], ids=["root", "other-project", "nested"])
+def test_batch_rejects_inputs_anywhere_in_processed(batch, monkeypatch, relative_directory):
+    draft = put_draft()
+    archive_dir = batch.PROCESSED / relative_directory
+    archive_dir.mkdir(parents=True)
+    archived = draft.rename(archive_dir / draft.name)
+    original = archived.read_bytes()
+    destination = batch.PROCESSED / "P" / archived.name
+    monkeypatch.setattr(batch, "chat", lambda prompt: pytest.fail("archived drafts must not reach the model"))
+    message = "input directory is inside the processed archive"
+
+    with pytest.raises(ValueError, match=message):
+        batch.process("P", [archived])
+    with pytest.raises(ValueError, match=message):
+        batch.drafts_of("P", archive_dir)
+    with pytest.raises(ValueError, match=message):
+        batch.archive(archived, destination)
+    result = subprocess.run([sys.executable, str(ROOT / "classify/hinddian_batch.py"), "process", "P",
+                             "--dir", str(archive_dir)], capture_output=True, text=True, timeout=3)
+    assert result.returncode != 0 and message in result.stderr
+    assert archived.read_bytes() == original
+    assert not destination.exists() and not batch.LOG.exists()
+
+
 def test_write_allowlist_refuses_external_and_in_vault_symlink_targets(batch, monkeypatch):
     protected = batch.VAULT / "00-系统/手写.md"
     protected.parent.mkdir()
