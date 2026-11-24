@@ -7,6 +7,8 @@ The holdout tree is reserved for manual comparisons. 通用-未定 only produces
 from __future__ import annotations
 import argparse, contextlib, datetime as dt, hashlib, json, os, pathlib, re, subprocess, sys, urllib.request
 
+import yaml
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from hinddian import draft_store, note_format as nf, paths  # noqa: E402
@@ -78,7 +80,7 @@ def _rebuild_hubs(changed_projects=None):
         sections = {"决策": [f"- {link_of(n)}" for n in act("decision")],
                     "经验": [f"- {link_of(n)}" for n in act("lesson")],
                     "说明文档": [f"- [[项目/{proj}/{d}|{d}]]" for d in docs]}
-        out = hub_links(head, sections)
+        out = hub_links(head, sections, project=proj)
         if out != head or not rd.exists():
             write_file(f"项目/{proj}/README", out, create=not rd.exists())
     tips = sorted([n for n in notes.values() if n["type"] == "tip" and n["status"] == "active"], key=lambda n: n["title"])
@@ -105,35 +107,53 @@ def _rebuild_hubs(changed_projects=None):
               legacy_counts=global_links + recent_entries)
 
 
-def hub_links(text, sections):
+def hub_links(text, sections, *, project=None):
     """Keep the existing page byte for byte outside generated link blocks."""
     marker = re.compile(r"(?m)^<!-- hinddian:links -->\n(.*?)^<!-- /hinddian:links -->(?:\n|$)", re.S)
     owned = re.compile(r"^- \[\[[^\]]+\]\](?: — \d+ 条(?:决策/经验)?| — 人→Agent 待办)? <!-- hinddian:generated -->$")
-    without_generated = lambda match: "\n".join(line for line in match[1].split("\n") if not owned.fullmatch(line))
+    alias = r"\|[^\]]+\]\]"
+    project_path = re.escape(project or "")
+    legacy = {
+        "决策": rf"- \[\[项目/{project_path}/决策/[^|\]]+{alias}",
+        "经验": rf"- \[\[项目/{project_path}/经验/[^|\]]+{alias}",
+        "说明文档": rf"- \[\[项目/{project_path}/[^/|\]]+{alias}",
+        "技巧": rf"- \[\[技巧/[^|\]]+{alias}",
+        "全局": r"- \[\[(?:00-系统/ASKS\|ASKS\]\] — 人→Agent 待办|技巧/技巧\|agent使用技巧\]\] — \d+ 条)",
+        "项目": rf"- \[\[项目/[^/|\]]+/README{alias} — \d+ 条决策/经验",
+        "其他": r"- \[\[[^/|\]]+\]\]",
+    }
     parsed = nf.parse_frontmatter(text)
     body = parsed[2] if parsed else text
     front = text[:len(text) - len(body)]
     parts = nf.section_parts(body)
     sections = sections.copy()
-    targets = {match[1] for match in nf.WIKI.finditer(marker.sub(without_generated, text))}
+    existing = {}
     for index, part in enumerate(parts[1:], 1):
         heading = part.split("\n", 1)[0][3:].strip()
         if heading in sections:
-            parts[index] = _hub_section(marker, without_generated, part, sections.pop(heading), targets)
+            existing[index] = sections.pop(heading)
+            if found := marker.search(part):
+                pattern = legacy.get(heading)
+                manual = "".join(line for line in found[1].splitlines(keepends=True)
+                                 if not owned.fullmatch(line.rstrip("\n"))
+                                 and not (pattern and re.fullmatch(pattern, line.rstrip("\n"))))
+                parts[index] = part[:found.start(1)] + manual + part[found.end(1):]
+    targets = {match[1] for match in nf.WIKI.finditer(front + "".join(parts))}
+    for index, lines in existing.items():
+        parts[index] = _hub_section(marker, parts[index], lines, targets)
     for heading, lines in sections.items():
-        section = _hub_section(marker, without_generated, f"## {heading}\n", lines, targets)
+        section = _hub_section(marker, f"## {heading}\n", lines, targets)
         if "<!-- hinddian:links -->" in section:
             prefix = "" if "".join(parts).endswith("\n\n") else "\n"
             parts.append(prefix + section)
     return front + "".join(parts)
 
 
-def _hub_section(marker, without_generated, part, lines, targets):
+def _hub_section(marker, part, lines, targets):
     generated = [line + " <!-- hinddian:generated -->" for line in lines
                  if (match := nf.WIKI.search(line)) and match[1] not in targets]
     if found := marker.search(part):
-        manual = without_generated(found)
-        content = manual + "".join(line + "\n" for line in generated)
+        content = found[1] + "".join(line + "\n" for line in generated)
         block = "<!-- hinddian:links -->\n" + content + "<!-- /hinddian:links -->\n" if content else ""
         return part[:found.start()] + block + part[found.end():]
     if not generated:
@@ -184,6 +204,8 @@ def render_update(note, notes):
             front = re.sub(r"(?m)^" + re.escape(raw[key]) + r"(?=\n|$)", lambda _: line, front, count=1)
         else:
             front = front.removesuffix("---") + line + "\n---"
+    if fields:
+        yaml.compose(front[4:].removesuffix("\n---"), Loader=yaml.SafeLoader)
     updates = {heading: note["_additions"][field] for heading, field in nf.FIELD_SECTIONS.items()
                if field in note["_additions"]}
     if links:
@@ -210,8 +232,9 @@ def extend_frontmatter(key, raw, previous, values):
         if sep and (item := re.search(r"(?m)^([ \t]*)-(?:[ \t]|$)", body)):
             return raw + "".join(f"\n{item[1]}- {nf.dump_value(key, entry).split(': ', 1)[1]}" for entry in additions)
         if value.endswith("]"):
-            tail = nf.dump_value(key, additions).split("[", 1)[1]
-            return value[:-1] + (", " if previous else "") + tail + comment + sep + body
+            items = nf.dump_value(key, additions).split("[", 1)[1][:-1]
+            prefix = value[:-1].rstrip().removesuffix(",")
+            return prefix + (", " if previous else "") + items + value[len(prefix):] + comment + sep + body
     return nf.dump_value(key, values) + comment + sep + body
 
 
@@ -267,6 +290,8 @@ def process(project: str, files: list[pathlib.Path], dry=False):
     check_draft_paths()
     if not files:
         return []
+    for directory in {file.parent for file in files}:
+        check_input_directory(directory, PROCESSED / project)
     with organization(dry=dry):
         return _process(project, files, dry)
 
@@ -329,6 +354,11 @@ def check_draft_paths():
     pending, processed = DRAFTS.resolve(), PROCESSED.resolve()
     if pending.is_relative_to(processed) or processed.is_relative_to(pending):
         raise ValueError("drafts and processed must be separate directories")
+
+
+def check_input_directory(directory, archive_dir):
+    if directory.resolve() == archive_dir.resolve():
+        raise ValueError(f"input directory is the archive directory: {directory}")
 
 
 def new_path(base, notes):
@@ -524,10 +554,11 @@ def prepare_update(note):
 
 
 def archive(source, destination):
-    external_path(VAULT, source)
+    source = external_path(VAULT, source)
     check_regular_file(source)
-    external_path(VAULT, destination)
+    destination = external_path(VAULT, destination)
     check_regular_file(destination)
+    check_input_directory(source.parent, destination.parent)
     destination.parent.mkdir(parents=True, exist_ok=True)
     data = source.read_bytes()
     if destination.exists():
@@ -551,6 +582,7 @@ def drafts_of(project, d=None):
     if not d:
         return draft_store.draft_files(DRAFTS, project)
     directory = pathlib.Path(d).expanduser()
+    check_input_directory(directory, PROCESSED / project)
     return sorted(path for path in directory.glob("*.md") if path.is_file() and not path.is_symlink())
 
 @contextlib.contextmanager

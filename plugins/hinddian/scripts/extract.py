@@ -13,7 +13,7 @@ _HEADING = re.compile(
     rf"(?:\*\*[ \t\u3000]*(?P<bold>{_NAMES})[ \t\u3000]*[:：]?[ \t\u3000]*\*\*|(?P<plain>{_NAMES}))"
     r"(?:[ \t\u3000]*[:：][ \t\u3000]*|[ \t\u3000]+|(?<=\*\*)|$)(?P<body>.*)$"
 )
-_OTHER_HEADING = re.compile(r"^[ \t\u3000]{0,3}(?:#{1,6}[ \t\u3000]+|\*\*[^*\n]+\*\*\s*(?:[:：]|$))")
+_OTHER_HEADING = re.compile(r"^[ \t\u3000]{0,3}(?:#{1,6}[ \t\u3000]+|\*\*[^*\n]+\*\*(?:[ \t\u3000:：]|$))")
 _FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$")
 
 
@@ -116,24 +116,31 @@ def final_reply(payload: dict) -> str:
 
 
 def final_message(payload: dict) -> tuple[str, str]:
+    path = payload.get("transcript_path") or payload.get("transcriptPath")
     for key in ("last_assistant_message", "assistant_message", "response", "completion", "output"):
         message = payload.get(key)
         if isinstance(message, dict):
-            result = _last_assistant([{**message, "role": "assistant"}])
-            if result[0]:
-                return result
-        if text := _text(message):
-            path = payload.get("transcript_path") or payload.get("transcriptPath")
-            if path and not any(payload.get(key) for key in ("turn_id", "turnId", "message_id")):
-                try:
-                    transcript_text, message_id = _transcript(Path(path))
-                except (OSError, ValueError):
-                    pass
-                else:
-                    if transcript_text.strip() == text.strip():
-                        return text, message_id
-            return text, ""
-    if path := payload.get("transcript_path") or payload.get("transcriptPath"):
+            text, message_id = _last_assistant([{**message, "role": "assistant"}])
+        else:
+            text, message_id = _text(message), ""
+        if not text:
+            continue
+        if message_id or any(isinstance(payload.get(field), str) and payload[field].strip()
+                             for field in ("turn_id", "turnId", "message_id")):
+            return text, message_id
+        message_text, message_id = _last_assistant(payload.get("messages"))
+        if message_id and message_text.strip() == text.strip():
+            return text, message_id
+        if path:
+            try:
+                transcript_text, message_id = _transcript(Path(path))
+            except (OSError, TypeError, ValueError):
+                pass
+            else:
+                if transcript_text.strip() == text.strip():
+                    return text, message_id
+        return text, ""
+    if path:
         return _transcript(Path(path))
     result = _last_assistant(payload.get("messages"))
     if result[0]:

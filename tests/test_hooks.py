@@ -45,8 +45,8 @@ def commands(manifest):
         CLAUDE_PLUGIN_ROOT=PLUGIN, PLUGIN_ROOT=PLUGIN) for event, entries in config.items()}
 
 
-def run(command, **payload):
-    result = subprocess.run(shlex.split(command), input=json.dumps(payload), capture_output=True, text=True, timeout=3)
+def run(command, *, timeout=3, **payload):
+    result = subprocess.run(shlex.split(command), input=json.dumps(payload), capture_output=True, text=True, timeout=timeout)
     assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
 
 
@@ -122,6 +122,31 @@ def test_enospc_is_silent_and_log_is_bounded(hooks, monkeypatch, capsys, tmp_pat
         assert log.stat().st_size <= 300
 
 
+@pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
+@pytest.mark.parametrize("kind", ["symlink", "hardlink", "fifo", "directory"])
+def test_stop_bypasses_unsafe_capture_log(manifest, kind, hooks, vault, tmp_path):
+    protected = vault / "00-系统/手写.md"
+    protected.parent.mkdir()
+    protected.write_text("保留手写正文\n")
+    log = tmp_path / "hooks/capture.log"
+    log.parent.mkdir()
+    if kind == "symlink":
+        log.symlink_to(protected)
+    elif kind == "hardlink":
+        log.hardlink_to(protected)
+    elif kind == "fifo":
+        os.mkfifo(log)
+    else:
+        log.mkdir()
+
+    run(commands(manifest)["Stop"], timeout=1.5, session_id="test", last_assistant_message="短答")
+
+    assert protected.read_text() == "保留手写正文\n"
+    fallback = tmp_path / "cfg/hinddian/hooks/capture.log"
+    assert json.loads(fallback.read_text())["event"] == "skip"
+    assert not (tmp_path / "drafts").exists()
+
+
 def test_closing_headings_ignore_fenced_examples_and_unrelated_headings(hooks):
     result = hooks.extract.closing("```md\n**改进** fence\n```\n" + REPLY + "## 其他\n不能采集\n")
     assert result == "## 原行为\n旧流程\n\n## 改进\n先备份\n\n## 取舍\n推断，放弃覆盖，因为无法回滚。\n\n## 验证\n通过"
@@ -130,22 +155,41 @@ def test_closing_headings_ignore_fenced_examples_and_unrelated_headings(hooks):
     assert hooks.extract.closing(REPLY.replace("**原行为**", "原行为：").replace("### 改进：", "### 改进 ###\n"))
 
 
-@pytest.mark.parametrize("direct", [False, True])
-def test_stop_keeps_distinct_transcript_ids_and_excludes_bold_appendix(hooks, tmp_path, direct):
+@pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
+@pytest.mark.parametrize("shape", ["transcript", "text_and_transcript", "object_and_transcript",
+                                   "text_and_messages", "object_with_id"])
+def test_stop_keeps_distinct_message_ids(manifest, shape, hooks, tmp_path):
     transcript = tmp_path / "transcript.jsonl"
-    reply = REPLY + "**其他**\n无关附录\n"
-    payload = {"session_id": "s", "transcript_path": str(transcript), "project": "P"}
-    if direct:
-        payload["last_assistant_message"] = reply
-    stop = commands(".codex-plugin/hooks.json")["Stop"]
+    stop = commands(manifest)["Stop"]
     for message_id in ("one", "one", "two"):
-        event = {"type": "response_item", "payload": {"type": "message", "id": message_id,
-                 "role": "assistant", "phase": "final_answer", "content": [{"type": "output_text", "text": reply}]}}
+        msg = {"type": "message", "role": "assistant", "id": message_id, "content": REPLY}
+        transcript_msg = {**msg, "id": "other"} if shape == "object_with_id" else msg
+        if manifest == "hooks/hooks.json":
+            event = {"type": "assistant", "message": transcript_msg}
+        else:
+            event = {"type": "response_item", "payload": {**transcript_msg, "phase": "final_answer"}}
         transcript.write_text(json.dumps(event) + "\n")
+        payload = {"session_id": "s", "project": "P"}
+        if shape == "text_and_messages":
+            payload["messages"] = [msg]
+        else:
+            payload["transcript_path"] = str(transcript)
+        if shape != "transcript":
+            payload["last_assistant_message"] = {
+                "object_and_transcript": {"content": REPLY},
+                "object_with_id": {"content": REPLY, "id": message_id},
+            }.get(shape, REPLY)
         run(stop, **payload)
     draft, = (tmp_path / "drafts/P").glob("*.md")
     assert draft.read_text().count("<!-- hinddian:turn ") == 2
-    assert "无关附录" not in draft.read_text()
+
+
+@pytest.mark.parametrize("heading", ["**其他**\n", "**其他**　"])
+def test_stop_excludes_bold_appendix(hooks, tmp_path, heading):
+    stop = commands(".codex-plugin/hooks.json")["Stop"]
+    run(stop, session_id="s", project="P", last_assistant_message=REPLY + heading + "无关附录\n附录第二行\n")
+    draft, = (tmp_path / "drafts/P").glob("*.md")
+    assert draft.read_text().endswith("## 验证\n通过\n")
 
 
 def test_duplicate_stop_is_detected_across_pending_and_archived_projects(hooks, tmp_path):

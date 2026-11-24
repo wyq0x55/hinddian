@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 from hinddian import draft_store, note_format as nf
 
@@ -199,6 +200,24 @@ def test_batch_refuses_outside_paths(batch, tmp_path):
     assert draft.is_file() and list(outside.iterdir()) == []
 
 
+def test_batch_rejects_archive_dir_as_input(batch, monkeypatch):
+    draft = put_draft()
+    archive_dir = batch.PROCESSED / "P"
+    archive_dir.mkdir(parents=True)
+    archived = draft.rename(archive_dir / draft.name)
+    original = archived.read_bytes()
+    monkeypatch.setattr(batch, "chat", lambda prompt: '{"ops":[]}')
+
+    with pytest.raises(ValueError, match="input directory is the archive directory"):
+        batch.process("P", batch.drafts_of("P", archive_dir))
+    result = subprocess.run([sys.executable, str(ROOT / "classify/hinddian_batch.py"), "process", "P",
+                             "--dir", str(archive_dir)], capture_output=True, text=True, timeout=3)
+    assert result.returncode != 0 and "input directory is the archive directory" in result.stderr
+    with pytest.raises(ValueError, match="input directory is the archive directory"):
+        batch.process("P", [archived])
+    assert archived.read_bytes() == original and not batch.LOG.exists()
+
+
 def test_write_allowlist_refuses_external_and_in_vault_symlink_targets(batch, monkeypatch):
     protected = batch.VAULT / "00-系统/手写.md"
     protected.parent.mkdir()
@@ -324,6 +343,53 @@ def test_batch_rebuild_preserves_manual_lines_inside_generated_block(batch, monk
     assert "[[项目/P/经验/先备份|先备份]]" in result and stale not in result
     batch.rebuild_hubs()
     assert hub.read_text() == result
+
+
+def test_rebuild_hubs_migrates_legacy_generated_links(batch):
+    hub = batch.VAULT / "项目/P/README.md"
+    hub.parent.mkdir(parents=True)
+    orphan = "- [[项目/P/经验/曾经有效|曾经有效]]"
+    note = make_note(batch, "仍然有效", "active")
+    current = f"- [[{note['path']}|仍然有效]]"
+    manual = "- [[项目/P/经验/手写|手写]] — 手工注释。\n- [[裸手工链接]]\n手填段落。\n"
+    hub.write_text(f"# P\n\n## 经验\n{orphan}\n<!-- hinddian:links -->\n{orphan}\n{current}\n{manual}"
+                   "<!-- /hinddian:links -->\n")
+
+    batch.rebuild_hubs()
+
+    result = hub.read_text()
+    assert f"## 经验\n{orphan}\n<!-- hinddian:links -->\n" in result
+    assert result.count(orphan) == 1
+    assert manual + current + " <!-- hinddian:generated -->\n" in result
+    batch.rebuild_hubs()
+    assert hub.read_text() == result
+
+
+@pytest.mark.parametrize(("overlay", "expected"), [
+    ("tags: [handwritten,] # 手写说明", "tags: [handwritten, new,] # 手写说明"),
+    ("tags: [handwritten]\n-手写: 不能丢", "tags: [handwritten, new]\n-手写: 不能丢"),
+])
+def test_batch_update_keeps_valid_yaml_frontmatter(batch, monkeypatch, overlay, expected):
+    note = batch.VAULT / "项目/P/经验/独立手改.md"
+    note.parent.mkdir(parents=True)
+    note.write_text(f"---\nid: manual\nproject: P\ntype: lesson\n{overlay}\nsources: [origin@abcdef1]\n"
+                    "---\n# 独立手改\n\n## 理由\n手写说明\n")
+    draft = put_draft()
+    monkeypatch.setattr(batch, "chat", lambda prompt: json.dumps({"ops": [
+        {"op": "update", "id": "manual", "tags": ["new"], "reason": "新证据", "sources": ["S01"]},
+    ]}))
+
+    batch.process("P", [draft])
+
+    result = note.read_text()
+    parsed = yaml.safe_load(result.split("---\n", 2)[1])
+    assert expected in result
+    assert parsed["tags"] == ["handwritten", "new"]
+    assert parsed["sources"] == ["origin@abcdef1", "sess-1@abcdef1"]
+    if "-手写:" in overlay:
+        assert parsed["-手写"] == "不能丢"
+    assert "手写说明\n\n新证据" in result
+    assert not draft.exists() and (batch.PROCESSED / "P" / draft.name).is_file()
 
 
 def test_batch_update_keeps_commented_yaml_list_and_original_source_id(batch, monkeypatch):

@@ -2,6 +2,8 @@
 
 `hinddian_batch.py` 按项目读取库外的会话草稿，合并成决策、经验和全局技巧。自动运行跳过 `holdout`，`通用-未定` 只产出全局技巧。成功写入后，草稿移到 `processed`。路径与采集共用[环境变量和 JSON 配置](../README.md#路径配置)。
 
+整理器使用 PyYAML 校验更新后的 frontmatter。请将项目依赖安装到运行整理器的 Python 环境。
+
 ```sh
 python3 classify/hinddian_batch.py run
 python3 classify/hinddian_batch.py process my-project --dry-run
@@ -9,7 +11,7 @@ python3 classify/hinddian_batch.py process my-project --dir ./comparison-drafts 
 python3 classify/hinddian_batch.py rebuild-hubs
 ```
 
-`process --dir` 可指定独立的输入目录。`--dry-run` 需要干净的 Git 工作区，只请求和校验模型操作。`HB_BATCH` 控制每批草稿数（默认 20），`HB_RUN_MAX_BATCHES` 控制一次 `run` 每项目最多处理的批数（默认 3）。模型由 `HB_MODEL` 指定，`HB_GATEWAY` 默认为 `http://127.0.0.1:3425/v1/chat/completions`。
+`process --dir` 可指定独立的输入目录。输入目录必须与该项目的归档目录分开。`--dry-run` 需要干净的 Git 工作区，只请求和校验模型操作。`HB_BATCH` 控制每批草稿数（默认 20），`HB_RUN_MAX_BATCHES` 控制一次 `run` 每项目最多处理的批数（默认 3）。模型由 `HB_MODEL` 指定，`HB_GATEWAY` 默认为 `http://127.0.0.1:3425/v1/chat/completions`。
 
 笔记库必须拥有自己的 Git 提交和本地提交身份。干净时使用 HEAD 作为快照，有改动时先把现有变更做成本地快照提交。这样手写改动和上次入库结果会留在本地历史里，定时器也能自动处理下一批。整理后的 diff 写入 stdout 与状态目录的 `batch-ledger.jsonl`。笔记改动留在工作区，下一次整理可将其提交到本地快照。
 

@@ -148,6 +148,7 @@ def _split_inline(s: str) -> list[str]:
 
 
 _KEY = re.compile(r"""^("(?:\\.|[^"\\])*"|'(?:''|[^'])*'|[^\s#?:][^:]*?):(?:[ \t]+(.*))?$""")
+_BLOCK_ITEM = re.compile(r"^-(?:[ \t]|$)")
 
 
 def yaml_comment(line: str) -> tuple[str, str]:
@@ -192,7 +193,8 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], dict[str, str], str] |
         key = _unquote(m.group(1).rstrip())
         val = yaml_comment(m.group(2) or "")[0].strip()
         j = i + 1
-        while j < len(lines) and (lines[j].startswith((" ", "\t", "-", "#")) or not lines[j].strip()):
+        while j < len(lines) and (lines[j].startswith((" ", "\t", "#"))
+                                 or _BLOCK_ITEM.match(lines[j]) or not lines[j].strip()):
             j += 1
         while j > i + 1 and not lines[j - 1].strip():
             j -= 1
