@@ -207,10 +207,14 @@ def test_stop_keeps_distinct_message_ids(manifest, shape, hooks, tmp_path):
     assert draft.read_text().count("<!-- hinddian:turn ") == 2
 
 
-@pytest.mark.parametrize("heading", ["**其他**\n", "**其他**　"])
-def test_stop_excludes_bold_appendix(hooks, tmp_path, heading):
-    stop = commands(".codex-plugin/hooks.json")["Stop"]
-    run(stop, session_id="s", project="P", last_assistant_message=REPLY + heading + "无关附录\n附录第二行\n")
+@pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
+@pytest.mark.parametrize("heading", [
+    "**其他**\n", "**其他**　", "## 实测附录\n",
+    "**实测附录**\n", "**推断过程附录**\n", "**【实测附录】**\n", "**实测附录：环境清单**\n",
+])
+def test_stop_excludes_appendix(manifest, hooks, tmp_path, heading):
+    stop = commands(manifest)["Stop"]
+    run(stop, session_id="s", project="P", last_assistant_message=REPLY + "\n" + heading + "无关附录\n附录第二行\n")
     draft, = (tmp_path / "drafts/P").glob("*.md")
     assert draft.read_text().endswith("## 验证\n通过\n")
 
@@ -221,6 +225,7 @@ def test_stop_excludes_bold_appendix(hooks, tmp_path, heading):
     "**实测** 构建通过",
     "**【实测】** 构建通过",
     "**实测结果** 构建通过",
+    "**实测结果：已核对附录** 构建通过",
     "**[推断结果]**\n根据运行日志判断",
     "**猜测（原会话）** 可能由缓存引起",
 ])

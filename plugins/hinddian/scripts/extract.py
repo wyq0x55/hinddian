@@ -13,9 +13,20 @@ _HEADING = re.compile(
     rf"(?:\*\*[ \t\u3000]*(?P<bold>{_NAMES})[ \t\u3000]*[:：]?[ \t\u3000]*\*\*|(?P<plain>{_NAMES}))"
     r"(?:[ \t\u3000]*[:：][ \t\u3000]*|[ \t\u3000]+|(?<=\*\*)|$)(?P<body>.*)$"
 )
-_OTHER_HEADING = re.compile(r"^[ \t\u3000]{0,3}(?:#{1,6}[ \t\u3000]+|\*\*[^*\n]+\*\*(?:[ \t\u3000:：]|$))")
-_BOLD_EVIDENCE = re.compile(r"^[ \t\u3000]{0,3}\*\*[ \t\u3000【\[（(「『]*(?:实测|推断|猜测)[^*\n]*\*\*")
+_OTHER_HEADING = re.compile(
+    r"^[ \t\u3000]{0,3}(?:#{1,6}[ \t\u3000]+|\*\*(?P<bold>[^*\n]+)\*\*(?:[ \t\u3000:：]|$))"
+)
+_EVIDENCE_LABEL = re.compile(r"[ \t\u3000【\[（(「『]*(?:实测|推断|猜测)")
+_APPENDIX_LABEL = re.compile(r"[^:：]*附录(?:[ \t\u3000:：—–(（【\[\-]|[】\]）)」』]*$)")
 _FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$")
+
+
+def _other_heading(line: str) -> bool:
+    heading = _OTHER_HEADING.match(line)
+    if not heading:
+        return False
+    label = heading["bold"] or ""
+    return not _EVIDENCE_LABEL.match(label) or _APPENDIX_LABEL.match(label) is not None
 
 
 def closing(text: str) -> str:
@@ -39,7 +50,7 @@ def closing(text: str) -> str:
                 sections = {}
             value = re.sub(r"[ \t\u3000]+#+[ \t\u3000]*$", "", heading["body"]).strip()
             sections[active] = [value] if value else []
-        elif active and not fence and _OTHER_HEADING.match(line) and not _BOLD_EVIDENCE.match(line):
+        elif active and not fence and _other_heading(line):
             active = None
         elif active:
             sections[active].append(line)
