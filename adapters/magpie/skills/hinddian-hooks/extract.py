@@ -13,10 +13,8 @@ _HEADING = re.compile(
     rf"(?:\*\*[ \t\u3000]*(?P<bold>{_NAMES})[ \t\u3000]*[:：]?[ \t\u3000]*\*\*|(?P<plain>{_NAMES}))"
     r"(?:[ \t\u3000]*[:：][ \t\u3000]*|[ \t\u3000]+|(?<=\*\*)|$)(?P<body>.*)$"
 )
-_OTHER_HEADING = re.compile(
-    r"^[ \t\u3000]{0,3}(?:#{1,6}[ \t\u3000]+|"
-    r"\*\*(?!(?:实测|推断|猜测)(?=[* \t\u3000。:：·／/（(]))[^*\n]+\*\*(?:[ \t\u3000:：]|$))"
-)
+_OTHER_HEADING = re.compile(r"^[ \t\u3000]{0,3}(?:#{1,6}[ \t\u3000]+|\*\*[^*\n]+\*\*(?:[ \t\u3000:：]|$))")
+_BOLD_EVIDENCE = re.compile(r"^[ \t\u3000]{0,3}\*\*[ \t\u3000【\[（(「『]*(?:实测|推断|猜测)[^*\n]*\*\*")
 _FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$")
 
 
@@ -41,7 +39,7 @@ def closing(text: str) -> str:
                 sections = {}
             value = re.sub(r"[ \t\u3000]+#+[ \t\u3000]*$", "", heading["body"]).strip()
             sections[active] = [value] if value else []
-        elif not fence and _OTHER_HEADING.match(line) and active:
+        elif active and not fence and _OTHER_HEADING.match(line) and not _BOLD_EVIDENCE.match(line):
             active = None
         elif active:
             sections[active].append(line)

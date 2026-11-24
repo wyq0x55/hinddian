@@ -219,6 +219,9 @@ def test_stop_excludes_bold_appendix(hooks, tmp_path, heading):
 @pytest.mark.parametrize("verification", [
     "通过\n开关由环境控制\n**推断** 仍需验证失败回退\n这行补充依据",
     "**实测** 构建通过",
+    "**【实测】** 构建通过",
+    "**实测结果** 构建通过",
+    "**[推断结果]**\n根据运行日志判断",
     "**猜测（原会话）** 可能由缓存引起",
 ])
 def test_stop_keeps_bold_evidence_in_closing(manifest, verification, hooks, tmp_path):

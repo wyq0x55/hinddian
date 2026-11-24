@@ -80,7 +80,7 @@ def _rebuild_hubs(changed_projects=None):
         sections = {"决策": [f"- {link_of(n)}" for n in act("decision")],
                     "经验": [f"- {link_of(n)}" for n in act("lesson")],
                     "说明文档": [f"- [[项目/{proj}/{d}|{d}]]" for d in docs]}
-        out = hub_links(head, sections, project=proj)
+        out = hub_links(head, sections)
         if out != head or not rd.exists():
             write_file(f"项目/{proj}/README", out, create=not rd.exists())
     tips = sorted([n for n in notes.values() if n["type"] == "tip" and n["status"] == "active"], key=lambda n: n["title"])
@@ -121,33 +121,9 @@ def hub_block(part):
     return None
 
 
-def legacy_hub_link(line, pattern, current):
-    if not pattern or not re.fullmatch(pattern, line):
-        return False
-    if line in current:
-        return True
-    target, alias = nf.WIKI.search(line).groups()
-    path = pathlib.PurePosixPath(target)
-    if path.is_absolute() or ".." in path.parts:
-        return False
-    default_alias = path.parent.name if path.name == "README" else path.name
-    return alias in (None, default_alias) and not (VAULT / f"{target}.md").exists()
-
-
-def hub_links(text, sections, *, project=None):
+def hub_links(text, sections):
     """Keep hand-written content and fenced code when rebuilding generated links."""
     owned = re.compile(r"^- \[\[[^\]]+\]\](?: — \d+ 条(?:决策/经验)?| — 人→Agent 待办)? <!-- hinddian:generated -->$")
-    alias = r"\|[^\]]+\]\]"
-    project_path = re.escape(project or "")
-    legacy = {
-        "决策": rf"- \[\[项目/{project_path}/决策/[^|\]]+{alias}",
-        "经验": rf"- \[\[项目/{project_path}/经验/[^|\]]+{alias}",
-        "说明文档": rf"- \[\[项目/{project_path}/[^/|\]]+{alias}",
-        "技巧": rf"- \[\[技巧/[^|\]]+{alias}",
-        "全局": r"- \[\[(?:00-系统/ASKS\|ASKS\]\] — 人→Agent 待办|技巧/技巧\|agent使用技巧\]\] — \d+ 条)",
-        "项目": rf"- \[\[项目/[^/|\]]+/README{alias} — \d+ 条决策/经验",
-        "其他": r"- \[\[[^/|\]]+\]\]",
-    }
     parsed = nf.parse_frontmatter(text)
     body = parsed[2] if parsed else text
     front = text[:len(text) - len(body)]
@@ -157,21 +133,15 @@ def hub_links(text, sections, *, project=None):
     for index, part in enumerate(parts[1:], 1):
         heading = part.split("\n", 1)[0][3:].strip()
         if heading in sections:
-            lines = sections.pop(heading)
-            existing[index] = lines
+            existing[index] = sections.pop(heading)
             if found := hub_block(part):
                 start, end, _ = found
-                inside = [(offset, line) for offset, line in nf.unfenced_lines(part) if start < offset < end]
-                remove = [(offset, line) for offset, line in inside if owned.fullmatch(line.rstrip("\n"))]
-                if not remove:
-                    current = set(lines)
-                    remove = [(offset, line) for offset, line in inside
-                              if legacy_hub_link(line.rstrip("\n"), legacy.get(heading), current)]
                 preserved = []
                 cursor = 0
-                for offset, line in remove:
-                    preserved.append(part[cursor:offset])
-                    cursor = offset + len(line)
+                for offset, line in nf.unfenced_lines(part):
+                    if start < offset < end and owned.fullmatch(line.rstrip("\n")):
+                        preserved.append(part[cursor:offset])
+                        cursor = offset + len(line)
                 parts[index] = "".join(preserved) + part[cursor:]
     targets = {match[1] for _, line in nf.unfenced_lines(front + "".join(parts))
                for match in nf.WIKI.finditer(line)}

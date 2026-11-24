@@ -345,22 +345,23 @@ def test_batch_rebuild_preserves_manual_lines_inside_generated_block(batch, monk
     assert hub.read_text() == result
 
 
-def test_rebuild_hubs_migrates_legacy_generated_links(batch):
+def test_rebuild_hubs_preserves_unmarked_links(batch):
     hub = batch.VAULT / "项目/P/README.md"
     hub.parent.mkdir(parents=True)
     orphan = "- [[项目/P/经验/曾经有效|曾经有效]]"
     note = make_note(batch, "仍然有效", "active")
     current = f"- [[{note['path']}|仍然有效]]"
-    manual = "- [[项目/P/经验/手写|手写]] — 手工注释。\n- [[裸手工链接]]\n手填段落。\n"
-    hub.write_text(f"# P\n\n## 经验\n{orphan}\n<!-- hinddian:links -->\n{orphan}\n{current}\n{manual}"
-                   "<!-- /hinddian:links -->\n")
+    manual = "手写待补清单\n- [[项目/P/经验/待补复盘|待补复盘]]\n"
+    original = (f"# P\n\n## 经验\n{orphan}\n<!-- hinddian:links -->\n{orphan}\n{current}\n{manual}"
+                "<!-- /hinddian:links -->\n")
+    hub.write_text(original)
+    added = make_note(batch, "新经验", "new")
+    marked = f"- [[{added['path']}|新经验]] <!-- hinddian:generated -->\n"
 
     batch.rebuild_hubs()
 
     result = hub.read_text()
-    assert f"## 经验\n{orphan}\n<!-- hinddian:links -->\n" in result
-    assert result.count(orphan) == 1
-    assert manual + current + " <!-- hinddian:generated -->\n" in result
+    assert result == original.replace("<!-- /hinddian:links -->", marked + "<!-- /hinddian:links -->")
     batch.rebuild_hubs()
     assert hub.read_text() == result
 
