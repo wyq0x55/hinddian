@@ -172,6 +172,7 @@ def test_closing_headings_ignore_fenced_examples_and_unrelated_headings(hooks):
     assert result == "## 原行为\n旧流程\n\n## 改进\n先备份\n\n## 取舍\n推断，放弃覆盖，因为无法回滚。\n\n## 验证\n通过"
     assert hooks.extract.closing(REPLY.replace("**取舍：**", "**其他**")) == ""
     assert hooks.extract.closing("**原行为** x\n**改进** y\n**取舍** z\n**验证**") == ""
+    assert hooks.extract.closing(REPLY.replace("通过", "**实测日志附录A**：附录正文")) == ""
     assert hooks.extract.closing(REPLY.replace("**原行为**", "原行为：").replace("### 改进：", "### 改进 ###\n"))
 
 
@@ -215,6 +216,7 @@ def test_stop_keeps_distinct_message_ids(manifest, shape, hooks, tmp_path):
     "**实测 附录**\n",
     "**实测日志附录**\n", "**实测数据附录：原始记录**\n",
     "**【推断配置差异附录Ｂ：回退记录】**\n",
+    "**实测日志附录A**　", "**实测日志附录A**：",
 ])
 def test_stop_excludes_appendix(manifest, hooks, tmp_path, heading):
     stop = commands(manifest)["Stop"]
@@ -235,12 +237,17 @@ def test_stop_excludes_appendix(manifest, hooks, tmp_path, heading):
     "**实测结果详见附录A** 构建通过",
     "**实测日志请参阅附录 A** 构建通过",
     "**实测数据见附录B** 构建通过",
+    "**实测日志在附录 A** 构建通过",
+    "**实测数据见下方附录A** 构建通过",
+    "**实测日志可从附录B** 构建通过",
+    "通过\n\n**实测日志在附录 A**\n日志路径已核对",
+    "通过\n**实测数据详见下文附录A**：构建通过",
     "**[推断结果]**\n根据运行日志判断",
     "**猜测（原会话）** 可能由缓存引起",
 ])
 def test_stop_keeps_bold_evidence_in_closing(manifest, verification, hooks, tmp_path):
     stop = commands(manifest)["Stop"]
-    reply = REPLY.replace("通过", verification) + "**其他**　无关附录\n附录第二行\n"
+    reply = REPLY.replace("通过", "\n" + verification) + "**其他**　无关附录\n附录第二行\n"
     run(stop, session_id="s", project="P", last_assistant_message=reply)
     draft, = (tmp_path / "drafts/P").glob("*.md")
     assert draft.read_text().endswith(f"## 验证\n{verification}\n")
