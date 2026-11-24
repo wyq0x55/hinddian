@@ -390,6 +390,44 @@ def test_rebuild_hubs_preserves_unmarked_links(batch):
     assert hub.read_text() == result
 
 
+def test_rebuild_hubs_prunes_only_confirmed_legacy_link(batch):
+    current = make_note(batch, "在用", "current")
+    hub = batch.VAULT / "项目/P/README.md"
+    stale = "- [[项目/P/经验/已移除|已移除]]"
+    pending = "- [[项目/P/经验/待补复盘|待补复盘]]"
+    marked = f"- {batch.link_of(current)} <!-- hinddian:generated -->"
+    original = (f"# P\n\n## 经验\n{stale}\n<!-- hinddian:links -->\n{stale}\n{pending}\n"
+                f"```md\n{stale}\n```\n{marked}\n<!-- /hinddian:links -->\n")
+    hub.write_text(original)
+    batch.rebuild_hubs()
+    assert hub.read_text() == original
+
+    result = subprocess.run([sys.executable, str(ROOT / "classify/hinddian_batch.py"), "rebuild-hubs",
+                             "--prune-legacy-link", "项目/P/README.md", "经验", stale[2:]],
+                            capture_output=True, text=True, timeout=4)
+
+    assert result.returncode == 0, result.stderr
+    expected = original.replace(f"<!-- hinddian:links -->\n{stale}\n", "<!-- hinddian:links -->\n")
+    assert hub.read_text() == expected
+    batch.rebuild_hubs()
+    assert hub.read_text() == expected
+
+
+@pytest.mark.parametrize("links", ["{stale}\n{stale}", "```md\n{stale}\n```"])
+def test_rebuild_hubs_rejects_nonunique_legacy_link(batch, links):
+    make_note(batch, "在用", "current")
+    hub = batch.VAULT / "项目/P/README.md"
+    stale = "[[项目/P/经验/已移除|已移除]]"
+    content = links.format(stale=f"- {stale}")
+    original = f"# P\n\n## 经验\n<!-- hinddian:links -->\n{content}\n<!-- /hinddian:links -->\n"
+    hub.write_text(original)
+
+    with pytest.raises(ValueError, match="expected one unmarked legacy link"):
+        batch.rebuild_hubs(legacy_link=("项目/P/README.md", "经验", stale))
+
+    assert hub.read_text() == original
+
+
 def test_rebuild_hubs_preserves_manual_links_and_fenced_examples(batch):
     hub = batch.VAULT / "项目/P/README.md"
     retired = hub.parent / "经验/已退役.md"
@@ -491,6 +529,52 @@ def test_batch_updates_and_reloads_multiline_flow_fields(batch, monkeypatch):
     draft.write_bytes(draft_text)
     batch.process("P", [draft])
     assert note.read_text() == result and not draft.exists() and archive.read_bytes() == draft_text
+
+
+@pytest.mark.parametrize("custom", [
+    "manual: !Local value # 手写属性\n",
+    "manual: !Local\n  owner: '某人' # 手写属性\n  data: !List [old, !Item value]\n",
+    "manual: !Local &metadata [value, !Item '保留'] # 手写属性\ncopy: *metadata\n",
+])
+def test_batch_preserves_unrelated_yaml_tags(batch, monkeypatch, custom):
+    note = make_note(batch, "手写", "manual")
+    path = batch.VAULT / (note["path"] + ".md")
+    original = path.read_text().replace("tags: []\n", "tags: [\n  old, # 手写标签\n  ]\n" + custom)
+    path.write_text(original)
+    draft = put_draft()
+    monkeypatch.setattr(batch, "chat", lambda prompt: json.dumps({"ops": [
+        {"op": "update", "id": note["id"], "tags": ["new"], "sources": ["S01"]},
+    ]}))
+
+    batch.process("P", [draft])
+
+    expected = original.replace("  old, # 手写标签\n", "  old, # 手写标签\n  new,\n")
+    expected = expected.replace("sources: []", "sources: [sess-1@abcdef1]")
+    assert path.read_text() == expected
+    loaded = batch.load_notes()[note["id"]]
+    assert loaded["tags"] == ["old", "new"] and loaded["sources"] == ["sess-1@abcdef1"]
+    assert not draft.exists() and (batch.PROCESSED / "P" / draft.name).is_file()
+
+
+@pytest.mark.parametrize(("overlay", "message"), [
+    ("tags: !Local [old]\n", "cannot update opaque frontmatter field tags"),
+    ("tags: &old [old]\nmanual: !Local {saved: *old}\n", "would change existing values"),
+])
+def test_batch_refuses_to_change_custom_yaml_values(batch, monkeypatch, overlay, message):
+    note = make_note(batch, "手写", "manual")
+    path = batch.VAULT / (note["path"] + ".md")
+    original = path.read_text().replace("tags: []\n", overlay)
+    path.write_text(original)
+    draft = put_draft()
+    monkeypatch.setattr(batch, "chat", lambda prompt: json.dumps({"ops": [
+        {"op": "update", "id": note["id"], "tags": ["new"], "sources": ["S01"]},
+    ]}))
+
+    with pytest.raises(ValueError, match=message):
+        batch.process("P", [draft])
+
+    assert path.read_text() == original and draft.exists()
+    assert not (batch.PROCESSED / "P" / draft.name).exists()
 
 
 @pytest.mark.parametrize("overlay", [

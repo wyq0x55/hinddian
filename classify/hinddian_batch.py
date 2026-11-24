@@ -6,6 +6,7 @@ The holdout tree is reserved for manual comparisons. 通用-未定 only produces
 """
 from __future__ import annotations
 import argparse, contextlib, datetime as dt, hashlib, json, os, pathlib, re, subprocess, sys, urllib.request
+from dataclasses import dataclass
 
 import yaml
 
@@ -39,6 +40,29 @@ safe, slugify, link_of = nf.safe_title, nf.slugify, nf.link_of
 _cache = nf.NoteCache()
 
 
+@dataclass(frozen=True)
+class _OpaqueYamlTag:
+    tag: str
+    value: object
+
+
+class _FrontmatterLoader(yaml.SafeLoader):
+    pass
+
+
+def _construct_opaque_yaml_tag(loader, node):
+    if isinstance(node, yaml.ScalarNode):
+        value = loader.construct_scalar(node)
+    elif isinstance(node, yaml.SequenceNode):
+        value = loader.construct_sequence(node, deep=True)
+    else:
+        value = loader.construct_mapping(node, deep=True)
+    return _OpaqueYamlTag(node.tag, value)
+
+
+_FrontmatterLoader.add_constructor(None, _construct_opaque_yaml_tag)
+
+
 def load_notes():
     notes = _cache.load(VAULT)
     resolve_related = False
@@ -51,7 +75,7 @@ def load_notes():
         document = note["text"][4:].partition("\n---\n")[0].rstrip().removesuffix("\n---")
         try:
             flows = multiline_flows(document, candidates)
-            values = yaml.safe_load(document) if flows else {}
+            values = yaml.load(document, Loader=_FrontmatterLoader) if flows else {}
         except yaml.YAMLError:
             continue
         for key in flows:
@@ -82,8 +106,10 @@ def clean_field(t): return nf.guard_field(nf.unwiki(t or ""))
 def _grams(t):
     t = re.sub(r"\s+", "", t or ""); return {t[i:i + 2] for i in range(len(t) - 1)}
 
-def rebuild_hubs():
+def rebuild_hubs(*, legacy_link=None):
     with organization(), nf.vault_lock():
+        if legacy_link is not None:
+            _prune_legacy_link(*legacy_link)
         _rebuild_hubs()
 
 
@@ -135,6 +161,8 @@ def _rebuild_hubs(changed_projects=None):
 
 _HUB_OPEN = "<!-- hinddian:links -->\n"
 _HUB_CLOSE = "<!-- /hinddian:links -->"
+_HUB_LINK = r"- \[\[[^\]\n]+\]\](?: — \d+ 条(?:决策/经验)?| — 人→Agent 待办)?"
+_HUB_OWNED = re.compile(_HUB_LINK + r" <!-- hinddian:generated -->")
 
 
 def hub_block(part):
@@ -147,9 +175,33 @@ def hub_block(part):
     return None
 
 
+def _prune_legacy_link(hub, heading, entry):
+    rel = hub.removesuffix(".md")
+    if rel not in {"00-系统/INDEX", "技巧/技巧"} and not re.fullmatch(r"项目/[^/]+/README", rel):
+        raise ValueError(f"not a generated hub path: {hub!r}")
+    line_text = f"- {entry}"
+    if not re.fullmatch(_HUB_LINK, line_text):
+        raise ValueError("expected a legacy link entry without the leading '- '")
+    text = allowed(rel).read_text(encoding="utf-8")
+    parsed = nf.parse_frontmatter(text)
+    body = parsed[2] if parsed else text
+    parts = nf.section_parts(body)
+    matches = []
+    for index, part in enumerate(parts[1:], 1):
+        if part.split("\n", 1)[0][3:].strip() != heading or not (block := hub_block(part)):
+            continue
+        start, end, _ = block
+        matches.extend((index, offset, len(line)) for offset, line in nf.unfenced_lines(part)
+                       if start < offset < end and line.rstrip("\n") == line_text)
+    if len(matches) != 1:
+        raise ValueError(f"expected one unmarked legacy link in {hub!r} under {heading!r}; found {len(matches)}")
+    index, offset, length = matches[0]
+    parts[index] = parts[index][:offset] + parts[index][offset + length:]
+    write_file(rel, text[:len(text) - len(body)] + "".join(parts))
+
+
 def hub_links(text, sections):
     """Keep hand-written content and fenced code when rebuilding generated links."""
-    owned = re.compile(r"^- \[\[[^\]]+\]\](?: — \d+ 条(?:决策/经验)?| — 人→Agent 待办)? <!-- hinddian:generated -->$")
     parsed = nf.parse_frontmatter(text)
     body = parsed[2] if parsed else text
     front = text[:len(text) - len(body)]
@@ -165,7 +217,7 @@ def hub_links(text, sections):
                 preserved = []
                 cursor = 0
                 for offset, line in nf.unfenced_lines(part):
-                    if start < offset < end and owned.fullmatch(line.rstrip("\n")):
+                    if start < offset < end and _HUB_OWNED.fullmatch(line.rstrip("\n")):
                         preserved.append(part[cursor:offset])
                         cursor = offset + len(line)
                 parts[index] = "".join(preserved) + part[cursor:]
@@ -252,10 +304,12 @@ def render_update(note, notes):
 
 
 def update_frontmatter(front, fm, raw, fields):
-    original = yaml.safe_load(front[4:].removesuffix("\n---"))
+    original = yaml.load(front[4:].removesuffix("\n---"), Loader=_FrontmatterLoader)
     expected = original.copy()
     for key, additions in fields.items():
         previous = original.get(key)
+        if isinstance(previous, _OpaqueYamlTag):
+            raise ValueError(f"cannot update opaque frontmatter field {key}")
         existing = previous if isinstance(previous, list) else [] if previous in (None, "") else [previous]
         additions = [item for item in additions if item not in existing]
         if not additions:
@@ -274,7 +328,7 @@ def update_frontmatter(front, fm, raw, fields):
             front = re.sub(r"(?m)^" + re.escape(raw[key]) + r"(?=\n|$)", lambda _: line, front, count=1)
         else:
             front = front.removesuffix("---") + line + "\n---"
-    if yaml.safe_load(front[4:].removesuffix("\n---")) != expected:
+    if yaml.load(front[4:].removesuffix("\n---"), Loader=_FrontmatterLoader) != expected:
         raise ValueError("frontmatter update would change existing values")
     return front
 
@@ -740,12 +794,16 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=("run", "process", "rebuild-hubs")); ap.add_argument("arg", nargs="?")
     ap.add_argument("--dry-run", action="store_true"); ap.add_argument("--dir"); ap.add_argument("--batch", type=int)
+    ap.add_argument("--prune-legacy-link", nargs=3, metavar=("HUB", "HEADING", "ENTRY"),
+                    help="remove one confirmed unmarked legacy entry during rebuild-hubs")
     a = ap.parse_args()
+    if a.prune_legacy_link and (a.cmd != "rebuild-hubs" or a.dry_run):
+        ap.error("--prune-legacy-link requires rebuild-hubs without --dry-run")
     if a.batch is not None:
         if a.batch <= 0: ap.error("--batch must be positive")
         BATCH = a.batch
     if a.cmd == "run": cmd_run()
-    elif a.cmd == "rebuild-hubs": rebuild_hubs()
+    elif a.cmd == "rebuild-hubs": rebuild_hubs(legacy_link=a.prune_legacy_link)
     elif a.cmd == "process":
         if not a.arg: ap.error("process requires a project")
         files = drafts_of(a.arg, a.dir)
