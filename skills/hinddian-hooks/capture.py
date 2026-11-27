@@ -79,7 +79,12 @@ def capture(payload: dict) -> dict | None:
     sid = (_field(payload, "session_id", "sessionId", "conversation_id", "conversationId", "thread_id")
            or next((os.environ[name] for name in ("MAGPIE_SESSION_ID", "CLAUDE_SESSION_ID", "CODEX_SESSION_ID",
                                                  "CURSOR_SESSION_ID") if os.environ.get(name)), ""))
-    if closing := extract.closing(reply):
+    try:
+        closing = extract.closing(reply)
+    except extract.MarkdownParserUnavailable:
+        record("skip", reason="missing_markdown_parser", dependency="markdown-it-py", session_id=sid)
+        return None
+    if closing:
         kind, text = "closing", closing
     elif fallback == "summary" and reply.strip():
         kind, text = "summary", reply.strip()[:limit]

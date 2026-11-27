@@ -2,7 +2,7 @@
 """Generate every distributed copy of the host-hook scripts from their single source.
 
 Sources (edit these):
-  hooks/*.py                               hook runtime (stdlib only)
+  hooks/*.py                               hook runtime
   src/hinddian/                           shared stdlib paths and draft modules
   adapters/magpie/skills/hinddian-hooks/   Magpie-only installer files (SKILL.md, install.*, embed_hooks.py)
 

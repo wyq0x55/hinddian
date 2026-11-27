@@ -392,7 +392,7 @@ def test_rebuild_hubs_preserves_unmarked_links(batch):
 
 @pytest.mark.parametrize(("opening", "closing"), [
     pytest.param("<!-- hinddian:links -->", "<!-- /hinddian:links -->", id="standard"),
-    pytest.param("\t<!-- hinddian:links --> \t", " <!-- /hinddian:links -->\t ", id="padded"),
+    pytest.param(" <!-- hinddian:links --> \t", " <!-- /hinddian:links -->\t ", id="padded"),
 ])
 def test_rebuild_hubs_prunes_only_confirmed_legacy_link(batch, opening, closing):
     current = make_note(batch, "在用", "current")
@@ -471,7 +471,7 @@ def test_rebuild_hubs_prune_checks_all_blocks_in_section(batch, first_matches):
                  "<!-- /hinddian:links -->\n<!-- /hinddian:links --> \t\n", "",
                  "nested", id="nested-padded-outer"),
     pytest.param(" <!-- /hinddian:links --> \t\n", "", "unmatched closing", id="orphan-close-padded"),
-    pytest.param("", "\t<!-- hinddian:links --> \t", "unclosed", id="unclosed-padded"),
+    pytest.param("", "   <!-- hinddian:links --> \t", "unclosed", id="unclosed-padded"),
 ])
 def test_rebuild_hubs_prune_rejects_malformed_markers_without_writes(batch, tmp_path, before, after, error):
     make_note(batch, "在用", "current")
@@ -497,6 +497,41 @@ def test_rebuild_hubs_prune_rejects_malformed_markers_without_writes(batch, tmp_
 
     assert result.returncode != 0 and error in result.stderr
     assert snapshot() == original
+    assert git(batch.VAULT, "rev-parse", "HEAD") == head
+
+
+@pytest.mark.parametrize("example", [
+    pytest.param("    {marker}\n", id="four-space-code"),
+    pytest.param("\t{marker}\n", id="tab-code"),
+    pytest.param("> {marker}\n", id="quote"),
+    pytest.param("- 示例\n\n      {marker}\n", id="list-code"),
+    pytest.param("`{marker}`\n", id="inline-code"),
+    pytest.param("<!-- 示例说明\n## 经验\n{marker}\n", id="multiline-comment"),
+])
+def test_rebuild_hubs_prune_ignores_marker_examples_without_writes(batch, tmp_path, example):
+    current = make_note(batch, "在用", "current")
+    hub = batch.VAULT / "项目/P/README.md"
+    legacy = "[[项目/P/经验/已移除|已移除]]"
+    opener, closer = "<!-- hinddian:links -->", "<!-- /hinddian:links -->"
+    original = (f"# P\n\n## 经验\n\n{opener}\n- {batch.link_of(current)}\n{closer}\n\n"
+                f"{example.format(marker=opener)}\n手写待补入口\n\n- {legacy}\n手写备注。\n\n"
+                f"{example.format(marker=closer)}")
+    hub.write_text(original)
+    git(batch.VAULT, "add", "-A")
+    git(batch.VAULT, "commit", "-qm", "hub fixture")
+    head = git(batch.VAULT, "rev-parse", "HEAD")
+
+    def snapshot():
+        return {path: (path.stat().st_mtime_ns, path.read_bytes() if path.is_file() else None)
+                for path in tmp_path.rglob("*")}
+
+    before = snapshot()
+    result = subprocess.run([sys.executable, str(ROOT / "classify/hinddian_batch.py"), "rebuild-hubs",
+                             "--prune-legacy-link", "项目/P/README.md", "经验", legacy],
+                            capture_output=True, text=True, timeout=4)
+
+    assert result.returncode != 0 and "found 0" in result.stderr
+    assert snapshot() == before
     assert git(batch.VAULT, "rev-parse", "HEAD") == head
 
 

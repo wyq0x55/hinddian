@@ -4,72 +4,126 @@ from __future__ import annotations
 import json
 import os
 import re
+from functools import lru_cache
 from pathlib import Path
 
 HEADINGS = ("原行为", "改进", "取舍", "验证")
 _NAMES = "|".join(HEADINGS)
 _HEADING = re.compile(
-    rf"^[ \t\u3000]{{0,3}}(?:#{{1,6}}[ \t\u3000]+)?"
+    rf"^[ \t\u3000]{{0,3}}"
     rf"(?:\*\*[ \t\u3000]*(?P<bold>{_NAMES})[ \t\u3000]*[:：]?[ \t\u3000]*\*\*|(?P<plain>{_NAMES}))"
     r"(?:[ \t\u3000]*[:：][ \t\u3000]*|[ \t\u3000]+|(?<=\*\*)|$)(?P<body>.*)$"
 )
-_ATX_HEADING = re.compile(r"^#{1,6}[ \t\u3000]+")
-_ATX_END = re.compile(r"[ \t\u3000]+#+$")
-_EMPHASIS_LABEL = re.compile(
-    r"(?P<mark>(?P<char>[*_])(?P=char){0,2})(?!(?P=char))"
-    r"(?P<label>(?!\s).+?)(?<![\s\\])(?P=mark)(?!(?P=char))"
-)
-_INLINE_LINK = re.compile(
-    r"(?<!\\)\[((?:\\.|[^\[\]\\]|\[[^\[\]]*\])*)\]"
-    r"\((?:\\.|<[^<>]*>|[^()\\<]|\((?:\\.|[^()\\])*\))*\)"
-)
-_FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$")
 
 
-def _other_heading(line: str) -> bool:
-    text = line.lstrip(" \t\u3000")
-    if len(line) - len(text) > 3:
-        return False
-    text = text.rstrip()
-    heading = _ATX_HEADING.match(text)
+class MarkdownParserUnavailable(ImportError):
+    pass
+
+
+@lru_cache(maxsize=1)
+def _markdown():
+    try:
+        from markdown_it import MarkdownIt
+    except ImportError as exc:
+        raise MarkdownParserUnavailable("markdown-it-py is unavailable") from exc
+    return MarkdownIt("commonmark")
+
+
+def _visible_text(tokens):
+    parts = []
+    for token in tokens:
+        if token.type in ("text", "code_inline"):
+            parts.append(token.content)
+        elif token.type == "image":
+            parts.append(_visible_text(token.children or ()))
+    return "".join(parts)
+
+
+def _other_heading(tokens, *, heading):
+    for start, token in enumerate(tokens):
+        if token.type not in ("em_open", "strong_open"):
+            continue
+        if _visible_text(tokens[:start]).strip():
+            break
+        closing_type = token.type.replace("_open", "_close")
+        for end in range(start + 1, len(tokens)):
+            if tokens[end].type == closing_type and tokens[end].level == token.level:
+                label = _visible_text(tokens[start + 1:end]).strip().rstrip("：:")
+                return label == "其他" or ("附录" in label and not _visible_text(tokens[end + 1:]).strip())
+        break
     if heading:
-        text = _ATX_END.sub("", text[heading.end():])
-    visible = _INLINE_LINK.sub(r"\1", text)
-    if emphasis := _EMPHASIS_LABEL.match(visible):
-        label = emphasis["label"]
-        standalone = not visible[emphasis.end():].strip()
-    elif heading:
-        label, standalone = visible, True
-    else:
-        return False
-    return label.rstrip("：: ").strip() == "其他" or (standalone and "附录" in label)
+        label = _visible_text(tokens).strip().rstrip("：:")
+        return label == "其他" or "附录" in label
+    return False
+
+
+def _candidate_lines(tokens, lines):
+    for block, inline in zip(tokens, tokens[1:]):
+        if block.level != 0 or block.type not in ("heading_open", "paragraph_open") or inline.type != "inline":
+            continue
+        start, end = inline.map
+        children = inline.children or []
+        if block.type == "heading_open":
+            if end == start + 1:
+                yield start, block.map[1], inline.content, children, True
+            continue
+        groups = []
+        group = []
+        row = start
+        group_start = start
+        continued = False
+        opaque_rows = []
+        for token in children:
+            if token.type in ("softbreak", "hardbreak"):
+                if not (continued or token.level):
+                    groups.append((group_start, row + 1, group))
+                row += 1
+                group_start, group, continued = row, [], bool(token.level)
+            else:
+                group.append(token)
+                if token.type == "html_inline":
+                    row += token.content.count("\n")
+                elif token.type in ("code_inline", "link_open", "link_close", "image"):
+                    opaque_rows.append(group_start)
+        if not continued:
+            groups.append((group_start, row + 1, group))
+        gap = end - (row + 1)
+        if gap < 0 or (gap and not opaque_rows):
+            continue
+        for begin, after, group in groups:
+            if gap:
+                if opaque_rows[0] <= begin <= opaque_rows[-1]:
+                    continue
+                if begin > opaque_rows[-1]:
+                    begin += gap
+                    after += gap
+            source = lines[begin] if after == begin + 1 else ""
+            yield begin, after, source, group, False
 
 
 def closing(text: str) -> str:
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    tokens = _markdown().parse(text)
     sections = {}
     active = None
-    fence = ""
-    for line in text.splitlines():
-        if mark := _FENCE.match(line):
-            run, tail = mark.groups()
-            if not fence:
-                fence = run
-            elif run.startswith(fence) and not tail.strip():
-                fence = ""
-            if active:
-                sections[active].append(line)
+    content_start = 0
+    for start, end, source, inline, is_heading in _candidate_lines(tokens, lines):
+        heading = _HEADING.match(source)
+        if not heading and (active is None or not _other_heading(inline, heading=is_heading)):
             continue
-        heading = _HEADING.match(line) if not fence else None
+        if active:
+            sections[active].extend(lines[content_start:start])
         if heading:
             active = heading["bold"] or heading["plain"]
             if active in sections:
                 sections = {}
-            value = re.sub(r"[ \t\u3000]+#+[ \t\u3000]*$", "", heading["body"]).strip()
+            value = heading["body"].strip()
             sections[active] = [value] if value else []
-        elif active and not fence and _other_heading(line):
+        else:
             active = None
-        elif active:
-            sections[active].append(line)
+        content_start = end
+    if active:
+        sections[active].extend(lines[content_start:])
     if set(sections) != set(HEADINGS) or any(not any(line.strip() for line in lines) for lines in sections.values()):
         return ""
     return "\n\n".join("## " + heading + "\n" + "\n".join(sections[heading]).strip() for heading in HEADINGS)

@@ -238,6 +238,12 @@ def test_stop_excludes_appendix(manifest, hooks, tmp_path, heading):
     pytest.param("*实测日志附录 A*\n", id="italic"),
     pytest.param("**实测日志*校验结果*附录 A**\n", id="nested-italic"),
     pytest.param("**[实测附录 A](./记录.md)**\n", id="appendix-in-link-label"),
+    pytest.param("### 附*录* A\n", id="atx-split-emphasis"),
+    pytest.param("**附*录* A**\n", id="strong-split-emphasis"),
+    pytest.param("### `[实测记录](./附录.md)`\n", id="literal-link-syntax-in-code"),
+    pytest.param("附录 A\n------\n", id="setext"),
+    pytest.param("**附录 A** <!-- 供维护者审阅 -->\n", id="strong-with-hidden-comment"),
+    pytest.param("**附录 A** <!-- 供维护者\n审阅 -->\n", id="strong-with-multiline-comment"),
 ])
 def test_stop_skips_empty_verification_before_appendix(manifest, hooks, tmp_path, heading):
     reply = REPLY.replace("通过", f"\n{heading}环境清单，供追溯。")
@@ -335,12 +341,54 @@ def test_stop_keeps_appendix_reference_before_appendix(manifest, label, hooks, t
     "**验证结果汇总** 见项目验收报告的附录 A，构建通过。",
     "### **实测日志附录 A** 构建通过。",
     "### ***实测日志附录 A*** 构建通过。",
+    "**[实测记录](./附录((旧版)).md)**",
+    "**[实测记录][附录]**\n\n[附录]: ./记录.md",
+    '**[实测记录](./记录.md "旧版 ) 详见附录 A")**',
+    "### 验证记录 <!-- 附录 A -->\n附录原始数据。",
+    "构建通过。\n### 验证记录 <!-- 附录 A -->\n附录原始数据。",
 ])
 def test_stop_keeps_inline_appendix_text(manifest, verification, hooks, tmp_path):
     reply = REPLY.replace("通过", verification) + "\n**实测日志附录A：环境清单**\n原始记录\n"
     run(commands(manifest)["Stop"], session_id="s", project="P", last_assistant_message=reply)
     draft, = (tmp_path / "drafts/P").glob("*.md")
     assert draft.read_text().endswith(f"## 验证\n{verification}\n")
+
+
+@pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
+@pytest.mark.parametrize("title", ["### 附*录* A", "**附*录* A**", "附录 A\n------"])
+def test_stop_cuts_parsed_appendix_after_evidence(manifest, title, hooks, tmp_path):
+    reply = REPLY + f"\n{title}\n附录原始数据。\n"
+    run(commands(manifest)["Stop"], session_id="s", project="P", last_assistant_message=reply)
+    draft, = (tmp_path / "drafts/P").glob("*.md")
+    assert draft.read_text().endswith("## 验证\n通过\n")
+
+
+@pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
+def test_stop_keeps_multiline_inline_code_before_appendix(manifest, hooks, tmp_path):
+    evidence = "`保留代码示例\n**附录 A**\n`"
+    reply = ("**原行为** 旧流程\n**改进** 新流程\n**取舍** 保留证据\n**验证**\n"
+             f"{evidence}\n**附录 B**\n附录原始数据。\n")
+    run(commands(manifest)["Stop"], session_id="s", project="P", last_assistant_message=reply)
+    draft, = (tmp_path / "drafts/P").glob("*.md")
+    assert draft.read_text().endswith(f"## 验证\n{evidence}\n")
+
+
+@pytest.mark.parametrize("entry", [
+    PLUGIN / "hooks/turn_end_entry.py",
+    ROOT / "skills/hinddian-hooks/turn_end.py",
+    ROOT / "adapters/magpie/skills/hinddian-hooks/turn_end.py",
+])
+def test_stop_reports_missing_markdown_dependency_silently(entry, hooks, tmp_path):
+    payload = {"session_id": "s", "project": "P", "last_assistant_message": REPLY}
+    result = subprocess.run([sys.executable, "-S", str(entry)], input=json.dumps(payload),
+                            capture_output=True, text=True, timeout=1.5)
+
+    assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
+    assert not (tmp_path / "drafts").exists()
+    logged, = map(json.loads, (tmp_path / "hooks/capture.log").read_text().splitlines())
+    assert (logged["event"], logged["reason"], logged["dependency"]) == (
+        "skip", "missing_markdown_parser", "markdown-it-py",
+    )
 
 
 def test_duplicate_stop_is_detected_across_pending_and_archived_projects(hooks, tmp_path):

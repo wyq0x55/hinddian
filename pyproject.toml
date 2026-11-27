@@ -10,6 +10,7 @@ dependencies = [
   "pydantic>=2.9.0",
   "pydantic-settings>=2.6.0",
   "PyYAML>=6.0",
+  "markdown-it-py>=4.2.0,<5",
 ]
 
 [project.optional-dependencies]

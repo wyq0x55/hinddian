@@ -9,6 +9,7 @@ import argparse, contextlib, datetime as dt, hashlib, json, os, pathlib, re, sub
 from dataclasses import dataclass
 
 import yaml
+from markdown_it import MarkdownIt
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -185,25 +186,59 @@ def _rebuild_hubs(changed_projects=None):
 
 _HUB_OPEN = "<!-- hinddian:links -->"
 _HUB_CLOSE = "<!-- /hinddian:links -->"
+_HUB_COMMENT = re.compile(rf" *(?P<marker>{_HUB_OPEN}|{_HUB_CLOSE})[ \t]*\n?")
 _HUB_LINK = r"- \[\[[^\]\n]+\]\](?: — \d+ 条(?:决策/经验)?| — 人→Agent 待办)?"
 _HUB_OWNED = re.compile(_HUB_LINK + r" <!-- hinddian:generated -->")
+_MARKDOWN = MarkdownIt("commonmark")
+
+
+def _line_offsets(text):
+    offsets = [0, *(match.end() for match in re.finditer(r"\r\n?|\n", text))]
+    if offsets[-1] != len(text):
+        offsets.append(len(text))
+    return offsets
+
+
+def _hub_parts(body):
+    offsets = _line_offsets(body)
+    tokens = _MARKDOWN.parse(body)
+    sections = [(0, None)]
+    for index, token in enumerate(tokens):
+        if token.type == "heading_open" and token.level == 0 and token.tag == "h2":
+            sections.append((offsets[token.map[0]], tokens[index + 1].content))
+    ends = [start for start, _ in sections[1:]] + [len(body)]
+    return [(heading, body[start:end]) for (start, heading), end in zip(sections, ends)]
+
+
+def _hub_link_lines(part):
+    offsets = _line_offsets(part)
+    for token in _MARKDOWN.parse(part):
+        if token.type == "list_item_open" and token.level == 1 and token.markup == "-":
+            line = token.map[0]
+            start, end = offsets[line:line + 2]
+            yield start, part[start:end]
 
 
 def hub_blocks(part, *, strict=False):
+    offsets = _line_offsets(part)
     opening = None
-    for offset, line in nf.unfenced_lines(part):
-        marker = line.strip()
-        after = offset + len(line)
-        if marker == _HUB_OPEN:
+    for token in _MARKDOWN.parse(part):
+        if token.type != "html_block" or token.level != 0:
+            continue
+        match = _HUB_COMMENT.fullmatch(token.content)
+        if not match:
+            continue
+        start, end = token.map
+        offset, after = offsets[start], offsets[end]
+        if match["marker"] == _HUB_OPEN:
             if strict and opening is not None:
                 raise ValueError("nested hinddian:links opening marker")
             opening = offset, after
-        elif marker == _HUB_CLOSE:
-            if opening is not None:
-                yield *opening, offset, after
-                opening = None
-            elif strict:
-                raise ValueError("unmatched closing hinddian:links marker")
+        elif opening is not None:
+            yield (*opening, offset, after)
+            opening = None
+        elif strict:
+            raise ValueError("unmatched closing hinddian:links marker")
     if strict and opening is not None:
         raise ValueError("unclosed hinddian:links block")
 
@@ -222,18 +257,20 @@ def _legacy_link_prune(hub, heading, entry):
     text = writable_path(VAULT, rel).read_text(encoding="utf-8")
     parsed = nf.parse_frontmatter(text)
     body = parsed[2] if parsed else text
-    parts = nf.section_parts(body)
+    sections = _hub_parts(body)
     matches = []
-    for index, part in enumerate(parts[1:], 1):
-        if part.split("\n", 1)[0][3:].strip() != heading:
+    for index, (title, part) in enumerate(sections):
+        if title != heading:
             continue
-        for _, content, end, _ in hub_blocks(part, strict=True):
-            matches.extend((index, content + offset, len(line))
-                           for offset, line in nf.unfenced_lines(part[content:end])
-                           if line.rstrip("\n") == line_text)
+        blocks = list(hub_blocks(part, strict=True))
+        links = [(offset, len(line)) for offset, line in _hub_link_lines(part)
+                 if line.rstrip("\r\n") == line_text]
+        for _, content, end, _ in blocks:
+            matches.extend((index, offset, length) for offset, length in links if content <= offset < end)
     if len(matches) != 1:
         raise ValueError(f"expected one unmarked legacy link in {hub!r} under {heading!r}; found {len(matches)}")
     index, offset, length = matches[0]
+    parts = [part for _, part in sections]
     parts[index] = parts[index][:offset] + parts[index][offset + length:]
     return rel, text[:len(text) - len(body)] + "".join(parts)
 
@@ -243,19 +280,19 @@ def hub_links(text, sections):
     parsed = nf.parse_frontmatter(text)
     body = parsed[2] if parsed else text
     front = text[:len(text) - len(body)]
-    parts = nf.section_parts(body)
+    raw_parts = _hub_parts(body)
+    parts = [part for _, part in raw_parts]
     sections = sections.copy()
     existing = {}
-    for index, part in enumerate(parts[1:], 1):
-        heading = part.split("\n", 1)[0][3:].strip()
+    for index, (heading, part) in enumerate(raw_parts):
         if heading in sections:
             existing[index] = sections.pop(heading)
             if found := hub_block(part):
                 _, content, end, _ = found
                 preserved = []
                 cursor = 0
-                for offset, line in nf.unfenced_lines(part):
-                    if content <= offset < end and _HUB_OWNED.fullmatch(line.rstrip("\n")):
+                for offset, line in _hub_link_lines(part):
+                    if content <= offset < end and _HUB_OWNED.fullmatch(line.rstrip("\r\n")):
                         preserved.append(part[cursor:offset])
                         cursor = offset + len(line)
                 parts[index] = "".join(preserved) + part[cursor:]

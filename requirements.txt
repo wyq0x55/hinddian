@@ -3,3 +3,4 @@ uvicorn[standard]>=0.32.0
 pydantic>=2.9.0
 pydantic-settings>=2.6.0
 PyYAML>=6.0
+markdown-it-py>=4.2.0,<5

@@ -2,7 +2,7 @@
 
 `hinddian_batch.py` 按项目读取库外的会话草稿，合并成决策、经验和全局技巧。自动运行跳过 `holdout`，`通用-未定` 只产出全局技巧。成功写入后，草稿移到 `processed`。路径与采集共用[环境变量和 JSON 配置](../README.md#路径配置)。
 
-整理器使用 PyYAML 校验更新后的 frontmatter，保留无关字段里的自定义 YAML 标签。更新遇到递归 YAML 别名时，本批跳过并记录告警，保留原笔记和草稿。请将项目依赖安装到运行整理器的 Python 环境。
+整理器使用 PyYAML 校验更新后的 frontmatter，保留无关字段里的自定义 YAML 标签，并使用 `markdown-it-py` 按 CommonMark 定位枢纽标记。更新遇到递归 YAML 别名时，本批跳过并记录告警，保留原笔记和草稿。请将项目依赖安装到运行整理器的 Python 环境。
 
 ```sh
 python3 classify/hinddian_batch.py run
