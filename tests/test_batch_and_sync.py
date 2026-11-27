@@ -390,14 +390,18 @@ def test_rebuild_hubs_preserves_unmarked_links(batch):
     assert hub.read_text() == result
 
 
-def test_rebuild_hubs_prunes_only_confirmed_legacy_link(batch):
+@pytest.mark.parametrize(("opening", "closing"), [
+    pytest.param("<!-- hinddian:links -->", "<!-- /hinddian:links -->", id="standard"),
+    pytest.param("\t<!-- hinddian:links --> \t", " <!-- /hinddian:links -->\t ", id="padded"),
+])
+def test_rebuild_hubs_prunes_only_confirmed_legacy_link(batch, opening, closing):
     current = make_note(batch, "在用", "current")
     hub = batch.VAULT / "项目/P/README.md"
     stale = "- [[项目/P/经验/已移除|已移除]]"
     pending = "- [[项目/P/经验/待补复盘|待补复盘]]"
     marked = f"- {batch.link_of(current)} <!-- hinddian:generated -->"
-    original = (f"# P\n\n## 经验\n{stale}\n<!-- hinddian:links -->\n{stale}\n{pending}\n"
-                f"```md\n{stale}\n```\n{marked}\n<!-- /hinddian:links -->\n")
+    original = (f"# P\n\n## 经验\n{stale}\n{opening}\n{stale}\n{pending}\n"
+                f"```md\n{stale}\n```\n{marked}\n{closing}\n")
     hub.write_text(original)
     batch.rebuild_hubs()
     assert hub.read_text() == original
@@ -407,7 +411,7 @@ def test_rebuild_hubs_prunes_only_confirmed_legacy_link(batch):
                             capture_output=True, text=True, timeout=4)
 
     assert result.returncode == 0, result.stderr
-    expected = original.replace(f"<!-- hinddian:links -->\n{stale}\n", "<!-- hinddian:links -->\n")
+    expected = original.replace(f"{opening}\n{stale}\n", f"{opening}\n")
     assert hub.read_text() == expected
     batch.rebuild_hubs()
     assert hub.read_text() == expected
@@ -463,6 +467,11 @@ def test_rebuild_hubs_prune_checks_all_blocks_in_section(batch, first_matches):
                  "nested", id="nested"),
     pytest.param("<!-- /hinddian:links -->\n", "", "unmatched closing", id="orphan-close"),
     pytest.param("", "<!-- hinddian:links -->", "unclosed", id="unclosed-at-eof"),
+    pytest.param("<!-- hinddian:links --> \t\n旧版链接\n- {legacy}\n<!-- hinddian:links -->\n"
+                 "<!-- /hinddian:links -->\n<!-- /hinddian:links --> \t\n", "",
+                 "nested", id="nested-padded-outer"),
+    pytest.param(" <!-- /hinddian:links --> \t\n", "", "unmatched closing", id="orphan-close-padded"),
+    pytest.param("", "\t<!-- hinddian:links --> \t", "unclosed", id="unclosed-padded"),
 ])
 def test_rebuild_hubs_prune_rejects_malformed_markers_without_writes(batch, tmp_path, before, after, error):
     make_note(batch, "在用", "current")

@@ -231,6 +231,13 @@ def test_stop_excludes_appendix(manifest, hooks, tmp_path, heading):
     pytest.param("**实测日志附录A：环境清单**\n", id="in-bold-colon"),
     pytest.param("**实测数据源自动校验报告的附录 A**\n", id="data-source-topic"),
     pytest.param("**实测日志来自项目验收报告的附录 A**\n", id="source-like-title"),
+    pytest.param("### 附录 A\n", id="atx"),
+    pytest.param("### **实测日志附录 A** ###\n", id="atx-bold"),
+    pytest.param("***实测日志附录 A***\n", id="bold-italic"),
+    pytest.param("___实测日志附录 A___\n", id="underscore-bold-italic"),
+    pytest.param("*实测日志附录 A*\n", id="italic"),
+    pytest.param("**实测日志*校验结果*附录 A**\n", id="nested-italic"),
+    pytest.param("**[实测附录 A](./记录.md)**\n", id="appendix-in-link-label"),
 ])
 def test_stop_skips_empty_verification_before_appendix(manifest, hooks, tmp_path, heading):
     reply = REPLY.replace("通过", f"\n{heading}环境清单，供追溯。")
@@ -323,6 +330,11 @@ def test_stop_keeps_appendix_reference_before_appendix(manifest, label, hooks, t
     "**附录 A** 环境清单，供追溯。",
     "取自上一版报告的附录 B",
     "源自本次上线记录的附录 2",
+    "**[实测记录](./附录.md)**",
+    "### **[验证记录](./附录(旧版).md \"附录\")** ###",
+    "**验证结果汇总** 见项目验收报告的附录 A，构建通过。",
+    "### **实测日志附录 A** 构建通过。",
+    "### ***实测日志附录 A*** 构建通过。",
 ])
 def test_stop_keeps_inline_appendix_text(manifest, verification, hooks, tmp_path):
     reply = REPLY.replace("通过", verification) + "\n**实测日志附录A：环境清单**\n原始记录\n"

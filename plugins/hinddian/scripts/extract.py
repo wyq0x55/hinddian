@@ -13,19 +13,36 @@ _HEADING = re.compile(
     rf"(?:\*\*[ \t\u3000]*(?P<bold>{_NAMES})[ \t\u3000]*[:：]?[ \t\u3000]*\*\*|(?P<plain>{_NAMES}))"
     r"(?:[ \t\u3000]*[:：][ \t\u3000]*|[ \t\u3000]+|(?<=\*\*)|$)(?P<body>.*)$"
 )
-_OTHER_HEADING = re.compile(
-    r"^[ \t\u3000]{0,3}(?:#{1,6}[ \t\u3000]+|\*\*(?P<bold>[^*\n]+)\*\*(?:[ \t\u3000:：]|$))"
+_ATX_HEADING = re.compile(r"^#{1,6}[ \t\u3000]+")
+_ATX_END = re.compile(r"[ \t\u3000]+#+$")
+_EMPHASIS_LABEL = re.compile(
+    r"(?P<mark>(?P<char>[*_])(?P=char){0,2})(?!(?P=char))"
+    r"(?P<label>(?!\s).+?)(?<![\s\\])(?P=mark)(?!(?P=char))"
 )
-_BOLD_LABEL = re.compile(r"^[ \t\u3000]{0,3}(?P<mark>\*\*|__)(?P<label>.+?)(?P=mark)")
-_EVIDENCE_LABEL = re.compile(r"[ \t\u3000【\[（(「『]*(?:实测|推断|猜测)")
+_INLINE_LINK = re.compile(
+    r"(?<!\\)\[((?:\\.|[^\[\]\\]|\[[^\[\]]*\])*)\]"
+    r"\((?:\\.|<[^<>]*>|[^()\\<]|\((?:\\.|[^()\\])*\))*\)"
+)
 _FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$")
 
 
 def _other_heading(line: str) -> bool:
-    if (bold := _BOLD_LABEL.match(line)) and "附录" in bold["label"]:
-        return not line[bold.end():].strip()
-    heading = _OTHER_HEADING.match(line)
-    return heading is not None and not _EVIDENCE_LABEL.match(heading["bold"] or "")
+    text = line.lstrip(" \t\u3000")
+    if len(line) - len(text) > 3:
+        return False
+    text = text.rstrip()
+    heading = _ATX_HEADING.match(text)
+    if heading:
+        text = _ATX_END.sub("", text[heading.end():])
+    visible = _INLINE_LINK.sub(r"\1", text)
+    if emphasis := _EMPHASIS_LABEL.match(visible):
+        label = emphasis["label"]
+        standalone = not visible[emphasis.end():].strip()
+    elif heading:
+        label, standalone = visible, True
+    else:
+        return False
+    return label.rstrip("：: ").strip() == "其他" or (standalone and "附录" in label)
 
 
 def closing(text: str) -> str:

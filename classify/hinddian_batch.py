@@ -183,27 +183,28 @@ def _rebuild_hubs(changed_projects=None):
               legacy_counts=global_links + recent_entries)
 
 
-_HUB_OPEN = "<!-- hinddian:links -->\n"
+_HUB_OPEN = "<!-- hinddian:links -->"
 _HUB_CLOSE = "<!-- /hinddian:links -->"
 _HUB_LINK = r"- \[\[[^\]\n]+\]\](?: — \d+ 条(?:决策/经验)?| — 人→Agent 待办)?"
 _HUB_OWNED = re.compile(_HUB_LINK + r" <!-- hinddian:generated -->")
 
 
 def hub_blocks(part, *, strict=False):
-    start = None
+    opening = None
     for offset, line in nf.unfenced_lines(part):
-        marker = line.removesuffix("\n")
-        if marker == _HUB_OPEN.removesuffix("\n"):
-            if strict and start is not None:
+        marker = line.strip()
+        after = offset + len(line)
+        if marker == _HUB_OPEN:
+            if strict and opening is not None:
                 raise ValueError("nested hinddian:links opening marker")
-            start = offset
+            opening = offset, after
         elif marker == _HUB_CLOSE:
-            if start is not None:
-                yield start, offset, offset + len(line)
-                start = None
+            if opening is not None:
+                yield *opening, offset, after
+                opening = None
             elif strict:
                 raise ValueError("unmatched closing hinddian:links marker")
-    if strict and start is not None:
+    if strict and opening is not None:
         raise ValueError("unclosed hinddian:links block")
 
 
@@ -226,8 +227,7 @@ def _legacy_link_prune(hub, heading, entry):
     for index, part in enumerate(parts[1:], 1):
         if part.split("\n", 1)[0][3:].strip() != heading:
             continue
-        for start, end, _ in hub_blocks(part, strict=True):
-            content = start + len(_HUB_OPEN)
+        for _, content, end, _ in hub_blocks(part, strict=True):
             matches.extend((index, content + offset, len(line))
                            for offset, line in nf.unfenced_lines(part[content:end])
                            if line.rstrip("\n") == line_text)
@@ -251,11 +251,11 @@ def hub_links(text, sections):
         if heading in sections:
             existing[index] = sections.pop(heading)
             if found := hub_block(part):
-                start, end, _ = found
+                _, content, end, _ = found
                 preserved = []
                 cursor = 0
                 for offset, line in nf.unfenced_lines(part):
-                    if start < offset < end and _HUB_OWNED.fullmatch(line.rstrip("\n")):
+                    if content <= offset < end and _HUB_OWNED.fullmatch(line.rstrip("\n")):
                         preserved.append(part[cursor:offset])
                         cursor = offset + len(line)
                 parts[index] = "".join(preserved) + part[cursor:]
@@ -275,13 +275,13 @@ def _hub_section(part, lines, targets):
     generated = [line + " <!-- hinddian:generated -->" for line in lines
                  if (match := nf.WIKI.search(line)) and match[1] not in targets]
     if found := hub_block(part):
-        start, end, after = found
-        content = part[start + len(_HUB_OPEN):end] + "".join(line + "\n" for line in generated)
-        block = _HUB_OPEN + content + part[end:after] if content else ""
+        start, content_start, end, after = found
+        content = part[content_start:end] + "".join(line + "\n" for line in generated)
+        block = part[start:content_start] + content + part[end:after] if content else ""
         return part[:start] + block + part[after:]
     if not generated:
         return part
-    block = _HUB_OPEN + "\n".join(generated) + "\n" + _HUB_CLOSE + "\n"
+    block = "\n".join([_HUB_OPEN, *generated, _HUB_CLOSE, ""])
     candidate = part + ("" if part.endswith("\n") else "\n") + block
     return candidate if hub_block(candidate) else part
 
