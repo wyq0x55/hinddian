@@ -319,7 +319,8 @@ def _hub_section(part, lines, targets):
     if not generated:
         return part
     block = "\n".join([_HUB_OPEN, *generated, _HUB_CLOSE, ""])
-    candidate = part + ("" if part.endswith("\n") else "\n") + block
+    candidate = part if part.endswith("\n") else part + "\n"
+    candidate += block if candidate.endswith("\n\n") else "\n" + block
     return candidate if hub_block(candidate) else part
 
 

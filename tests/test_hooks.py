@@ -355,7 +355,10 @@ def test_stop_keeps_inline_appendix_text(manifest, verification, hooks, tmp_path
 
 
 @pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
-@pytest.mark.parametrize("title", ["### 附*录* A", "**附*录* A**", "附录 A\n------"])
+@pytest.mark.parametrize("title", [
+    "### 附*录* A", "**附*录* A**", "附录 A\n------", "### **附录** A",
+    "### **验证记录** 附录 A", "**验证记录** 附录 A\n------",
+])
 def test_stop_cuts_parsed_appendix_after_evidence(manifest, title, hooks, tmp_path):
     reply = REPLY + f"\n{title}\n附录原始数据。\n"
     run(commands(manifest)["Stop"], session_id="s", project="P", last_assistant_message=reply)
@@ -364,13 +367,76 @@ def test_stop_cuts_parsed_appendix_after_evidence(manifest, title, hooks, tmp_pa
 
 
 @pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
-def test_stop_keeps_multiline_inline_code_before_appendix(manifest, hooks, tmp_path):
-    evidence = "`保留代码示例\n**附录 A**\n`"
+@pytest.mark.parametrize("following", [
+    pytest.param("`跨\n 行`", id="multiline-code"),
+    pytest.param('[跨行链接](./记录.md\n "标题")', id="multiline-link"),
+    pytest.param("`单行`", id="single-line-code"),
+])
+def test_stop_cuts_appendix_between_inline_structures(manifest, following, hooks, tmp_path):
+    reply = REPLY.replace("通过", f"构建 `通过`。\n**附录 A**\n{following}\n附录原始数据。")
+    run(commands(manifest)["Stop"], session_id="s", project="P", last_assistant_message=reply)
+    draft, = (tmp_path / "drafts/P").glob("*.md")
+    assert draft.read_text().endswith("## 验证\n构建 `通过`。\n")
+
+
+@pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
+@pytest.mark.parametrize("evidence", ["`跨\n 行`", '[跨行链接](./记录.md\n "标题")'])
+def test_stop_finds_verification_between_inline_structures(manifest, evidence, hooks, tmp_path):
+    reply = REPLY.replace("## **验证**\n通过", f"上文 `链接`。\n**验证**\n{evidence}")
+    run(commands(manifest)["Stop"], session_id="s", project="P", last_assistant_message=reply)
+    draft, = (tmp_path / "drafts/P").glob("*.md")
+    assert draft.read_text().endswith(f"## 验证\n{evidence}\n")
+
+
+@pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
+@pytest.mark.parametrize("separator", [" ", "\t", "\u3000"])
+def test_stop_accepts_business_heading_whitespace(manifest, separator, hooks, tmp_path):
+    evidence = "构建通过。\n###　验证记录不应拆段"
+    reply = REPLY.replace("## **验证**\n通过", f"###{separator}验证\n{evidence}")
+    run(commands(manifest)["Stop"], session_id="s", project="P", last_assistant_message=reply)
+    draft, = (tmp_path / "drafts/P").glob("*.md")
+    assert draft.read_text().endswith(f"## 验证\n{evidence}\n")
+
+
+@pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
+@pytest.mark.parametrize("sample", ["**附录 A**", "###　验证"])
+def test_stop_keeps_multiline_inline_code_before_appendix(manifest, sample, hooks, tmp_path):
+    evidence = f"`保留代码示例\n{sample}\n`\\"
     reply = ("**原行为** 旧流程\n**改进** 新流程\n**取舍** 保留证据\n**验证**\n"
              f"{evidence}\n**附录 B**\n附录原始数据。\n")
     run(commands(manifest)["Stop"], session_id="s", project="P", last_assistant_message=reply)
     draft, = (tmp_path / "drafts/P").glob("*.md")
     assert draft.read_text().endswith(f"## 验证\n{evidence}\n")
+
+
+@pytest.mark.parametrize("corpus", [
+    pytest.param("[测试](./记录.md) " * 200_000, id="200k-links"),
+    pytest.param("[测试](./记录.md) " * 60_000, id="60k-links"),
+    pytest.param("构建完成。测试记录 " * 100_000, id="long-text"),
+    pytest.param("[" * 24_000, id="unclosed-brackets"),
+    pytest.param("<a " * 8_000, id="unclosed-html"),
+])
+def test_stop_keeps_large_body_without_parsing_irrelevant_inlines(corpus, hooks, tmp_path):
+    evidence = "通过。\n\n" + corpus.rstrip()
+    reply = REPLY.replace("通过", evidence)
+    run(commands(".codex-plugin/hooks.json")["Stop"], session_id="s", project="P",
+        last_assistant_message=reply)
+    draft, = (tmp_path / "drafts/P").glob("*.md")
+    assert draft.read_text().endswith(f"## 验证\n{evidence}\n")
+
+
+def test_stop_logs_watchdog_timeout(hooks, monkeypatch, tmp_path):
+    (tmp_path / "sitecustomize.py").write_text(
+        "import time\n"
+        "from markdown_it import MarkdownIt\n"
+        "MarkdownIt.parse = lambda *args, **kwargs: time.sleep(30)\n"
+    )
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path))
+    run(commands(".codex-plugin/hooks.json")["Stop"], session_id="s", project="P",
+        last_assistant_message=REPLY)
+    assert not (tmp_path / "drafts").exists()
+    entry = json.loads((tmp_path / "hooks/capture.log").read_text())
+    assert (entry["event"], entry["reason"]) == ("skip", "hook_timeout")
 
 
 @pytest.mark.parametrize("entry", [
@@ -389,6 +455,20 @@ def test_stop_reports_missing_markdown_dependency_silently(entry, hooks, tmp_pat
     assert (logged["event"], logged["reason"], logged["dependency"]) == (
         "skip", "missing_markdown_parser", "markdown-it-py",
     )
+
+
+@pytest.mark.parametrize("entry", [
+    ROOT / "hooks/setup.py",
+    SCRIPTS / "setup.py",
+    ROOT / "skills/hinddian-hooks/setup.py",
+    ROOT / "adapters/magpie/skills/hinddian-hooks/setup.py",
+])
+def test_setup_check_reports_missing_markdown_dependency(entry, hooks, tmp_path):
+    result = subprocess.run([sys.executable, "-S", str(entry), "--check"], capture_output=True,
+                            text=True, timeout=1.5)
+    assert result.returncode == 1 and "markdown-it-py" in result.stderr
+    assert not (tmp_path / "drafts").exists()
+    assert not hooks.paths.config_path().exists()
 
 
 def test_duplicate_stop_is_detected_across_pending_and_archived_projects(hooks, tmp_path):

@@ -11,35 +11,53 @@ HEADINGS = ("原行为", "改进", "取舍", "验证")
 _NAMES = "|".join(HEADINGS)
 _HEADING = re.compile(
     rf"^[ \t\u3000]{{0,3}}"
+    r"(?:#{1,6}[ \t\u3000]*\u3000[ \t\u3000]*)?"
     rf"(?:\*\*[ \t\u3000]*(?P<bold>{_NAMES})[ \t\u3000]*[:：]?[ \t\u3000]*\*\*|(?P<plain>{_NAMES}))"
     r"(?:[ \t\u3000]*[:：][ \t\u3000]*|[ \t\u3000]+|(?<=\*\*)|$)(?P<body>.*)$"
 )
+_BREAKS = ("softbreak", "hardbreak")
 
 
 class MarkdownParserUnavailable(ImportError):
     pass
 
 
+def _located_break(rule, newline_offset):
+    """Keep the source offset of parser-emitted breaks without changing Markdown semantics."""
+    def locate(state, silent):
+        start = state.pos
+        matched = rule(state, silent)
+        if matched and not silent and state.tokens[-1].type in _BREAKS:
+            state.tokens[-1].meta["after_newline"] = start + newline_offset + 1
+        return matched
+
+    return locate
+
+
 @lru_cache(maxsize=1)
-def _markdown():
+def markdown_parser():
     try:
         from markdown_it import MarkdownIt
+        from markdown_it.rules_inline import escape, newline
     except ImportError as exc:
         raise MarkdownParserUnavailable("markdown-it-py is unavailable") from exc
-    return MarkdownIt("commonmark")
+    parser = MarkdownIt("commonmark").disable("inline")
+    parser.inline.ruler.at("newline", _located_break(newline, 0))
+    parser.inline.ruler.at("escape", _located_break(escape, 1))
+    return parser
 
 
 def _visible_text(tokens):
     parts = []
     for token in tokens:
-        if token.type in ("text", "code_inline"):
+        if token.type in ("text", "text_special", "code_inline"):
             parts.append(token.content)
         elif token.type == "image":
             parts.append(_visible_text(token.children or ()))
     return "".join(parts)
 
 
-def _other_heading(tokens, *, heading):
+def _leading_emphasis(tokens):
     for start, token in enumerate(tokens):
         if token.type not in ("em_open", "strong_open"):
             continue
@@ -48,68 +66,71 @@ def _other_heading(tokens, *, heading):
         closing_type = token.type.replace("_open", "_close")
         for end in range(start + 1, len(tokens)):
             if tokens[end].type == closing_type and tokens[end].level == token.level:
-                label = _visible_text(tokens[start + 1:end]).strip().rstrip("：:")
-                return label == "其他" or ("附录" in label and not _visible_text(tokens[end + 1:]).strip())
+                lead = _visible_text(tokens[start + 1:end]).strip().rstrip("：:")
+                return lead, _visible_text(tokens[end + 1:]).strip()
         break
-    if heading:
+    return "", ""
+
+
+def _other_heading(tokens, markup):
+    """Recognize appendix titles and preserve prose after an emphasized ATX lead."""
+    lead, suffix = _leading_emphasis(tokens)
+    if lead == "其他":
+        return True
+    if markup:
         label = _visible_text(tokens).strip().rstrip("：:")
+        if markup.startswith("#") and lead and suffix.endswith(("。", "！", "？", "!", "?")):
+            return False
         return label == "其他" or "附录" in label
-    return False
+    return "附录" in lead and not suffix and not any(token.type in _BREAKS for token in tokens)
 
 
-def _candidate_lines(tokens, lines):
-    for block, inline in zip(tokens, tokens[1:]):
-        if block.level != 0 or block.type not in ("heading_open", "paragraph_open") or inline.type != "inline":
+def _paragraph_lines(inline, lines):
+    """Use exposed breaks to locate source lines within a fully parsed paragraph."""
+    row, end = inline.map
+    while row < end and not lines[row].strip():
+        row += 1
+    offset = group_start = 0
+    children = inline.children
+    for index, token in enumerate(children):
+        if token.type not in _BREAKS or token.level:
             continue
+        after_offset = token.meta["after_newline"]
+        after_row = row + inline.content.count("\n", offset, after_offset)
+        yield row, after_row, lines[row] if after_row == row + 1 else "", children[group_start:index], ""
+        row, offset, group_start = after_row, after_offset, index + 1
+    after_row = row + inline.content.count("\n", offset) + 1
+    yield row, after_row, lines[row] if after_row == row + 1 else "", children[group_start:], ""
+
+
+def _candidate_blocks(parser, text, lines):
+    env = {}
+    blocks = parser.parse(text, env)
+    for index, block in enumerate(blocks):
+        if block.level or block.type not in ("heading_open", "paragraph_open"):
+            continue
+        inline = blocks[index + 1]
         start, end = inline.map
-        children = inline.children or []
         if block.type == "heading_open":
             if end == start + 1:
-                yield start, block.map[1], inline.content, children, True
-            continue
-        groups = []
-        group = []
-        row = start
-        group_start = start
-        continued = False
-        opaque_rows = []
-        for token in children:
-            if token.type in ("softbreak", "hardbreak"):
-                if not (continued or token.level):
-                    groups.append((group_start, row + 1, group))
-                row += 1
-                group_start, group, continued = row, [], bool(token.level)
-            else:
-                group.append(token)
-                if token.type == "html_inline":
-                    row += token.content.count("\n")
-                elif token.type in ("code_inline", "link_open", "link_close", "image"):
-                    opaque_rows.append(group_start)
-        if not continued:
-            groups.append((group_start, row + 1, group))
-        gap = end - (row + 1)
-        if gap < 0 or (gap and not opaque_rows):
-            continue
-        for begin, after, group in groups:
-            if gap:
-                if opaque_rows[0] <= begin <= opaque_rows[-1]:
-                    continue
-                if begin > opaque_rows[-1]:
-                    begin += gap
-                    after += gap
-            source = lines[begin] if after == begin + 1 else ""
-            yield begin, after, source, group, False
+                parser.inline.parse(inline.content, parser, env, inline.children)
+                yield start, block.map[1], inline.content, inline.children, block.markup
+        elif (any(_HEADING.match(line) for line in lines[start:end])
+              or (("*" in inline.content or "_" in inline.content)
+                  and any(hint in inline.content for hint in ("附", "其", "&", "%")))):
+            parser.inline.parse(inline.content, parser, env, inline.children)
+            yield from _paragraph_lines(inline, lines)
 
 
 def closing(text: str) -> str:
-    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    tokens = _markdown().parse(text)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    lines = text.split("\n")
     sections = {}
     active = None
     content_start = 0
-    for start, end, source, inline, is_heading in _candidate_lines(tokens, lines):
+    for start, end, source, inline, markup in _candidate_blocks(markdown_parser(), text, lines):
         heading = _HEADING.match(source)
-        if not heading and (active is None or not _other_heading(inline, heading=is_heading)):
+        if not heading and (active is None or not _other_heading(inline, markup)):
             continue
         if active:
             sections[active].extend(lines[content_start:start])

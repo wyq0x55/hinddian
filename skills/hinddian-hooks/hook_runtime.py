@@ -56,14 +56,25 @@ def quiet(main):
     return run
 
 
+def _watchdog_expired(entry):
+    abort = threading.Timer(0.1, os._exit, args=(0,))
+    abort.daemon = True
+    abort.start()
+    try:
+        record("skip", reason="hook_timeout", entry=entry)
+    finally:
+        os._exit(0)
+
+
 def run_hook(main):
     with open(os.devnull, "wb") as sink:
         for fd in (1, 2):
             os.dup2(sink.fileno(), fd)
-    deadline = threading.Timer(2.5, os._exit, args=(0,))
+    deadline = threading.Timer(2.5, _watchdog_expired, args=(main.__module__,))
     deadline.daemon = True
     deadline.start()
     try:
         main()
     finally:
         deadline.cancel()
+        deadline.join()

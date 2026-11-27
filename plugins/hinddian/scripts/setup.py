@@ -5,6 +5,7 @@ import argparse
 import sys
 
 from capture import settings
+from extract import MarkdownParserUnavailable, markdown_parser
 import paths
 
 
@@ -13,11 +14,15 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--check", action="store_true")
     parser.parse_args(argv)
     try:
+        markdown_parser()
         fallback, limit = settings()
         vault = paths.vault_dir()
         drafts, processed = paths.drafts_dir(), paths.processed_dir()
         for directory in (drafts, processed):
             paths.check_draft_root(directory, vault)
+    except MarkdownParserUnavailable as exc:
+        print(f"hinddian 缺少采集依赖（{exc}）", file=sys.stderr)
+        return 1
     except (OSError, ValueError) as exc:
         print(f"hinddian 配置错误（{type(exc).__name__}）", file=sys.stderr)
         return 1

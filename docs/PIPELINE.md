@@ -8,4 +8,4 @@
 
 `SessionStart` 可用于检查本地配置。旧 HTTP hook 配置需迁移为 `capture_mode: "local"`。详见[部署说明](../deploy/api-host/DEPLOY.md)。
 
-采集使用宿主实际调用的 Python 环境。该环境需安装项目依赖中的 `markdown-it-py`。缺包时采集静默跳过，并在 `capture.log` 记录 `missing_markdown_parser`。
+采集使用宿主实际调用的 Python 环境。该环境需安装项目依赖中的 `markdown-it-py`。用同一个解释器运行 `setup.py --check` 可检查依赖。缺包时采集静默跳过，并在 `capture.log` 记录 `missing_markdown_parser`。

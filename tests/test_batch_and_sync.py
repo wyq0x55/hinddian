@@ -390,6 +390,25 @@ def test_rebuild_hubs_preserves_unmarked_links(batch):
     assert hub.read_text() == result
 
 
+@pytest.mark.parametrize("html", ["<div>手写说明</div>\n", "<custom>\n手写说明\n</custom>\n"])
+@pytest.mark.parametrize("gap", ["", "\n"], ids=["no-blank-line", "blank-line"])
+def test_rebuild_hubs_appends_generated_block_after_html(batch, html, gap):
+    current = make_note(batch, "在用", "current")
+    hub = batch.VAULT / "项目/P/README.md"
+    original = f"# P\n\n## 经验\n{html}{gap}"
+    hub.write_text(original)
+
+    result = subprocess.run([sys.executable, str(ROOT / "classify/hinddian_batch.py"), "rebuild-hubs"],
+                            capture_output=True, text=True, timeout=4)
+
+    assert result.returncode == 0, result.stderr
+    updated = hub.read_text()
+    assert updated.startswith(original)
+    assert f"\n\n<!-- hinddian:links -->\n- {batch.link_of(current)} <!-- hinddian:generated -->\n" in updated
+    batch.rebuild_hubs()
+    assert hub.read_text() == updated
+
+
 @pytest.mark.parametrize(("opening", "closing"), [
     pytest.param("<!-- hinddian:links -->", "<!-- /hinddian:links -->", id="standard"),
     pytest.param(" <!-- hinddian:links --> \t", " <!-- /hinddian:links -->\t ", id="padded"),
