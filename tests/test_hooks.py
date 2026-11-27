@@ -232,6 +232,7 @@ def test_stop_excludes_appendix(manifest, hooks, tmp_path, heading):
     pytest.param("**实测日志附录A**：", id="colon"),
     pytest.param("**实测日志附录A**\n", id="standalone"),
     pytest.param("**实测数据源自定义配置附录A** ", id="source-like-topic"),
+    pytest.param("**实测数据源自定义报告附录A** ", id="source-like-document-topic"),
     pytest.param("**实测文件来源统计附录A** ", id="document-like-topic"),
 ])
 def test_stop_skips_empty_verification_before_appendix(manifest, hooks, tmp_path, heading):
@@ -308,6 +309,20 @@ def test_stop_keeps_bold_evidence_in_closing(manifest, verification, hooks, tmp_
 ])
 def test_stop_keeps_appendix_reference_before_appendix(manifest, label, hooks, tmp_path):
     verification = f"**{label}** 构建通过，退出码为 0。"
+    reply = REPLY.replace("通过", verification) + "\n**实测日志附录A：环境清单**\n原始记录\n"
+    run(commands(manifest)["Stop"], session_id="s", project="P", last_assistant_message=reply)
+    draft, = (tmp_path / "drafts/P").glob("*.md")
+    assert draft.read_text().endswith(f"## 验证\n{verification}\n")
+
+
+@pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
+@pytest.mark.parametrize("verification", [
+    "**实测日志来自项目验收报告的附录 A** 构建通过。",
+    "**实测数据取自上一版报告的附录 B** 构建通过。",
+    "**实测结果源自本次上线记录的附录 2** 构建通过。",
+    "**实测结果来源于　Q4 验收文档中的附录Ｂ** 构建通过。",
+])
+def test_stop_keeps_named_document_appendix_reference(manifest, verification, hooks, tmp_path):
     reply = REPLY.replace("通过", verification) + "\n**实测日志附录A：环境清单**\n原始记录\n"
     run(commands(manifest)["Stop"], session_id="s", project="P", last_assistant_message=reply)
     draft, = (tmp_path / "drafts/P").glob("*.md")

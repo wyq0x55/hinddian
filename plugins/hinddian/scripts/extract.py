@@ -25,13 +25,18 @@ _APPENDIX_SUFFIX = re.compile(
 _REFERENCE_SPACE = r"[ \t\u3000]*"
 _REFERENCE_POSSESSIVE = rf"(?:{_REFERENCE_SPACE}的)?{_REFERENCE_SPACE}"
 _PRIOR_REFERENCE = r"(?:上述|前述)"
+_DOCUMENT_NOUN = r"(?:报告|文档|文件|记录|说明|文)"
+_DOCUMENT_LOCATION = rf"(?:{_REFERENCE_SPACE}[中内里])?"
 _DOCUMENT_REFERENCE = (
     rf"(?:{_PRIOR_REFERENCE}|[本该此这那][次份篇本]?){_REFERENCE_POSSESSIVE}"
-    rf"(?:报告|文档|文件|记录|说明|文)(?:{_REFERENCE_SPACE}[中内里])?"
+    rf"{_DOCUMENT_NOUN}{_DOCUMENT_LOCATION}"
 )
+_SOURCE_VERB = r"(?:[来取源]自(?:于)?|来源于)"
+_APPENDIX_SOURCE = re.compile(_SOURCE_VERB)
+_NAMED_DOCUMENT_TAIL = re.compile(rf"{_DOCUMENT_NOUN}{_DOCUMENT_LOCATION}{_REFERENCE_SPACE}的$")
 _APPENDIX_REFERENCE = re.compile(
     r"(?:见于?|参阅|参照|参考|查阅|查看|请看|在|从|(?:收录|记录|载|列|附)于"
-    r"|[来取源]自(?:于)?|来源于)"
+    rf"|{_SOURCE_VERB})"
     rf"(?:{_REFERENCE_SPACE}"
     rf"(?:[上下][方文面]|{_DOCUMENT_REFERENCE}|{_PRIOR_REFERENCE}){_REFERENCE_POSSESSIVE})?$"
 )
@@ -47,7 +52,13 @@ def _other_heading(line: str) -> bool:
     if evidence is None:
         return True
     appendix = _APPENDIX_SUFFIX.match(label, evidence.end())
-    return appendix is not None and _APPENDIX_REFERENCE.search(appendix["topic"].rstrip()) is None
+    if appendix is None:
+        return False
+    topic = appendix["topic"].rstrip()
+    if _APPENDIX_REFERENCE.search(topic):
+        return False
+    document = _NAMED_DOCUMENT_TAIL.search(topic)
+    return document is None or _APPENDIX_SOURCE.search(topic, 0, document.start()) is None
 
 
 def closing(text: str) -> str:

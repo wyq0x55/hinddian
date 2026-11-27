@@ -46,8 +46,29 @@ class _OpaqueYamlTag:
     value: object
 
 
-class _FrontmatterLoader(yaml.SafeLoader):
+class _RecursiveFrontmatter(yaml.YAMLError):
     pass
+
+
+class _FrontmatterLoader(yaml.SafeLoader):
+    def construct_document(self, node):
+        active, checked = set(), set()
+        pending = [(node, False)]
+        while pending:
+            current, leaving = pending.pop()
+            if leaving:
+                active.remove(current)
+                checked.add(current)
+            elif current in active:
+                raise _RecursiveFrontmatter("recursive YAML alias in frontmatter")
+            elif current not in checked:
+                active.add(current)
+                pending.append((current, True))
+                if isinstance(current, yaml.SequenceNode):
+                    pending.extend((child, False) for child in current.value)
+                elif isinstance(current, yaml.MappingNode):
+                    pending.extend((child, False) for pair in current.value for child in pair)
+        return super().construct_document(node)
 
 
 def _construct_opaque_yaml_tag(loader, node):
@@ -107,9 +128,12 @@ def _grams(t):
     t = re.sub(r"\s+", "", t or ""); return {t[i:i + 2] for i in range(len(t) - 1)}
 
 def rebuild_hubs(*, legacy_link=None):
+    if legacy_link is not None:
+        _legacy_link_prune(*legacy_link)
     with organization(), nf.vault_lock():
         if legacy_link is not None:
-            _prune_legacy_link(*legacy_link)
+            rel, text = _legacy_link_prune(*legacy_link)
+            write_file(rel, text)
         _rebuild_hubs()
 
 
@@ -165,39 +189,45 @@ _HUB_LINK = r"- \[\[[^\]\n]+\]\](?: — \d+ 条(?:决策/经验)?| — 人→Age
 _HUB_OWNED = re.compile(_HUB_LINK + r" <!-- hinddian:generated -->")
 
 
-def hub_block(part):
+def hub_blocks(part):
     start = None
     for offset, line in nf.unfenced_lines(part):
         if line == _HUB_OPEN:
             start = offset
         elif start is not None and line.rstrip("\n") == _HUB_CLOSE:
-            return start, offset, offset + len(line)
-    return None
+            yield start, offset, offset + len(line)
+            start = None
 
 
-def _prune_legacy_link(hub, heading, entry):
+def hub_block(part):
+    return next(hub_blocks(part), None)
+
+
+def _legacy_link_prune(hub, heading, entry):
     rel = hub.removesuffix(".md")
     if rel not in {"00-系统/INDEX", "技巧/技巧"} and not re.fullmatch(r"项目/[^/]+/README", rel):
         raise ValueError(f"not a generated hub path: {hub!r}")
     line_text = f"- {entry}"
     if not re.fullmatch(_HUB_LINK, line_text):
         raise ValueError("expected a legacy link entry without the leading '- '")
-    text = allowed(rel).read_text(encoding="utf-8")
+    text = writable_path(VAULT, rel).read_text(encoding="utf-8")
     parsed = nf.parse_frontmatter(text)
     body = parsed[2] if parsed else text
     parts = nf.section_parts(body)
     matches = []
     for index, part in enumerate(parts[1:], 1):
-        if part.split("\n", 1)[0][3:].strip() != heading or not (block := hub_block(part)):
+        if part.split("\n", 1)[0][3:].strip() != heading:
             continue
-        start, end, _ = block
-        matches.extend((index, offset, len(line)) for offset, line in nf.unfenced_lines(part)
-                       if start < offset < end and line.rstrip("\n") == line_text)
+        for start, end, _ in hub_blocks(part):
+            content = start + len(_HUB_OPEN)
+            matches.extend((index, content + offset, len(line))
+                           for offset, line in nf.unfenced_lines(part[content:end])
+                           if line.rstrip("\n") == line_text)
     if len(matches) != 1:
         raise ValueError(f"expected one unmarked legacy link in {hub!r} under {heading!r}; found {len(matches)}")
     index, offset, length = matches[0]
     parts[index] = parts[index][:offset] + parts[index][offset + length:]
-    write_file(rel, text[:len(text) - len(body)] + "".join(parts))
+    return rel, text[:len(text) - len(body)] + "".join(parts)
 
 
 def hub_links(text, sections):
@@ -680,7 +710,12 @@ def _apply(project, files, data, idx, dry, *, before=None):
     rendered = {}
     for nid in sorted(touched):
         note = notes[nid]
-        text = render(note, notes) if nid in created else render_update(note, notes)
+        try:
+            text = render(note, notes) if nid in created else render_update(note, notes)
+        except _RecursiveFrontmatter as exc:
+            log({"event": "write_rejected", "path": note["path"], "reason": "recursive_frontmatter_alias"})
+            print(f"Warning: {note['path']}: {exc}; batch skipped, drafts retained", file=sys.stderr)
+            return []
         if text != note.get("text"):
             rendered[nid] = text
     for nid, text in rendered.items():
@@ -799,6 +834,8 @@ if __name__ == "__main__":
     a = ap.parse_args()
     if a.prune_legacy_link and (a.cmd != "rebuild-hubs" or a.dry_run):
         ap.error("--prune-legacy-link requires rebuild-hubs without --dry-run")
+    if a.dry_run and a.cmd != "process":
+        ap.error("--dry-run is only supported with process")
     if a.batch is not None:
         if a.batch <= 0: ap.error("--batch must be positive")
         BATCH = a.batch

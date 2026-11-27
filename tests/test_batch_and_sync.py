@@ -428,6 +428,83 @@ def test_rebuild_hubs_rejects_nonunique_legacy_link(batch, links):
     assert hub.read_text() == original
 
 
+@pytest.mark.parametrize("first_matches", [True, False], ids=["ambiguous", "unique-in-second-block"])
+def test_rebuild_hubs_prune_checks_all_blocks_in_section(batch, first_matches):
+    make_note(batch, "在用", "current")
+    hub = batch.VAULT / "项目/P/README.md"
+    legacy = "[[项目/P/经验/已移除|已移除]]"
+    pending = legacy if first_matches else "[[项目/P/经验/待补|待补]]"
+    original = (f"# P\n\n## 经验\n<!-- hinddian:links -->\n手写待补入口\n- {pending}\n"
+                f"<!-- /hinddian:links -->\n\n<!-- hinddian:links -->\n旧版生成入口\n- {legacy}\n"
+                "<!-- /hinddian:links -->\n")
+    hub.write_text(original)
+    head = git(batch.VAULT, "rev-parse", "HEAD")
+
+    result = subprocess.run([sys.executable, str(ROOT / "classify/hinddian_batch.py"), "rebuild-hubs",
+                             "--prune-legacy-link", "项目/P/README.md", "经验", legacy],
+                            capture_output=True, text=True, timeout=4)
+
+    if first_matches:
+        assert result.returncode != 0 and "found 2" in result.stderr
+        assert hub.read_bytes() == original.encode()
+        assert git(batch.VAULT, "rev-parse", "HEAD") == head
+    else:
+        assert result.returncode == 0, result.stderr
+        text = hub.read_text()
+        assert f"手写待补入口\n- {pending}\n" in text
+        assert "旧版生成入口\n" in text and f"- {legacy}\n" not in text
+
+
+@pytest.mark.parametrize("dirty", [False, True], ids=["clean", "dirty"])
+def test_rebuild_hubs_dry_run_rejects_before_any_write(batch, dirty):
+    make_note(batch, "在用", "current")
+    git(batch.VAULT, "add", "-A")
+    git(batch.VAULT, "commit", "-qm", "active note")
+    if dirty:
+        (batch.VAULT / "手写变更.md").write_text("保留手写文字\n")
+    head = git(batch.VAULT, "rev-parse", "HEAD")
+    status = git(batch.VAULT, "status", "--porcelain", "--untracked-files=all")
+    notes = {path: path.read_bytes() for path in batch.VAULT.rglob("*.md")}
+    draft = put_draft()
+    draft_bytes = draft.read_bytes()
+    ledger = b'{"event":"existing"}\n'
+    batch.LOG.parent.mkdir(parents=True, exist_ok=True)
+    batch.LOG.write_bytes(ledger)
+
+    result = subprocess.run([sys.executable, str(ROOT / "classify/hinddian_batch.py"),
+                             "rebuild-hubs", "--dry-run"], capture_output=True, text=True, timeout=4)
+
+    assert result.returncode == 2 and "--dry-run is only supported with process" in result.stderr
+    assert git(batch.VAULT, "rev-parse", "HEAD") == head
+    assert git(batch.VAULT, "status", "--porcelain", "--untracked-files=all") == status
+    assert {path: path.read_bytes() for path in batch.VAULT.rglob("*.md")} == notes
+    assert draft.read_bytes() == draft_bytes and not batch.PROCESSED.exists()
+    assert batch.LOG.read_bytes() == ledger
+
+
+def test_process_dry_run_still_checks_model_update_without_writing_notes(batch, monkeypatch):
+    note = make_note(batch, "在用", "current")
+    path = batch.VAULT / (note["path"] + ".md")
+    original = path.read_bytes()
+    git(batch.VAULT, "add", "-A")
+    git(batch.VAULT, "commit", "-qm", "active note")
+    head = git(batch.VAULT, "rev-parse", "HEAD")
+    draft = put_draft()
+    draft_bytes = draft.read_bytes()
+    monkeypatch.setattr(batch, "chat", lambda prompt: json.dumps({"ops": [
+        {"op": "update", "id": note["id"], "tags": ["new"], "sources": ["S01"]},
+    ]}))
+
+    result = batch.process("P", [draft], dry=True)
+
+    assert result[0]["action"] == "update"
+    assert path.read_bytes() == original and draft.read_bytes() == draft_bytes
+    assert not batch.PROCESSED.exists()
+    assert git(batch.VAULT, "rev-parse", "HEAD") == head
+    assert not git(batch.VAULT, "status", "--porcelain", "--untracked-files=all")
+    assert json.loads(batch.LOG.read_text().splitlines()[0])["dry_run"] is True
+
+
 def test_rebuild_hubs_preserves_manual_links_and_fenced_examples(batch):
     hub = batch.VAULT / "项目/P/README.md"
     retired = hub.parent / "经验/已退役.md"
@@ -575,6 +652,37 @@ def test_batch_refuses_to_change_custom_yaml_values(batch, monkeypatch, overlay,
 
     assert path.read_text() == original and draft.exists()
     assert not (batch.PROCESSED / "P" / draft.name).exists()
+
+
+@pytest.mark.parametrize("manual", [
+    pytest.param("&local !Local [*local]", id="custom-cycle"),
+    pytest.param("&local [*local]", id="standard-cycle"),
+    pytest.param("&local {nested: [*local]}", id="indirect-cycle"),
+])
+def test_batch_warns_on_recursive_yaml_and_keeps_notes_and_draft(batch, monkeypatch, capsys, manual):
+    safe = make_note(batch, "在用", "current")
+    note = batch.VAULT / "项目/P/经验/手写.md"
+    front = f"id: recursive\nproject: P\ntype: lesson\ntags: [old]\nmanual: {manual}\n"
+    assert yaml.compose(front) is not None
+    original = f"---\n{front}---\n# 手写\n\n## 理由\n手写说明\n".encode()
+    note.write_bytes(original)
+    other_note = batch.VAULT / (safe["path"] + ".md")
+    other_bytes = other_note.read_bytes()
+    draft = put_draft()
+    draft_bytes = draft.read_bytes()
+    monkeypatch.setattr(batch, "chat", lambda prompt: json.dumps({"ops": [
+        {"op": "update", "id": note_id, "tags": ["new"], "reason": "新增说明", "sources": ["S01"]}
+        for note_id in (safe["id"], "recursive")
+    ]}))
+
+    assert batch.process("P", [draft]) == []
+
+    warning = capsys.readouterr().err
+    assert "recursive YAML alias" in warning and "项目/P/经验/手写" in warning
+    assert any(event["event"] == "write_rejected" and event.get("reason") == "recursive_frontmatter_alias"
+               for event in map(json.loads, batch.LOG.read_text().splitlines()))
+    assert note.read_bytes() == original and other_note.read_bytes() == other_bytes
+    assert draft.read_bytes() == draft_bytes and not batch.PROCESSED.exists()
 
 
 @pytest.mark.parametrize("overlay", [
