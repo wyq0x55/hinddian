@@ -1,0 +1,14 @@
+# Optional HTTPS API for explicit draft submissions.
+# The upstream checks the collector's bearer credential.
+{$HINDDIAN_COLLECTOR_ADDRESS} {
+	tls {$HINDDIAN_COLLECTOR_CERT} {$HINDDIAN_COLLECTOR_KEY}
+	encode gzip
+	@capture path /hinddian/api/health /hinddian/api/memory/push_draft
+	handle @capture {
+		uri strip_prefix /hinddian
+		reverse_proxy 127.0.0.1:8787 {
+			header_up -X-Hinddian-Dashboard
+		}
+	}
+	respond 404
+}

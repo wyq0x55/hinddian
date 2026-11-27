@@ -11,15 +11,13 @@ sys.path.insert(0, str(ROOT / "src"))
 
 @pytest.fixture
 def vault(tmp_path, monkeypatch):
-    """Point hinddian.notes at an empty temp vault / queue / drafts dir."""
-    from hinddian import notes
-
+    """Isolate all note pipeline paths from the user's files."""
     v = tmp_path / "vault"
     v.mkdir()
-    monkeypatch.setattr(notes, "VAULT", v)
-    monkeypatch.setattr(notes, "CORRECTIONS", tmp_path / "corrections")
-    monkeypatch.setattr(notes, "DRAFTS", tmp_path / "drafts")
-    monkeypatch.setattr(notes, "PROCESSED", tmp_path / "processed")
-    monkeypatch.setattr(notes, "OWNER", "")
+    monkeypatch.setenv("HINDDIAN_CONFIG", str(tmp_path / "config.json"))
+    monkeypatch.setenv("HINDDIAN_VAULT", str(v))
+    monkeypatch.setenv("HINDDIAN_DRAFTS_DIR", str(tmp_path / "drafts"))
+    monkeypatch.setenv("HINDDIAN_PROCESSED_DIR", str(tmp_path / "processed"))
+    monkeypatch.setenv("HINDDIAN_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("HINDDIAN_VAULT_LOCK", str(tmp_path / "vault.lock"))
     return v

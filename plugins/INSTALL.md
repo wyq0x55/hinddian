@@ -1,119 +1,30 @@
-# 安装 hinddian 插件（Claude Code / Codex）
+# 安装会话采集插件
 
-三步，不需要让 AI 帮你配置：
+插件包含 `SessionStart` 和 `Stop` hooks。需要 Python 3.11 或更新版本，并且宿主进程要能通过 PATH 找到 `python3`。Magpie 的 Windows 适配器也支持 `py` 和 `python`。
 
-1. 装插件
-2. 运行一次 `setup.py`（写入服务器地址和 token，并自检）
-3. 新开一个会话
+## Claude Code
 
-## 一包装什么
+在 Claude Code 中从项目 marketplace 安装 `hinddian`。
 
-| 组件 | Claude Code | Codex CLI / 桌面 |
-|------|-------------|------------------|
-| MCP `hinddian-memory` | 是：本地 stdio 桥 `scripts/mcp_bridge.py`，转发到你的服务器 | 是：同一个桥（`.codex-plugin/mcp.json`） |
-| Hooks：SessionStart（注入记忆路由块）、UserPromptSubmit（按消息自动召回）、Stop（会话草稿） | 是 | 是，但需在 Codex 里 **trust** 插件 hooks |
-| Skills：`memory`（何时读/写）、`recall`、`remember`、`doctor`、`setup` | 是（`/hinddian:recall` 等） | 是 |
-
-MCP 走插件内置的本地桥，所以插件配置里**不写任何服务器地址**；地址和 token 只存在你本机的
-`~/.config/hinddian/config.json`（权限 600），hooks 和 MCP 共用这一份。
-
-## 1. 装插件
-
-**Claude Code**
-
-```bash
-claude plugin marketplace add wyq0x55/hinddian
-claude plugin install hinddian@hinddian-plugins
+```text
+/plugin marketplace add wyq0x55/hinddian
+/plugin install hinddian@hinddian-plugins
 ```
 
-**Codex**
+从本地 checkout 安装时，marketplace 地址可使用仓库的本地路径。
 
-```bash
-codex plugin marketplace add wyq0x55/hinddian
-codex plugin add hinddian@hinddian-plugins
-# 启用后在 Codex 里审查并 trust 插件 hooks
+## Codex
+
+从仓库的 `.agents/plugins/marketplace.json` 所声明的 marketplace 安装 `hinddian`。插件自带 `.codex-plugin/hooks.json`，按宿主提示启用和信任 hooks。插件入口在 `plugins/hinddian`。
+
+## 确认采集模式
+
+在 checkout 根目录检查当前用户的有效设置。
+
+```sh
+python3 plugins/hinddian/scripts/setup.py --check
 ```
 
-## 2. 配置（一次）
+hooks 直接将符合格式的最终可见回复写到 `~/Obsidian/drafts`。旧配置带有远端地址时，将 `capture_mode` 显式设为 `local`。在 wan37 直接配置 Codex 用户级 hook 的片段见[运维说明](../deploy/api-host/DEPLOY.md)。
 
-插件装好后，新会话开头会直接打印要运行的完整命令（带插件的实际路径）。也可以自己找：
-
-```bash
-# Claude Code
-python3 ~/.claude/plugins/cache/hinddian-plugins/hinddian/*/scripts/setup.py
-# Codex
-python3 ~/.codex/plugins/cache/hinddian-plugins/hinddian/*/scripts/setup.py
-```
-
-不带参数会交互式询问地址和 token（token 不回显）；也可以一行写完：
-
-```bash
-python3 …/scripts/setup.py --url https://<host>:8444/hinddian --token <HINDDIAN_MCP_TOKEN>
-# 服务器用自签证书时加：--ca /path/to/fullchain.pem
-```
-
-**注意**：必须是 **`https` + 端口 `8444`**。不要填 `http://<host>/hinddian`（旧 `:80` 入口已关闭，会返回 **HTTP 410**）。
-仪表盘是 `:8443`（mTLS），Agent/MCP 才是 `:8444`。
-
-它会写配置并逐项自检：
-
-```
-  [ok]   服务器地址 https://<host>:8444/hinddian
-  [ok]   连通（服务端版本 0.6.0）
-  [ok]   鉴权通过（3 个项目）
-  [ok]   MCP 工具 8 个
-全部就绪。新开一个会话即生效。
-```
-
-之后随时可以 `setup.py --check` 只自检。两台以上电脑：每台各跑一次，或者把
-`~/.config/hinddian/config.json` 拷过去。
-
-
-## 排错
-
-- **写入了 `https://…:8444/hinddian` 但自检仍显示 `http://…/hinddian`（无端口）**：
-  `HINDDIAN_MEMORY_URL` 或 Claude 插件选项覆盖了配置文件。PowerShell：
-  `Remove-Item Env:HINDDIAN_MEMORY_URL -ErrorAction SilentlyContinue`
-  并在 Windows「环境变量」/ Claude 插件设置里删掉旧 URL，再重跑 `setup.py`。
-
-- **`/api/health` 返回 HTTP 410**：只有旧明文 `:80 /hinddian` 会 410；`:8444` 本身不会。 若你填的已是 `https://…:8444/hinddian` 仍报 410，看输出里的「实际请求」——多半是环境变量 `HINDDIAN_MEMORY_URL`（或 `CLAUDE_PLUGIN_OPTION_HINDDIAN_MEMORY_URL`）仍指向旧 `http://…/hinddian`，覆盖了配置文件。 `unset HINDDIAN_MEMORY_URL` 后重跑 `setup.py`，或把该变量改成带 `:8444` 的 https 地址。
-- **鉴权失败 401/403**：token 必须是服务端的 `HINDDIAN_MCP_TOKEN`，不是仪表盘 `AUTH_TOKEN`。
-- **证书错误**：加 `--ca /path/to/fullchain.pem`。
-- **Codex**：审查并 **trust** 插件 hooks。
-
-## 3. 新开会话
-
-- Claude Code：`/mcp` 里能看到 `plugin:hinddian:hinddian-memory` 已连接
-- Codex：会话里能调用 `routing_global` / `recall`
-
-## 关掉 Agent 自带的记忆（推荐）
-
-hinddian 是多台电脑共用、带审批的长期记忆；Agent 自带的记忆只在本机本项目，两边都开会重复、互相矛盾。
-
-- **Claude Code Auto Memory**（它自己写的 `MEMORY.md`）：`~/.claude/settings.json` 加 `"autoMemoryEnabled": false`
-  （只关一个项目就写进该项目的 `.claude/settings.json`），或会话里 `/memory` 切换
-- **Codex Memories**：默认关；开过的话在 `~/.codex/config.toml` 的 `[features]` 下设 `memories = false`
-- **保留** `CLAUDE.md` / `AGENTS.md`：那是你写给 Agent 的固定规则，不是记忆
-
-代价：新知识要经「会话结束 → 草稿 → 批处理 → Obsidian → Hindsight」才能被召回（新项目还要先攒够草稿并批准）；
-想马上生效用 `/hinddian:remember`。服务器连不上时没有记忆可用（对话照常）。
-
-## 自动召回
-
-每条用户消息会按内容去服务端 recall，命中的相关笔记（最多 3 条、每条一行）附在**该条消息末尾**；
-会话开头只注入一段固定不变的规则 + 项目名，所以不破坏提示词缓存。检索词会去掉贴进来的代码块和长日志行，并限定在当前项目 + 全局技巧。短消息（「好的」「继续」等）、只有粘贴内容的消息、`/` 命令跳过；
-同一会话不重复注入；3 秒超时就跳过。
-
-- 关闭：`HINDDIAN_AUTO_RECALL=0`，或在 `~/.config/hinddian/config.json` 写 `"auto_recall": false`
-- 调节：`HINDDIAN_RECALL_MIN_CHARS`（默认 8）、`HINDDIAN_RECALL_MAX_ITEMS`（3）、`HINDDIAN_RECALL_MIN_SCORE`（0.5）
-
-## 进阶
-
-- 也可以用环境变量覆盖配置文件：`HINDDIAN_MEMORY_URL`、`HINDDIAN_MCP_TOKEN`、`HINDDIAN_CA_FILE`
-- Claude Code 启用插件时填写的 plugin options（同名）也会被读取
-- hooks 拒绝向非本机地址发明文 http（会话正文 + token）；本机调试可用 `http://127.0.0.1:8787`
-- 本地开发：`claude --plugin-dir ./plugins/hinddian`；`claude plugin validate ./plugins/hinddian`
-
-## 可选 Magpie 宿主
-
-产品不依赖 Magpie。若需要：见仓库 [`adapters/magpie/README.md`](../adapters/magpie/README.md)。
+用一轮包含「原行为」「改进」「取舍」「验证」的最终回复验证采集，完成后在草稿目录核对来源。缺段和失败信息见 `~/.config/hinddian/hooks/capture.log`。`SessionStart` 可用于配置检查，实际采集在 `Stop`。

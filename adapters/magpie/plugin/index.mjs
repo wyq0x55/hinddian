@@ -1,5 +1,5 @@
 /**
- * Magpie plugin: expose install/status tools for hinddian Library Hooks + MCP.
+ * Magpie plugin for installing and inspecting hinddian capture hooks.
  *
  * Hard limit: Magpie plugin packages cannot declare Library Hooks in a way that
  * WebDAV/marketplace auto-registers them. Enabling this plugin does NOT write
@@ -65,7 +65,7 @@ export const HinddianMagpie = async () => ({
   tool: {
     hinddian_install: tool({
       description:
-        "Install hinddian on THIS Magpie: write Library Hooks (session-start/turn-end) + MCP hinddian-memory. WebDAV does not sync Hooks — run once per PC. Prefer this over editing library.json by hand.",
+        "Install hinddian session-start and turn-end Library Hooks on this computer. WebDAV does not sync Hooks.",
       args: {},
       async execute() {
         const py = findInstallPy()
@@ -88,13 +88,13 @@ export const HinddianMagpie = async () => ({
           stdout: r.stdout.slice(0, 4000),
           stderr: r.stderr.slice(0, 2000),
           next: r.ok
-            ? "Open Magpie → Library → Hooks: hinddian-session-start, hinddian-turn-end. MCP: hinddian-memory."
+            ? "Open Magpie → Library → Hooks: hinddian-session-start, hinddian-turn-end."
             : "Fix Python/PATH, or run %USERPROFILE%\\.config\\magpie\\library\\skills\\hinddian-hooks\\install.ps1 on Windows.",
         })
       },
     }),
     hinddian_status: tool({
-      description: "Check whether hinddian Magpie Hooks and hinddian-memory MCP are present in local library.json.",
+      description: "Check whether hinddian capture hooks are present in local Magpie library.json.",
       args: {},
       async execute() {
         const homes = []
@@ -117,19 +117,15 @@ export const HinddianMagpie = async () => ({
         }
         const data = JSON.parse(fs.readFileSync(libPath, "utf8"))
         const hooks = (data.hooks || []).map((h) => h.name)
-        const mcp = (data.mcp || []).map((m) => m.name)
         const need = ["hinddian-session-start", "hinddian-turn-end"]
         const hasHooks = need.every((n) => hooks.includes(n))
-        const hasMcp = mcp.includes("hinddian-memory")
         return JSON.stringify({
           ok: true,
           library: libPath,
           hooks_ok: hasHooks,
-          mcp_ok: hasMcp,
           hooks: hooks.filter((n) => String(n).startsWith("hinddian")),
-          mcp: mcp.filter((n) => n === "hinddian-memory" || n === "hindsight"),
           install_py: findInstallPy(),
-          advice: hasHooks && hasMcp
+          advice: hasHooks
             ? "Installed. New Magpie session to exercise hooks."
             : "Call hinddian_install once on this PC.",
         })

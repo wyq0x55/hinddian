@@ -2,8 +2,8 @@
 """Generate every distributed copy of the host-hook scripts from their single source.
 
 Sources (edit these):
-  hooks/*.py                               hook runtime (stdlib only)
-  src/hinddian/jev.py                      Jev gate (also imported by the server)
+  hooks/*.py                               hook runtime
+  src/hinddian/                           shared stdlib paths and draft modules
   adapters/magpie/skills/hinddian-hooks/   Magpie-only installer files (SKILL.md, install.*, embed_hooks.py)
 
 Generated (never edit by hand):
@@ -22,17 +22,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE = {
-    "hookcfg.py": ROOT / "hooks/hookcfg.py",
+    "hook_runtime.py": ROOT / "hooks/hook_runtime.py",
+    "capture.py": ROOT / "hooks/capture.py",
     "extract.py": ROOT / "hooks/extract.py",
-    "session_buf.py": ROOT / "hooks/session_buf.py",
-    "finalize.py": ROOT / "hooks/finalize.py",
     "session_start.py": ROOT / "hooks/session_start.py",
     "turn_end.py": ROOT / "hooks/turn_end.py",
-    "mcp_bridge.py": ROOT / "hooks/mcp_bridge.py",
     "setup.py": ROOT / "hooks/setup.py",
-    "prompt_recall.py": ROOT / "hooks/prompt_recall.py",
-    "jev.py": ROOT / "src/hinddian/jev.py",
 }
+for name in ("draft_store", "note_format", "paths"):
+    CORE[f"{name}.py"] = ROOT / "src/hinddian" / f"{name}.py"
 MAGPIE_SKILL = ROOT / "adapters/magpie/skills/hinddian-hooks"
 MAGPIE_EXTRA = ("SKILL.md", "embed_hooks.py", "install.py", "install.ps1")
 

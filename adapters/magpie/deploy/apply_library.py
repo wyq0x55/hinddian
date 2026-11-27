@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Patch Magpie library.json on the vault host: MCP + hooks + hinddian-hooks skill (WebDAV-carried).
+"""Publish the capture skill in the Magpie library and install local capture hooks.
 
 Hooks themselves are NOT in Magpie WebDAV Bundle — the skill is, so other PCs
 pull the skill then run install.py once to populate Hooks UI.
@@ -16,11 +16,6 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 
 LIB = Path(os.environ.get("MAGPIE_LIBRARY") or (Path.home() / ".config/magpie/library.json"))
-MCP_URL = (os.environ.get("HINDDIAN_MCP_URL") or (
-    (os.environ.get("HINDDIAN_MEMORY_URL") or "").rstrip("/") + "/mcp" if os.environ.get("HINDDIAN_MEMORY_URL") else ""
-)).strip()
-if not MCP_URL:
-    raise SystemExit("set HINDDIAN_MCP_URL (or HINDDIAN_MEMORY_URL), e.g. https://<host>:8444/hinddian/mcp")
 def _skill_src() -> Path:
     """Skill pack next to this adapter (adapters/magpie/skills), else the repo-root mirror."""
     candidates = [
@@ -57,23 +52,8 @@ def main():
     bak = LIB.with_suffix(LIB.suffix + f".bak.{int(time.time())}")
     shutil.copy2(LIB, bak)
     data = json.loads(LIB.read_text())
-    bearer = None
-    for m in data.get("mcp") or []:
-        h = (m.get("headers") or {}).get("Authorization") or ""
-        if h.lower().startswith("bearer "):
-            bearer = h.split(" ", 1)[1].strip()
-            break
-    new_mcp = [m for m in (data.get("mcp") or []) if m.get("name") not in ("hindsight", "hinddian-memory")]
-    entry = {
-        "name": "hinddian-memory",
-        "transport": "http",
-        "url": MCP_URL,
-        "agents": ["claude", "codex", "grok", "pi", "cursor", "gemini"],
-    }
-    if bearer:
-        entry["headers"] = {"Authorization": f"Bearer {bearer}"}
-    new_mcp.insert(0, entry)
-    data["mcp"] = new_mcp
+    if isinstance(data.get("mcp"), list):
+        data["mcp"] = [entry for entry in data["mcp"] if entry.get("name") != "hinddian-memory"]
 
     hooks = hook_defs()
     names = {h["name"] for h in hooks}
@@ -96,11 +76,11 @@ def main():
         f"\n{marker}\n"
         "## hinddian Magpie adapter install (other computers)\n\n"
         "Magpie WebDAV **does not sync Hooks**. After `magpie webdav now`, run the skill installer once "
-        "(writes Hooks + ensures MCP `hinddian-memory`):\n\n"
+        "(installs the capture hooks on this computer):\n\n"
         "- Windows: `& $env:USERPROFILE\\.config\\magpie\\library\\skills\\hinddian-hooks\\install.ps1`\n"
         "- Linux/macOS: `python3 ~/.config/magpie/library/skills/hinddian-hooks/install.py`\n\n"
         "Hooks panel: `hinddian-session-start` + `hinddian-turn-end`. "
-        "Memory writes are **session drafts** (Jev local→cloud only; fail → no write). hinddian core is host-agnostic; this is the optional Magpie adapter.\n"
+        "The capture hooks write session drafts for the local Obsidian batch organizer.\n"
         f"{marker}\n"
     )
     if instr.is_file():

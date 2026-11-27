@@ -1,7 +1,7 @@
 {
   "name": "hinddian",
   "version": "0.5.1",
-  "description": "Hindian memory: hinddian-memory MCP + SessionStart/Stop hooks for session drafts into Obsidian.",
+  "description": "SessionStart and Stop hooks that capture session drafts for Obsidian.",
   "author": {
     "name": "Wanwan",
     "url": "https://github.com/wyq0x55/hinddian"
@@ -10,24 +10,9 @@
   "repository": "https://github.com/wyq0x55/hinddian",
   "license": "MIT",
   "keywords": [
-    "memory",
-    "mcp",
+    "notes",
     "hooks",
     "obsidian"
   ],
-  "hooks": "./hooks/hooks.json",
-  "mcpServers": "./.mcp.json",
-  "userConfig": {
-    "HINDDIAN_MEMORY_URL": {
-      "type": "string",
-      "title": "hinddian base URL",
-      "description": "https base of your hinddian server, e.g. https://host:8444/hinddian (must include port 8444; plain http only for localhost). Optional if you ran scripts/setup.py."
-    },
-    "HINDDIAN_MCP_TOKEN": {
-      "type": "string",
-      "title": "MCP Bearer token",
-      "description": "HINDDIAN_MCP_TOKEN of your server (agent channel). Optional if you ran scripts/setup.py.",
-      "sensitive": true
-    }
-  }
+  "hooks": "./hooks/hooks.json"
 }

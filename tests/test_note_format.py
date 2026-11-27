@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import subprocess
+import sys
+from pathlib import Path
+
 from hinddian import note_format as nf
 
 HUMAN_NOTE = """---
@@ -16,6 +20,10 @@ sources: []
 updated: 2026-01-01
 reviewer: alice
 generated: true
+负责小组: 工具
+"定制: 标签": [甲, 乙]
+'编辑者''备注': |-
+  手写内容
 ---
 # A
 
@@ -33,6 +41,9 @@ r
 
 ## 我的补充
 人手写的段落，不能丢。
+
+## 相关
+手写说明和手写 [[P/Other|别名]]。
 """
 
 
@@ -46,7 +57,7 @@ def test_block_list_and_unknown_keys_parse(tmp_path):
     n = _parse(tmp_path, HUMAN_NOTE)
     assert n["tags"] == ["alpha", "beta"]
     assert n["_fm"]["reviewer"] == "alice"
-    assert ("我的补充", "人手写的段落，不能丢。") in n["_sections"]
+    assert "## 我的补充\n人手写的段落，不能丢。\n\n" in n["_sections"]
 
 
 def test_render_preserves_human_content(tmp_path):
@@ -57,6 +68,9 @@ def test_render_preserves_human_content(tmp_path):
     out = nf.render(n, notes, today="2026-02-02")
     assert "reviewer: alice" in out
     assert "generated: true" in out  # unchanged value written back verbatim
+    assert "负责小组: 工具" in out and '"定制: 标签": [甲, 乙]' in out
+    assert "'编辑者''备注': |-\n  手写内容" in out
+    assert "## 相关\n手写说明和手写 [[P/Other|别名]]。" in out
     assert "tags:\n  - alpha\n  - beta" in out
     assert "## 我的补充\n人手写的段落，不能丢。" in out
     assert "> 人写的一行引用" in out
@@ -96,12 +110,6 @@ def test_safe_segment():
     assert nf.safe_title("t\nstatus: x") == "t-status- x"
 
 
-def test_score_works_for_chinese():
-    n = {"title": "部署门禁", "scene": "API 主机 部署时", "practice": "", "reason": ""}
-    assert nf.score("部署", n) > 0
-    assert nf.score("无关话题", n) == 0
-
-
 def test_slugify_keeps_ascii_and_hashes_cjk():
     assert nf.slugify("Only HTTPS") == "only-https"
     assert nf.slugify("") == "note"
@@ -111,5 +119,22 @@ def test_slugify_keeps_ascii_and_hashes_cjk():
     assert nf.slugify("部署门禁").startswith("n-")
 
 
-def test_redact_strips_private_blocks():
-    assert nf.redact("a <private>secret</private> b <private>tail") == "a [private] b [private]"
+def test_write_lock_is_exclusive_across_processes(tmp_path):
+    root = Path(nf.__file__).resolve().parents[1]
+    script = """
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from hinddian.note_format import VaultBusy, vault_lock
+try:
+    with vault_lock(Path(sys.argv[2]), timeout=0):
+        pass
+except VaultBusy:
+    sys.exit(75)
+"""
+    lock = tmp_path / "first.lock"
+    command = [sys.executable, "-c", script, str(root), str(lock)]
+    with nf.vault_lock(lock, timeout=0), nf.vault_lock(tmp_path / "second.lock", timeout=0):
+        with nf.vault_lock(lock, timeout=0):
+            assert subprocess.run(command, timeout=3).returncode == 75
+    assert subprocess.run(command, timeout=3).returncode == 0

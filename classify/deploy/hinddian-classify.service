@@ -1,13 +1,10 @@
 [Unit]
-Description=hinddian batch: drafts (/var/lib/hinddian/drafts) → gated batch / incremental distill → atomic notes
-After=network-online.target
+Description=Organize hinddian session drafts into Obsidian notes
 
 [Service]
 Type=oneshot
-User=root
-ExecStart=/usr/local/bin/hinddian-batch run
+EnvironmentFile=-%h/.config/hinddian/batch.env
+ExecStart=%h/.local/bin/hinddian-batch run
 Nice=10
 MemoryMax=600M
 TimeoutStartSec=3000
-StandardOutput=append:/var/log/hinddian-classify.log
-StandardError=append:/var/log/hinddian-classify.log

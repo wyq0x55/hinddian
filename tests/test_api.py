@@ -3,628 +3,145 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from hinddian import notes as N
+from hinddian import draft_store, jev_log, note_format as nf
+from hinddian.api import app
 from hinddian.config import get_settings
 
-MCP = "agent-token"
+COLLECTOR = "collector-token"
 DASH = "dashboard-token"
 
 
 @pytest.fixture
-def client(vault, monkeypatch, tmp_path):
-    monkeypatch.setenv("VAULT_ROOT", str(vault))
-    monkeypatch.setenv("HINDDIAN_MCP_TOKEN", MCP)
+def client(vault, monkeypatch):
+    monkeypatch.setenv("HINDDIAN_MCP_TOKEN", COLLECTOR)
     monkeypatch.setenv("AUTH_TOKEN", DASH)
-    monkeypatch.setenv("HINDSIGHT_BASE_URL", "http://127.0.0.1:9")  # unreachable → local fallback
-    monkeypatch.delenv("HINDDIAN_ALLOW_NO_AUTH", raising=False)
+    monkeypatch.setenv("HINDDIAN_ALLOW_NO_AUTH", "false")
     get_settings.cache_clear()
-    from hinddian.api import app
-
-    with TestClient(app) as c:
-        yield c
+    with TestClient(app) as client:
+        yield client
     get_settings.cache_clear()
 
 
-def rpc(c, method, params=None, token=MCP):
-    return c.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}},
-                  headers={"Authorization": f"Bearer {token}"})
-
-
-def agent(token=MCP):
+def collector(token=COLLECTOR):
     return {"Authorization": f"Bearer {token}"}
 
 
-def dash(token=DASH):
-    return {"Authorization": f"Bearer {token}", "X-Hinddian": "1"}
+def dashboard():
+    return {"Authorization": f"Bearer {DASH}"}
 
 
-def test_mcp_requires_agent_token(client):
-    assert client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "ping"}).status_code == 401
-    assert rpc(client, "ping", token="nope").status_code == 403
-    assert rpc(client, "ping").json()["result"] == {}
-
-
-def test_dashboard_token_cannot_be_used_as_agent_and_vice_versa(client):
-    assert rpc(client, "ping", token=DASH).status_code == 403
-    assert client.get("/api/corrections", headers=agent()).status_code == 403
-
-
-def test_agent_cannot_self_approve(client):
-    # Approval remains dashboard-only for explicit/legacy pending items.
-    N.enqueue_correction({"type": "decision", "project": "P", "title": "D"})
-    cid = N.list_corrections()[0]["id"]
-    # the old agent-side approval routes are gone
-    assert client.post(f"/api/memory/corrections/{cid}/approve", headers=agent()).status_code in (404, 405)
-    # the dashboard route refuses the agent token
-    assert client.post(f"/api/corrections/{cid}/approve", headers={**agent(), "X-Hinddian": "1"}).status_code == 403
-    assert N.list_notes(project="P", type_="decision") == []
-    # the human can
-    r = client.post(f"/api/corrections/{cid}/approve", headers=dash())
-    assert r.status_code == 200 and r.json()["ok"]
-    assert len(N.list_notes(project="P", type_="decision")) == 1
+def test_collector_requires_token_and_channels_are_separate(client):
+    uri = "/api/memory/push_draft"
+    assert client.post(uri, json={}).status_code == 401
+    assert client.post(uri, json={}, headers=collector("wrong")).status_code == 403
+    assert client.post(uri, json={}, headers=dashboard()).status_code == 403
+    assert client.get("/api/drafts", headers=collector()).status_code == 403
 
 
 def test_dashboard_header_from_proxy(client):
-    assert client.get("/api/corrections", headers={"X-Hinddian-Dashboard": DASH}).status_code == 200
-    assert client.post("/api/corrections/x/approve", headers={"X-Hinddian-Dashboard": DASH}).status_code == 403  # csrf
+    assert client.get("/api/overview", headers={"X-Hinddian-Dashboard": DASH}).status_code == 200
 
 
 def test_equal_tokens_refused(client, monkeypatch):
-    monkeypatch.setenv("AUTH_TOKEN", MCP)
+    monkeypatch.setenv("AUTH_TOKEN", COLLECTOR)
     get_settings.cache_clear()
-    assert client.get("/api/corrections", headers=agent()).status_code == 503
+    assert client.get("/api/overview", headers=collector()).status_code == 503
 
 
 def test_missing_tokens_fail_closed(client, monkeypatch):
     monkeypatch.delenv("HINDDIAN_MCP_TOKEN")
     monkeypatch.delenv("AUTH_TOKEN")
     get_settings.cache_clear()
-    assert rpc(client, "ping").status_code == 503
-    assert client.get("/api/corrections").status_code == 503
+    assert client.post("/api/memory/push_draft", json={}).status_code == 503
+    assert client.get("/api/overview").status_code == 503
 
 
-def test_recall_falls_back_to_local_search(client):
-    N.upsert_note({"practice": "部署门禁", "reason": "测试理由", "action": "add", "type": "lesson", "project": "P", "title": "部署门禁", "scene": "API 主机"})
-    r = client.post("/api/memory/recall", json={"query": "部署"}, headers=agent())
-    body = r.json()
-    assert body["via"] == "local-fallback"
-    assert body["results"][0]["title"] == "部署门禁"
-
-
-def test_push_draft_rest(client):
-    r = client.post("/api/memory/push_draft", json={"project": "P", "title": "t", "body": "b", "session_id": "s1"}, headers=agent())
-    assert r.json()["upsert"] is True
+def test_push_draft_rest(client, tmp_path):
+    response = client.post("/api/memory/push_draft", headers=collector(),
+                           json={"project": "P", "title": "t", "body": "b", "session_id": "s1"})
+    assert response.json()["upsert"] is True
+    assert (tmp_path / "drafts/P/session-s1.md").is_file()
 
 
 def test_health_is_public_and_minimal(client):
     assert set(client.get("/api/health").json()) == {"ok", "service", "version"}
 
 
-def test_recall_hindsight_contract(client, monkeypatch):
-    """Body matches Hindsight's RecallRequest; results are filtered on note metadata, not the
-    top-level `type` (which is Hindsight's fact kind)."""
-    import httpx
-
-    from hinddian import memory_mcp
-
-    seen = []
-
-    def handler(request):
-        seen.append((request.url.path, __import__("json").loads(request.content)))
-        return httpx.Response(200, json={"results": [
-            {"id": "1", "text": "a", "type": "world", "metadata": {"type": "lesson", "project": "P"}},
-            {"id": "2", "text": "b", "type": "world", "metadata": {"type": "lesson", "project": "Q"}},
-        ]})
-
-    real = httpx.Client
-    monkeypatch.setattr(memory_mcp.httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
-    memory_mcp._recall_path.clear()
-    r = client.post("/api/memory/recall", json={"query": "部署", "project": "P", "type": "lesson"}, headers=agent()).json()
-    assert r["via"] == "hindsight"
-    assert [x["id"] for x in r["results"]] == ["1"]
-    path, body = seen[0]
-    assert path == "/v1/default/banks/hinddian/memories/recall"
-    assert body == {"query": "部署", "budget": "mid", "tags": ["source:obsidian", "type:lesson", "project:P"], "tags_match": "all_strict"}
-
-
-def _mock_hindsight(monkeypatch, results):
-    import httpx
-
-    from hinddian import memory_mcp
-
-    seen = []
-
-    def handler(request):
-        seen.append(__import__("json").loads(request.content))
-        return httpx.Response(200, json={"results": results})
-
-    real = httpx.Client
-    monkeypatch.setattr(memory_mcp.httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
-    memory_mcp._recall_path.clear()
-    return seen
-
-
-def test_project_recall_includes_tips_and_one_row_per_note(client, monkeypatch):
-    note = N.upsert_note({"type": "lesson", "project": "P", "title": "A", "slug": "a",
-                          "scene": "s", "practice": "current lesson", "reason": "r"})
-    N.upsert_note({"type": "tip", "title": "T", "slug": "t",
-                   "scene": "s", "practice": "current tip", "reason": "r"})
-    seen = _mock_hindsight(monkeypatch, [
-        {"id": "f1", "document_id": "proj/P/lesson/a", "text": "a1", "metadata": {"type": "lesson", "project": "P"}, "scores": {"reranker": 0.7}},
-        {"id": "f2", "document_id": "tip/t", "text": "t1", "metadata": {"type": "tip"}, "scores": {"reranker": 0.6}},
-        {"id": "f3", "document_id": "proj/P/lesson/a", "text": "a2", "metadata": {"type": "lesson", "project": "P"}, "scores": {"reranker": 0.9}},
-    ])
-    r = client.post("/api/memory/recall", json={"query": "部署", "project": "P", "format": "full"}, headers=agent()).json()
-    assert seen[0]["tags"] == ["project:P", "type:tip"] and seen[0]["tags_match"] == "any_strict"
-    assert [x["document_id"] for x in r["results"]] == ["proj/P/lesson/a", "tip/t"]
-    first = r["results"][0]
-    assert first["text"] == N.get_note(note["id"])["text"]
-    assert first["facts"] == 2 and first["scores"]["reranker"] == 0.9
-
-
-
-def test_by_note_merges_by_document_id_and_keeps_best_score():
-    from hinddian.memory_mcp import _by_note
-
-    rows = _by_note([
-        {"id": "f1", "document_id": "n1", "text": "first", "scores": {"reranker": 0.5}},
-        {"id": "f2", "document_id": "n1", "text": "second", "scores": {"reranker": 0.9}},
-        {"id": "f3", "document_id": "n2", "text": "other", "scores": {"reranker": 0.4}},
-    ])
-    assert [r["document_id"] for r in rows] == ["n1", "n2"]
-    assert rows[0]["id"] == "f1" and rows[0]["text"] == "first"
-    assert rows[0]["facts"] == 2 and rows[0]["scores"]["reranker"] == 0.9
-
-
-def test_by_note_drops_fact_rows_that_duplicate_a_returned_note():
-    from hinddian.memory_mcp import _by_note
-
-    # fact-only row can appear before or after its note twin; both should be dropped
-    rows = _by_note([
-        {"id": "fact-before", "text": "same content", "scores": {"final": 0.95}},
-        {"id": "note-a", "document_id": "proj/P/decision/a", "text": "same content",
-         "scores": {"final": 0.9}},
-        {"id": "note-b", "document_id": "proj/P/lesson/b", "text": "  other\ncontent  ",
-         "scores": {"final": 0.8}},
-        {"id": "fact-after", "text": "other content", "scores": {"final": 0.7}},  # whitespace-normalized dup
-        {"id": "orphan", "text": "unique fact only", "scores": {"final": 0.6}},
-    ])
-    assert [r.get("document_id") or r["id"] for r in rows] == [
-        "proj/P/decision/a", "proj/P/lesson/b", "orphan",
-    ]
-    orphan = rows[-1]
-    assert orphan["id"] == "orphan"
-    assert orphan["note_id"] is None and orphan["resolvable"] is False
-    assert "document_id" not in orphan or orphan.get("document_id") in (None, "")
-
-
-def test_by_note_annotates_orphan_facts_without_inventing_document_id():
-    from hinddian.memory_mcp import _by_note
-
-    rows = _by_note([
-        {"id": "f1", "text": "only a fact", "scores": {"final": 0.9}},
-        {"id": "f2", "content": "via content field", "scores": {"final": 0.8}},
-    ])
-    assert len(rows) == 2
-    for r in rows:
-        assert r.get("document_id") in (None, "")
-        assert r["note_id"] is None and r["resolvable"] is False
-        assert r["id"] in ("f1", "f2")  # fact uuid kept; consumers must not call get_note on it
-
-
-def test_by_note_preserves_note_winner_order_when_dropping_dup_facts():
-    from hinddian.memory_mcp import _by_note
-
-    rows = _by_note([
-        {"id": "f-dup", "text": "alpha", "scores": {"final": 0.99}},
-        {"id": "n1", "document_id": "note/1", "text": "alpha", "scores": {"final": 0.9}},
-        {"id": "f-keep", "text": "gamma", "scores": {"final": 0.85}},
-        {"id": "n2", "document_id": "note/2", "text": "beta", "scores": {"final": 0.8}},
-    ])
-    assert [(r.get("document_id"), r["id"], r.get("resolvable")) for r in rows] == [
-        ("note/1", "n1", None),
-        (None, "f-keep", False),
-        ("note/2", "n2", None),
-    ]
-
-
-def test_recall_drops_duplicate_fact_rows_via_by_note(client, monkeypatch):
-    N.upsert_note({"type": "decision", "project": "P", "title": "WinAMS", "slug": "winams",
-                   "scene": "s", "practice": "WinAMS stub budget", "reason": "r"})
-    _mock_hindsight(monkeypatch, [
-        {"id": "fact-uuid", "text": "WinAMS stub budget", "metadata": {}, "scores": {"final": 0.95}},
-        {"id": "f-note", "document_id": "proj/P/decision/winams", "text": "WinAMS stub budget",
-         "metadata": {"type": "decision", "project": "P"}, "scores": {"final": 0.9}},
-        {"id": "orphan-uuid", "text": "session-only fact", "metadata": {}, "scores": {"final": 0.7}},
-    ])
-    r = client.post("/api/memory/recall", json={"query": "WinAMS", "project": "P", "type": "decision", "format": "full"},
-                    headers=agent()).json()
-    assert r["via"] == "hindsight"
-    ids = [x["id"] for x in r["results"]]
-    assert "fact-uuid" not in ids
-    assert ids == ["f-note", "orphan-uuid"]
-    assert r["results"][0]["document_id"] == "proj/P/decision/winams"
-    orphan = r["results"][1]
-    assert orphan["note_id"] is None and orphan["resolvable"] is False
-
-
-def test_recall_index_and_full_local_fallback(client):
-    from hinddian import memory_mcp
-
-    note = N.upsert_note({"scene": "测试场景", "reason": "测试理由", "type": "lesson", "project": "P", "title": "部署门禁", "practice": "Run gate.sh"})
-    index = memory_mcp.call_tool("recall", {"query": "部署"})["results"]
-    assert index == [{"id": note["id"], "title": "部署门禁", "type": "lesson",
-                      "date": N.today(), "score": index[0]["score"]}]
-    assert index[0]["score"] > 0
-    full = memory_mcp.call_tool("recall", {"query": "部署", "format": "full"})["results"]
-    assert full[0]["practice"] == "Run gate.sh"
-    with pytest.raises(ValueError, match="format"):
-        memory_mcp.call_tool("recall", {"query": "部署", "format": "verbose"})
-
-
-def test_recall_index_merges_and_enriches_hindsight_notes(client, monkeypatch):
-    note = N.upsert_note({"scene": "测试场景", "practice": "部署门禁", "reason": "测试理由", "type": "lesson", "project": "P", "title": "部署门禁"})
-    _mock_hindsight(monkeypatch, [
-        {"id": "f1", "document_id": note["id"], "text": "large body", "scores": {"reranker": 0.6}},
-        {"id": "f2", "document_id": note["id"], "text": "other body", "scores": {"reranker": 0.9}},
-        {"id": "orphan", "text": "orphan  body", "scores": {"reranker": None, "final": 0.8}},
-        {"id": "retired", "document_id": "old", "metadata": {"status": "superseded"}},
-    ])
-    result = client.post("/api/memory/recall", json={"query": "部署"}, headers=agent()).json()
-    assert result["results"] == [
-        {"id": note["id"], "title": "部署门禁", "type": "lesson", "date": N.today(), "score": 0.9},
-        {"id": "orphan", "title": "orphan body", "type": "", "date": None, "score": 0.8, "resolvable": False},
-    ]
-
-
-def test_recall_index_survives_unavailable_vault(client, monkeypatch):
-    from hinddian import memory_mcp
-
-    _mock_hindsight(monkeypatch, [{"document_id": "note", "metadata": {
-        "title": "Title", "type": "lesson", "updated": "2026-10-01"}, "scores": {"final": 0.8}}])
-    monkeypatch.setattr(memory_mcp, "vault", lambda *a, **k: (_ for _ in ()).throw(OSError("offline")))
-    result = memory_mcp.call_tool("recall", {"query": "test"})
-    assert result["via"] == "hindsight" and result["vault_verified"] is False
-    assert result["results"][0] == {"id": "note", "title": "Title", "type": "lesson",
-                                    "date": "2026-10-01", "score": 0.8}
-
-
-@pytest.mark.parametrize("fmt", ["index", "full"])
-def test_recall_filters_retired_notes_even_with_stale_index(client, monkeypatch, fmt):
-    note = N.upsert_note({"scene": "测试场景", "practice": "Retired", "reason": "测试理由", "type": "lesson", "project": "P", "title": "Retired"})
-    N.upsert_note({"action": "obsolete", "id": note["id"]})
-    _mock_hindsight(monkeypatch, [{"document_id": note["id"], "metadata": {"status": "active"}}])
-    result = client.post("/api/memory/recall", json={"query": "Retired", "format": fmt}, headers=agent()).json()
-    assert result["via"] == "hindsight" and result["results"] == []
-
-
-@pytest.mark.parametrize("fmt", ["index", "full"])
-def test_recall_verifies_human_edits_scope_and_deletion(client, vault, monkeypatch, fmt):
-    note = N.upsert_note({"type": "decision", "project": "P", "title": "部署选择",
-                          "scene": "部署", "practice": "HTTPS", "reason": "安全"})
-    path = vault / (note["path"] + ".md")
-    _mock_hindsight(monkeypatch, [{"document_id": note["id"], "text": "stale",
-                                 "metadata": {"title": "Old title", "project": "P", "type": "decision"}}])
-    path.write_text(path.read_text().replace("HTTPS", "mTLS").replace("# 部署选择", "# 部署使用 mTLS")
-                    .replace(f"updated: {N.today()}", "updated: 2026-11-06"))
-    from hinddian import memory_mcp
-    result = memory_mcp.call_tool("recall", {"query": "部署", "project": "P", "format": fmt})
-    assert result["vault_verified"] is True
-    row = result["results"][0]
-    if fmt == "index":
-        assert row["title"] == "部署使用 mTLS" and row["date"] == "2026-11-06"
-    else:
-        assert "mTLS" in row["text"] and row["metadata"]["title"] == "部署使用 mTLS"
-    path.write_text(path.read_text().replace("project: P", "project: Q"))
-    assert memory_mcp.call_tool("recall", {"query": "部署", "project": "P", "format": fmt})["results"] == []
-    path.unlink()
-    assert memory_mcp.call_tool("recall", {"query": "部署", "format": fmt})["results"] == []
-
-
-def test_recall_verifies_all_candidates_beyond_one_cli_batch(client, monkeypatch):
-    from hinddian import memory_mcp
-
-    notes = [N.upsert_note({"type": "decision", "project": "P", "title": f"Rule {i}",
-                            "scene": "s", "practice": f"Action {i}", "reason": "r", "force_new": True})
-             for i in range(21)]
-    N.upsert_note({"action": "obsolete", "id": notes[-1]["id"]})
-    _mock_hindsight(monkeypatch, [{"document_id": note["id"], "metadata": {"status": "active"}} for note in notes])
-    real_vault, batches = memory_mcp.vault, []
-    def read(op, **kw):
-        if op == "get_notes":
-            batches.append(len(kw["ids"]))
-        return real_vault(op, **kw)
-    monkeypatch.setattr(memory_mcp, "vault", read)
-    result = memory_mcp.call_tool("recall", {"query": "Rule"})
-    assert batches == [20, 1]
-    assert [r["id"] for r in result["results"]] == [note["id"] for note in notes[:-1]]
-
-
-def test_agent_mcp_decision_and_correction_write_directly(client, monkeypatch):
-    import json
-    from hinddian import index_sync
-
-    kicks = []
-    monkeypatch.setattr(index_sync, "kick", lambda: kicks.append(True))
-    payload = {"type": "decision", "project": "P", "title": "只使用 TLS",
-               "scene": "部署", "practice": "TLS", "reason": "安全"}
-    response = rpc(client, "tools/call", {"name": "upsert_note", "arguments": payload})
-    added = json.loads(response.json()["result"]["content"][0]["text"])
-    assert added["action"] == "add" and N.get_note(added["id"])["type"] == "decision"
-    corrected = client.post("/api/memory/suggest_correction", headers=agent(),
-                            json={"action": "update", "id": added["id"], "practice": "mTLS"}).json()
-    assert corrected["action"] == "update" and N.get_note(added["id"])["practice"] == "mTLS"
-    assert N.list_corrections(status="all") == [] and len(kicks) == 2
-
-
-def test_agent_cannot_hard_delete_or_retain_even_with_auto_verdict(client, monkeypatch):
-    from hinddian import memory_mcp
-
-    monkeypatch.setattr(memory_mcp, "_apply_jev_verdict", lambda p: pytest.fail("hard delete must not ask Jev"))
-    for name in ("upsert_note", "suggest_correction"):
-        result = memory_mcp.call_tool(name, {"action": "hard_delete", "id": "x", "auto_verdict": True})
-        assert result["error"] == "hard_delete_forbidden"
-    assert "retain" not in {tool["name"] for tool in memory_mcp.TOOLS}
-    with pytest.raises(ValueError, match="unknown tool"):
-        memory_mcp.call_tool("retain", {"content": "x"})
-
-
-def test_get_note_single_and_batch_via_mcp(client):
-    import json
-
-    note = N.upsert_note({"project": "P", "scene": "测试场景", "reason": "测试理由", "type": "lesson", "title": "One", "practice": "Detail"})
-    def call(ids):
-        result = rpc(client, "tools/call", {"name": "get_note", "arguments": {"id": ids}}).json()["result"]
-        assert not result["isError"]
-        return json.loads(result["content"][0]["text"])
-    assert call(note["id"])["practice"] == "Detail"
-    batch = call([note["id"], "missing", note["id"]])
-    assert batch[0] == batch[2] and batch[0]["practice"] == "Detail"
-    assert batch[1] == {"error": "not_found", "id": "missing"}
-    assert call("missing") == {"error": "not_found", "id": "missing"}
-    for ids in ([], [""], ["a"] * 21):
-        assert rpc(client, "tools/call", {"name": "get_note", "arguments": {"id": ids}}).json()["result"]["isError"]
-
-
-def test_timeline_and_recent_notes_agent_channel(client, monkeypatch):
-    import json
-
-    from hinddian import memory_mcp
-    ids = []
-    for title, date, project in [("Z oldest", "2026-01-01", "P"), ("M anchor", "2026-01-02", "P"),
-                                  ("A latest", "2026-01-03", "P"), ("Q neighbor", "2026-01-02", "Q")]:
-        monkeypatch.setattr(N, "today", lambda date=date: date)
-        ids.append(N.upsert_note({"scene": "测试场景", "practice": title, "reason": "测试理由", "type": "lesson", "project": project, "title": title,
-                                  "force_new": True})["id"])
-    recent = client.get("/api/memory/notes", params={"project": "P", "limit": 2}, headers=agent()).json()
-    assert [r["id"] for r in recent] == [ids[2], ids[1]]
-    assert client.get("/api/memory/notes", headers=dash()).status_code == 403
-    response = rpc(client, "tools/call", {"name": "timeline", "arguments": {
-        "anchor_id": ids[1], "before": 1, "after": 1}}).json()["result"]
-    result = json.loads(response["content"][0]["text"])
-    assert result["project"] == "P" and [r["id"] for r in result["results"]] == ids[:3]
-    assert all(set(row) == {"id", "title", "type", "date", "score"} for row in result["results"])
-    assert memory_mcp.call_tool("timeline", {"anchor_id": "missing"})["error"] == "not_found"
-    with pytest.raises(ValueError):
-        memory_mcp.call_tool("timeline", {"anchor_id": ids[1], "before": -1})
-
-
-def test_new_tools_use_one_ssh_call_each(client, monkeypatch):
-    from types import SimpleNamespace
-    from hinddian import memory_mcp
-
-    monkeypatch.setattr(memory_mcp, "get_settings", lambda: SimpleNamespace(vault_local=False))
-    calls = []
-    monkeypatch.setattr(memory_mcp, "_ssh_cli", lambda cmd, payload=None: calls.append((cmd, payload)) or [])
-    assert memory_mcp.call_tool("get_note", {"id": ["a", "b"]}) == []
-    memory_mcp.vault("timeline", anchor_id="a", before=0, after=2)
-    memory_mcp.call_tool("list_notes", {"project": "P", "order": "recent"})
-    assert calls == [
-        (["get_notes"], {"ids": ["a", "b"], "summary": False}),
-        (["timeline", "--id", "a", "--before", "0", "--after", "2"], None),
-        (["list_notes", "--limit=50", "--status=active", "--project", "P", "--order", "recent"], None),
-    ]
-
-
-@pytest.mark.parametrize("typ", ["lesson", "decision"])
-def test_auto_verdict_merges_into_the_most_similar_note(client, monkeypatch, typ):
-    from hinddian import jev, memory_mcp
-
-    N.upsert_note({"scene": "测试场景", "reason": "测试理由", "action": "add", "type": typ, "project": "P", "title": "日志轮转", "practice": "logrotate"})
-    gate = N.upsert_note({"scene": "测试场景", "reason": "测试理由", "action": "add", "type": typ, "project": "P", "title": "部署前先跑门禁", "practice": "gate.sh"})
-    seen = {}
-
-    def verdict(digest, cands):
-        seen["cands"] = cands
-        return jev.GateResult(True, "update", 0.9, "jev:local", {"answers": {"g": {"choice": "update"}}})
-
-    monkeypatch.setattr(memory_mcp.jev, "write_verdict", verdict)
-    r = memory_mcp.call_tool("upsert_note", {"action": "add", "type": typ, "project": "P", "title": "部署门禁要先跑",
-                                             "practice": "部署前 gate.sh --strict", "auto_verdict": True})
-    assert seen["cands"][0]["id"] == gate["id"] and "practice" in seen["cands"][0]
-    assert r["action"] == "update" and r["id"] == gate["id"]
-    assert N.get_note(gate["id"])["practice"] == "部署前 gate.sh --strict"
-    assert len(N.list_notes(project="P")) == 2
-
-
-# ------------------------------------------------------------------ dashboard v2
 @pytest.fixture
-def dash_client(client, monkeypatch, tmp_path, vault):
-    base = tmp_path / "base"
-    (base / "drafts" / "my-app").mkdir(parents=True)
-    for i in range(3):
-        (base / "drafts" / "my-app" / f"session-{i}.md").write_text("---\ntitle: s\n---\n", encoding="utf-8")
-    monkeypatch.setenv("HB_BASE", str(base))
-    monkeypatch.setenv("HC_VAULT", str(vault))
-    from hinddian import classify_remote
-
-    classify_remote.invalidate()
-    (vault / "项目" / "my-app").mkdir(parents=True)
-    (vault / "项目" / "my-app" / "README.md").write_text("---\nid: proj/my-app/readme\ntype: state\n---\n# my-app\n", encoding="utf-8")
-    N.upsert_note({"scene": "测试场景", "reason": "测试理由", "action": "add", "type": "lesson", "project": "my-app", "title": "部署前先跑门禁", "practice": "gate.sh"})
-    N.upsert_note({"scene": "测试场景", "practice": "只走 HTTPS", "reason": "测试理由", "action": "add", "type": "decision", "project": "my-app", "title": "只走 HTTPS"})
+def dash_client(client, vault):
+    for index in range(3):
+        draft_store.save_payload({"project": "my-app", "session_id": str(index)})
+    for kind in ("lesson", "decision"):
+        rel = f"项目/my-app/{nf.FOLDER[kind]}/{kind}"
+        note = nf.new_note(id=f"proj/my-app/{kind}/test", path=rel, type=kind, project="my-app", title=kind)
+        nf.write_note_file(vault, rel, nf.render(note, {}, today="2026-11-23"))
     return client
 
 
 def test_overview_counts(dash_client):
-    o = dash_client.get("/api/overview", headers=dash()).json()
-    assert o["vault"] == {"ok": True, "error": None, "projects": 1, "decisions": 1, "lessons": 1, "tips": 0}
-    assert o["corrections"]["pending"] == 0
-    assert o["drafts"]["ok"] and o["drafts"]["total"] == 3 and o["drafts"]["ready"] == 0
+    data = dash_client.get("/api/overview", headers=dashboard()).json()
+    assert data["vault"] == {"ok": True, "error": None, "projects": 1, "decisions": 1, "lessons": 1, "tips": 0}
+    assert data["drafts"] == {"ok": True, "error": None, "total": 3, "processed": 0}
+    batch = dash_client.get("/api/batch", headers=dashboard()).json()
+    assert batch["projects"] == [{"project": "my-app", "drafts": 3, "processed": 0}]
 
 
-def test_notes_list_hides_hub_pages_and_searches(dash_client):
-    rows = dash_client.get("/api/notes", headers=dash()).json()
-    assert {r["type"] for r in rows} == {"lesson", "decision"}
-    hits = dash_client.get("/api/notes", params={"q": "门禁"}, headers=dash()).json()
-    assert hits and hits[0]["title"] == "部署前先跑门禁"
-    assert dash_client.get("/api/note", params={"id": "nope"}, headers=dash()).status_code == 404
-    nid = hits[0]["id"]
-    assert dash_client.get("/api/note", params={"id": nid}, headers=dash()).json()["practice"] == "gate.sh"
-
-
-def test_dashboard_recall_and_gate(dash_client):
-    r = dash_client.post("/api/recall", json={"query": "部署门禁"}, headers=dash()).json()
-    assert r["via"] == "local-fallback" and r["results"]
-    g = dash_client.get("/api/gate", headers=dash()).json()
-    assert g["projects"][0]["project"] == "my-app" and g["projects"][0]["state"] == "accumulating"
-    assert dash_client.post("/api/gate/..%2Fx/approve", headers={**dash()}).status_code in (400, 404)
-
-
-def test_dashboard_lists_drafts(dash_client, vault, tmp_path):
-    from hinddian import notes as N
-    N.push_draft(project="my-app", title="一次会话", body="body here", meta={"session_id": "s-dash", "jev_source": "none"})
-    rows = dash_client.get("/api/drafts", params={"status": "pending"}, headers=dash()).json()
-    assert any(r["session_id"] == "s-dash" and r["title"] == "一次会话" for r in rows)
-    one = next(r for r in rows if r["session_id"] == "s-dash")
-    detail = dash_client.get("/api/draft", params={"id": one["id"]}, headers=dash()).json()
+def test_dashboard_lists_drafts(dash_client):
+    draft_store.save_payload({"project": "my-app", "title": "一次会话", "body": "body here",
+                              "session_id": "s-dash", "jev_source": "none"})
+    rows = dash_client.get("/api/drafts", params={"status": "pending"}, headers=dashboard()).json()
+    row = next(row for row in rows if row["session_id"] == "s-dash")
+    assert row["title"] == "一次会话"
+    detail = dash_client.get("/api/draft", params={"id": row["id"]}, headers=dashboard()).json()
     assert "body here" in detail["body"]
-    assert dash_client.get("/api/draft", params={"id": "nope/x.md"}, headers=dash()).status_code == 404
+    assert dash_client.get("/api/draft", params={"id": "nope/x.md"}, headers=dashboard()).status_code == 404
     assert dash_client.get("/api/drafts").status_code == 401
 
 
 def test_dashboard_needs_auth_but_static_does_not(dash_client):
     assert dash_client.get("/api/overview").status_code == 401
-    assert dash_client.get("/api/notes", headers=agent()).status_code == 403
+    assert dash_client.get("/api/drafts", headers=collector()).status_code == 403
     assert dash_client.get("/static/manifest.webmanifest").status_code == 200
-    assert dash_client.get("/", headers=dash()).status_code == 200
+    assert dash_client.get("/", headers=dashboard()).status_code == 200
 
 
-def test_mcp_tool_descriptions_steer_corrections_away_from_push_draft():
-    """Agents read these strings; push_draft must not look like a correction path."""
-    from hinddian.memory_mcp import TOOLS
+@pytest.mark.parametrize(("method", "uri"), [
+    ("POST", "/mcp"), ("GET", "/.well-known/oauth-authorization-server"),
+    ("POST", "/api/memory/recall"), ("GET", "/api/memory/routing/global"),
+    ("GET", "/api/memory/notes"), ("POST", "/api/memory/upsert_note"),
+    ("POST", "/api/memory/suggest_correction"), ("GET", "/api/notes"), ("GET", "/api/note"),
+    ("POST", "/api/gate/P/approve"), ("GET", "/api/corrections"),
+    ("POST", "/api/memory/gates/classify_turn"), ("POST", "/api/memory/finalize"),
+    ("GET", "/api/memory/gates/backend"), ("GET", "/api/memory/jev-backend"), ("POST", "/api/memory/gates/report"),
+])
+def test_removed_routes_are_closed(client, method, uri):
+    assert client.request(method, uri, headers=dashboard()).status_code == 404
 
-    by_name = {t["name"]: t["description"] for t in TOOLS}
-    pd = by_name["push_draft"].lower()
-    sc = by_name["suggest_correction"].lower()
-    assert "hooks" in pd or "session-finalize" in pd or "session finalize" in pd
-    assert "upsert_note" in pd or "suggest_correction" in pd
-    assert "correct" in pd  # tell agents not to use it for corrections
-    assert "push_draft" in sc
-    assert "discover" in sc or "outdated" in sc or "wrong" in sc
 
-
-def test_jev_report_validates_appends_and_shows_on_dashboard(client, tmp_path, monkeypatch):
+def test_legacy_jev_log_is_readable_only_on_dashboard(client, tmp_path, monkeypatch):
     log = tmp_path / "jev.jsonl"
     monkeypatch.setenv("HINDDIAN_JEV_LOG", str(log))
-    url = "/api/memory/gates/report"
-    assert client.post(url, json={"session_id": "s"}).status_code == 401
-    assert client.post(url, json={"session_id": "s"}, headers=dash()).status_code == 403
-    assert client.post(url, json={}, headers=agent()).status_code == 422
-    assert client.post(url, json={"session_id": "s", "keep": "yes"}, headers=agent()).status_code == 422
-    assert client.post(url, json={"session_id": "s", "event": "x"}, headers=agent()).status_code == 422
-    assert client.post(url, json={"session_id": "s", "error": "x" * 5000}, headers=agent()).status_code == 422
-    ok = {"session_id": "s1", "host": "mac", "project": "P", "jev_source": "none", "keep": None,
-          "error": "jev_unavailable token=abc123", "turn_count": 3, "pushed": False, "turn": "secret text"}
-    assert client.post(url, json=ok, headers=agent()).json() == {"ok": True}
-    assert client.post(url, json={**ok, "session_id": "s2", "jev_source": "jev:local", "keep": False, "error": None},
-                       headers=agent()).status_code == 200
+    for bad in ({}, {"session_id": "s", "keep": "yes"}, {"session_id": "s", "event": "x"},
+                {"session_id": "s", "error": "x" * 5000}):
+        with pytest.raises(ValueError):
+            jev_log.validate(bad)
+    record = {"session_id": "s1", "host": "mac", "project": "P", "jev_source": "none", "keep": None,
+              "error": "jev_unavailable", "turn_count": 3, "pushed": False, "turn": "excluded body"}
+    jev_log.append(jev_log.validate(record))
+    jev_log.append(jev_log.validate({**record, "session_id": "s2", "jev_source": "jev:local", "keep": False, "error": None}))
     raw = log.read_text()
-    assert "secret text" not in raw and "abc123" not in raw and raw.count("\n") == 2
-    assert client.get("/api/jev-decisions", headers=agent()).status_code == 403
-    d = client.get("/api/jev-decisions", headers=dash()).json()
-    assert [r["session_id"] for r in d["items"]] == ["s2", "s1"]
-    assert d["summary"]["by_source_24h"] == {"none": 1, "jev:local": 1}
-    assert d["summary"]["hosts"][0]["host"] == "mac" and d["summary"]["drop_24h"] == 1
+    assert "excluded body" not in raw and raw.count("\n") == 2
+    assert client.get("/api/jev-decisions", headers=collector()).status_code == 403
+    data = client.get("/api/jev-decisions", headers=dashboard()).json()
+    assert [row["session_id"] for row in data["items"]] == ["s2", "s1"]
+    assert data["summary"]["by_source_24h"] == {"none": 1, "jev:local": 1}
+    assert data["summary"]["hosts"][0]["host"] == "mac" and data["summary"]["drop_24h"] == 1
 
 
 def test_jev_log_rotates(tmp_path, monkeypatch):
-    from hinddian import jev_log
     monkeypatch.setenv("HINDDIAN_JEV_LOG", str(tmp_path / "j.jsonl"))
     monkeypatch.setattr(jev_log, "MAX_BYTES", 400)
-    for i in range(20):
-        jev_log.append(jev_log.validate({"session_id": f"s{i}"}))
+    for index in range(20):
+        jev_log.append(jev_log.validate({"session_id": f"s{index}"}))
     assert (tmp_path / "j.jsonl.1").exists() and (tmp_path / "j.jsonl").stat().st_size <= 400
     assert jev_log.recent(5)[0]["session_id"] == "s19"
-
-
-def test_jev_backend_alias(client):
-    assert client.get("/api/memory/jev-backend", headers=agent()).status_code == 200
-
-
-def _fin_body(**kw):
-    b = {"session_id": "sf1", "cwd": "/home/me/work/my-app/src", "repo": "my-app", "client_id": "mac-mini",
-         "finalize_reason": "idle", "turn_count": 2, "turns": [{"text": "用户: 部署前要备份\n助手: 好的 SECRETTURN"}]}
-    b.update(kw)
-    return b
-
-
-def test_server_finalize_runs_jev_pushes_and_logs(client, tmp_path, monkeypatch):
-    from hinddian import jev, memory_mcp, session_finalize
-    log = tmp_path / "jev.jsonl"
-    monkeypatch.setenv("HINDDIAN_JEV_LOG", str(log))
-    seen = {}
-
-    def classify(text, projects, cwd=""):
-        seen.update(text=text, cwd=cwd)
-        return jev.GateResult(True, {"keep": True, "type": "lesson", "title": "部署前备份", "lesson": ["先备份"],
-                                     "open_question": ["多久一次"]}, 0.9, "jev:local", {})
-
-    monkeypatch.setattr(session_finalize.jev, "classify_turn", classify)
-    pushed = []
-    monkeypatch.setattr(memory_mcp, "call_tool", lambda n, a: pushed.append((n, a)) or
-                        ({"projects": [{"name": "my-app"}]} if n == "routing_global" else {"path": "drafts/my-app/session-sf1.md"}))
-    url = "/api/memory/finalize"
-    assert client.post(url, json=_fin_body()).status_code == 401
-    assert client.post(url, json=_fin_body(), headers=dash()).status_code == 403
-    assert client.post(url, json={"turns": []}, headers=agent()).status_code == 422
-    assert client.post(url, json=_fin_body(turns=[{"text": "x" * 20000}] * 11), headers=agent()).status_code == 422
-    r = client.post(url, json=_fin_body(), headers=agent()).json()
-    assert r["outcome"] == "pushed" and r["retry"] is False and r["source"] == "jev:local"
-    name, pl = [p for p in pushed if p[0] == "push_draft"][0]
-    assert pl["project"] == "my-app" and pl["session_id"] == "sf1" and "- 先备份" in pl["body"] and "OPEN QUESTIONS" in pl["body"]
-    assert seen["cwd"] == "src" and "SECRETTURN" in seen["text"]
-    raw = log.read_text()
-    assert "SECRETTURN" not in raw and "部署前要备份" not in raw
-    d = client.get("/api/jev-decisions", headers=dash()).json()
-    it = d["items"][0]
-    assert it["host"] == "mac-mini" and it["pushed"] is True and it["outcome"] == "pushed" and it["keep"] is True
-
-
-def test_server_finalize_jev_down_writes_nothing_and_asks_retry(client, tmp_path, monkeypatch):
-    from hinddian import jev, memory_mcp, session_finalize
-    monkeypatch.setenv("HINDDIAN_JEV_LOG", str(tmp_path / "jev.jsonl"))
-    calls = []
-    monkeypatch.setattr(memory_mcp, "call_tool", lambda n, a: calls.append(n) or {"projects": []})
-    for res in (jev.GateResult(False, None, None, "none", None, "all endpoints failed"),
-                jev.GateResult(True, {"keep": True}, 0.9, "llm", {})):
-        monkeypatch.setattr(session_finalize.jev, "classify_turn", lambda *a, _r=res, **k: _r)
-        r = client.post("/api/memory/finalize", json=_fin_body(), headers=agent()).json()
-        assert r["pushed"] is False and r["source"] == "none"
-    assert "push_draft" not in calls
-    items = client.get("/api/jev-decisions", headers=dash()).json()["items"]
-    assert {i["outcome"] for i in items} == {"jev_unavailable", "llm_forbidden"}
-    monkeypatch.setattr(session_finalize.jev, "classify_turn",
-                        lambda *a, **k: jev.GateResult(True, {"keep": False}, 0.3, "jev:cloud", {}))
-    r = client.post("/api/memory/finalize", json=_fin_body(), headers=agent()).json()
-    assert r == {**r, "outcome": "keep_false", "retry": False, "keep": False}
-
-
-def test_server_pick_project():
-    from hinddian.session_finalize import pick_project
-    p = {"project": "", "repo": "", "cwd": ""}
-    assert pick_project({**p, "repo": "my-app-api"}, "x", ["my-app", "my-app-api"]) == "my-app-api"
-    assert pick_project({**p, "repo": "new-repo"}, "hinddian", ["hinddian"]) == "new-repo"
-    assert pick_project({**p, "cwd": "loose"}, "hinddian", ["hinddian"]) == "hinddian"
-    assert pick_project({**p, "project": "P"}, None, []) == "P"
-    assert pick_project(p, None, []) == "通用-未定"

@@ -1,7 +1,3 @@
-# Moved
+# Magpie 适配器
 
-Magpie plugin lives at [`../adapters/magpie/plugin/`](../adapters/magpie/plugin/).
-
-Optional Magpie adapter overview: [`../adapters/magpie/README.md`](../adapters/magpie/README.md).
-
-hinddian core does **not** depend on Magpie. Prefer Claude/Codex: `plugins/hinddian/`.
+安装、检查和更新会话采集 hooks，见[适配器说明](../adapters/magpie/README.md)。

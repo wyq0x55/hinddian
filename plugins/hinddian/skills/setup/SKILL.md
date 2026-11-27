@@ -1,25 +1,8 @@
 ---
 name: setup
-description: Configure or troubleshoot the hinddian plugin (server URL + token, MCP connection, hooks trust).
+description: Check local hinddian session capture settings for Obsidian.
 ---
 
-# hinddian setup
+# hinddian 采集设置
 
-Configuration is one command the **user** runs in a terminal — do not ask for or handle the token yourself:
-
-```bash
-python3 "<plugin root>/scripts/setup.py"            # interactive (token not echoed)
-python3 "<plugin root>/scripts/setup.py" --check    # self-check only
-```
-
-The SessionStart hook prints the exact path when hinddian is not configured. `setup.py` writes
-`~/.config/hinddian/config.json` (mode 600), shared by the hooks and the local MCP bridge, and checks
-TLS, auth and the MCP tool list.
-
-Troubleshooting:
-- `[fail] … HTTP 410`: only the retired `:80` entry returns 410 (`:8444` does not). If your URL already has `:8444`, check that `HINDDIAN_MEMORY_URL` is not still `http://…/hinddian` (env overrides config). Use `https://<host>:8444/hinddian`.
-- `[fail] 鉴权失败`: the token must be the server's `HINDDIAN_MCP_TOKEN`, not the dashboard `AUTH_TOKEN`.
-- Certificate errors: re-run with `--ca /path/to/fullchain.pem` (self-signed server).
-- MCP shows 0 tools: not configured yet, or the server is unreachable — run `--check`.
-- **Codex**: review and **trust** the plugin hooks (Codex skips untrusted plugin hooks).
-- Magpie hosts: Magpie WebDAV does not sync Library Hooks — use the `hinddian-hooks` skill installer on each PC.
+在插件根目录执行 `python3 scripts/setup.py --check`，报告有效路径和缺段策略。默认本地采集。兼容旧远端配置时，征得用户授权后将 hinddian 的 `capture_mode` 设为 `local`。引导用户检查并授权信任 `Stop` hook。

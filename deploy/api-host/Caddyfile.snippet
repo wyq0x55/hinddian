@@ -1,6 +1,5 @@
-# Append to the API host /etc/caddy/Caddyfile (keep existing :80 OTLP/hindsight).
-# Dashboard channel: mTLS (reuses the vault host's CA at /etc/caddy/mtls/ca.pem, so the existing
-# phone client cert works). After the client cert verifies, Caddy presents the dashboard
+# Optional HTTPS dashboard. Run the API with the same vault and draft paths as batch.
+# Dashboard channel: mTLS. After the client cert verifies, Caddy presents the dashboard
 # credential itself — the browser never holds AUTH_TOKEN.
 # caddy.service needs HINDDIAN_DASHBOARD_TOKEN (= hinddian's AUTH_TOKEN) in its environment,
 # e.g. EnvironmentFile=/etc/caddy/hinddian.env (mode 600).
@@ -15,11 +14,11 @@
 # 	}
 # }
 
-:8443 {
-	tls /etc/caddy/certs/fullchain.pem /etc/caddy/certs/privkey.pem {
+{$HINDDIAN_DASHBOARD_ADDRESS} {
+	tls {$HINDDIAN_DASHBOARD_CERT} {$HINDDIAN_DASHBOARD_KEY} {
 		client_auth {
 			mode require_and_verify
-			trusted_ca_cert_file /etc/caddy/mtls/ca.pem
+			trusted_ca_cert_file {$HINDDIAN_DASHBOARD_CA}
 		}
 	}
 	encode gzip

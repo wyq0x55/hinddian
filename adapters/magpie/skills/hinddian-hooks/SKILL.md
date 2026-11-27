@@ -1,76 +1,12 @@
 ---
 name: hinddian-hooks
-description: Optional Magpie adapter — install hinddian-memory MCP + local Library Hooks. hinddian core is host-agnostic (Claude/Codex first). WebDAV does not sync Hooks.
+description: Install and check Magpie Library Hooks that capture drafts for Obsidian.
 ---
 
-# hinddian Magpie adapter（可选）
+# hinddian Magpie 采集 hooks
 
-> **hinddian 产品本身与 Magpie 无关。** 本 skill 仅给仍使用 Magpie 的机器装 hooks。首选安装见仓库 `plugins/hinddian/`（Claude/Codex）。
+用户要求安装时，先确认 Magpie 已创建本机 `library.json`。在本 skill 目录运行 `python3 install.py`，Windows 使用 `install.ps1`。安装器会先备份 `library.json`，再配置 `hinddian-session-start` 和 `hinddian-turn-end`。
 
-## 硬限制（上游）
+使用 `python3 setup.py --check` 查看本机采集配置。最终可见回复符合四段格式时写入 `~/Obsidian/drafts`。旧 HTTP 配置需由用户决定迁移或停用。WebDAV 可分发本 skill，每台电脑仍须安装自己的 Library Hooks。
 
-Magpie **WebDAV / 备份 Bundle 不同步 Hooks**（`library.Bundle` 无 Hooks 字段）。  
-Skills / MCP / instructions 会同步；**Hooks 必须每台电脑本地写一次**。
-
-插件市场（`magpie plugin add`）装的是网关/工具插件，**不会**在启用时自动写入 Library Hooks。
-
-## 像插件市场一样装（推荐）
-
-### A. Magpie Library → Skills（官方技能市场路径）
-
-1. 打开 Magpie → **Library → Skills**
-2. 粘贴 GitHub：`wyq0x55/hinddian`（或本仓库 URL）→ Probe → 安装 **hinddian-hooks**
-3. Windows 再跑一次安装器（写入 Hooks 面板）：
-
-```powershell
-magpie webdav now
-& "$env:USERPROFILE\.config\magpie\library\skills\hinddian-hooks\install.ps1"
-magpie library sync
-```
-
-私有仓库：Magpie Settings 里填 GitHub token。
-
-### B. Magpie Plugins（Discover / plugin add）
-
-```powershell
-magpie plugin add github:wyq0x55/hinddian
-```
-
-然后对任意已挂 **Magpie tools** MCP 的 Agent 说：**安装 hinddian**（调用 `hinddian_install`），或仍跑上面的 `install.ps1`。
-
-侧边栏会出现 **Hindian** 说明页。
-
-### C. WebDAV 已拉到 skill（无 GitHub）
-
-```powershell
-magpie webdav now
-& "$env:USERPROFILE\.config\magpie\library\skills\hinddian-hooks\install.ps1"
-```
-
-## Agent 应做什么
-
-若用户说「安装 hinddian / 装记忆 hooks」：
-
-1. 优先调用工具 `hinddian_install`（若 Magpie 插件已启用）
-2. 否则在本机执行本 skill 目录下的 `install.ps1`（Windows）或 `install.py`（Linux/macOS）
-3. 再 `magpie library sync`
-4. 确认 Library → Hooks 有 `hinddian-session-start`、`hinddian-turn-end`；MCP 有 `hinddian-memory`
-
-## 装好后的行为
-
-- **session-start**：结束上一会话缓冲（Jev keep → 一次 `push_draft`）；注入固定的记忆路由块
-- **turn-end**：白名单抽取（用户话 + 最终回复）→ 会话缓冲（不按回合推草稿）
-- **Jev**：本机 Magpie `127.0.0.1:3425/v1/systemone` → 可选云端 → 都失败则不写（`source=none`）
-
-
-## Agent 直接管理记忆
-
-- **全类型直写**：`tip` / `preference` / `lesson` / `decision` → `upsert_note` 或 `suggest_correction`；仪表盘审批可选，兼容旧队列
-- **双可读**：标题即命题，填齐 project（tip 除外）、场景/做法/理由；先看 routing_project 标题地图（id/updated），再 get_note 全文
-- **禁止**：手调 `push_draft` 当纠正/审阅（那是 hooks 会话蒸馏）；硬删、Hindsight `retain`；只用 `supersede` / `obsolete`
-- Obsidian 为真相源；同步层跟随笔记状态
-
-## 不要
-
-- 不要在非 vault 主机器跑 `apply_library.py`
-- 不要指望只跑 `magpie webdav now` 就填满 Hooks 面板
+Library Hook 所用的 Python 环境需安装 `markdown-it-py>=4.2.0,<5`。缺包时采集静默跳过，`capture.log` 会记录 `missing_markdown_parser`。

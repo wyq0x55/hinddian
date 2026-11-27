@@ -1,449 +1,621 @@
-"""Host-hook runtime, tested from the generated plugin copy (what users actually run)."""
+"""Exercise the distributed hook entry points and their local draft store."""
 from __future__ import annotations
 
+import datetime as dt
+import errno
 import importlib
 import json
+import os
+import shlex
+import subprocess
 import sys
-import time
+from io import StringIO
 from pathlib import Path
+from string import Template
 
 import pytest
 
-SCRIPTS = Path(__file__).resolve().parents[1] / "plugins/hinddian/scripts"
+from hinddian import note_format as nf
+
+ROOT = Path(__file__).resolve().parents[1]
+PLUGIN = ROOT / "plugins/hinddian"
+SCRIPTS = PLUGIN / "scripts"
+REPLY = "导语不采集\n**原行为**　旧流程\n### 改进：先备份\n**取舍：** 推断，放弃覆盖，因为无法回滚。\n## **验证**\n通过\n"
 
 
 @pytest.fixture
-def hooks(tmp_path, monkeypatch):
+def hooks(vault, tmp_path, monkeypatch):
     monkeypatch.setenv("HINDDIAN_HOOK_DIR", str(tmp_path / "hooks"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
-    monkeypatch.setenv("HINDDIAN_MEMORY_URL", "https://memory.example/hinddian")
-    monkeypatch.setenv("HINDDIAN_CONFIG", str(tmp_path / "cfg" / "hinddian" / "config.json"))
-    monkeypatch.setenv("HINDDIAN_REPORT_JEV", "0")  # tests opt in explicitly
-    for k in ("HINDDIAN_MCP_TOKEN", "HINDDIAN_CA_FILE", "HINDDIAN_ALLOW_INSECURE"):
-        monkeypatch.delenv(k, raising=False)
+    for key in ("HINDDIAN_MEMORY_URL", "CLAUDE_PLUGIN_OPTION_HINDDIAN_MEMORY_URL", "HINDDIAN_CAPTURE_MODE",
+                "HINDDIAN_NO_CLOSING", "HINDDIAN_SUMMARY_CHARS", "HINDDIAN_MAGPIE_HOOK_DIR", "MAGPIE_TURN_TEXT"):
+        monkeypatch.delenv(key, raising=False)
     monkeypatch.syspath_prepend(str(SCRIPTS))
-    names = ("hookcfg", "session_buf", "finalize", "extract", "jev", "mcp_bridge", "setup", "turn_end",
-             "prompt_recall", "session_start")
-    for m in names:
-        sys.modules.pop(m, None)
-    mods = {m: importlib.import_module(m) for m in ("hookcfg", "session_buf", "finalize", "mcp_bridge", "prompt_recall", "session_start")}
-    yield mods
-    for m in names:
-        sys.modules.pop(m, None)
+    names = ("capture", "extract", "hook_runtime", "draft_store", "note_format", "paths", "setup", "turn_end")
+    for name in names:
+        sys.modules.pop(name, None)
+    yield importlib.import_module("capture")
+    for name in names:
+        sys.modules.pop(name, None)
 
 
-def test_transport_rules(hooks, monkeypatch):
-    t = hooks["hookcfg"].transport_problem
-    assert t("https://h/x") is None
-    assert t("http://127.0.0.1:8787") is None
-    assert "refusing" in t("http://203.0.113.10/hinddian")
-    assert "not configured" in t("")
-    monkeypatch.setenv("HINDDIAN_ALLOW_INSECURE", "1")
-    assert t("http://10.0.0.1/x") is None
+def commands(manifest):
+    config = json.loads((PLUGIN / manifest).read_text())["hooks"]
+    return {event: Template(entries[0]["hooks"][0]["command"]).substitute(
+        CLAUDE_PLUGIN_ROOT=PLUGIN, PLUGIN_ROOT=PLUGIN) for event, entries in config.items()}
 
 
-def test_clip_keeps_head_and_tail(hooks):
-    clip = hooks["session_buf"].clip
-    text = "ASK" + "x" * 50000 + "CONCLUSION"
-    out = clip(text)
-    assert out.startswith("ASK") and out.endswith("CONCLUSION") and len(out) < 12100
+def run(command, *, timeout=3, **payload):
+    result = subprocess.run(shlex.split(command), input=json.dumps(payload), capture_output=True, text=True, timeout=timeout)
+    assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
 
 
-def test_server_down_keeps_buffer_then_gives_up(hooks, monkeypatch):
-    sb, fin = hooks["session_buf"], hooks["finalize"]
-
-    def down(*a, **k):
-        raise OSError("server down")
-
-    monkeypatch.setattr(fin, "req", down)
-    buf = sb.append_turn(session_id="s1", turn_text="用户: hi\n助手: done")
-    r = fin.finalize_buffer(buf, reason="idle")
-    assert r["deferred"] is True and "server_unreachable" in r["error"]
-    b = sb.load("s1")
-    assert not b["finalized"] and b["next_try_at"] > time.time()
-    assert not sb.due(b)
-    assert fin.finalize_idle_and_others() == []  # backoff respected
-    for _ in range(sb.MAX_ATTEMPTS):
-        fin.finalize_buffer(sb.load("s1"), reason="idle")
-    b = sb.load("s1")
-    assert b["finalized"] and b["outcome"].startswith("gave_up")
+def git(repo, *args):
+    return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
 
 
-def test_server_retry_flag_defers(hooks, monkeypatch):
-    sb, fin = hooks["session_buf"], hooks["finalize"]
-    monkeypatch.setattr(fin, "req", lambda *a, **k: {"ok": False, "retry": True, "outcome": "jev_unavailable",
-                                                     "error": "jev_unavailable: x", "source": "none"})
-    r = fin.finalize_buffer(sb.append_turn(session_id="s2", turn_text="用户: a\n助手: b"), reason="idle")
-    assert r["deferred"] is True and not sb.load("s2")["finalized"]
+def make_repo(repo):
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "test-branch")
+    git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "baseline")
+    return git(repo, "rev-parse", "--short", "HEAD")
 
 
-def test_finalize_posts_buffer_to_server_once(hooks, monkeypatch, tmp_path):
-    sb, fin = hooks["session_buf"], hooks["finalize"]
-    sent = []
-    monkeypatch.setattr(fin, "req", lambda m, path, body=None, timeout=0: sent.append((path, body)) or
-                        {"ok": True, "outcome": "pushed", "pushed": True, "source": "jev:local", "keep": True})
-    repo = tmp_path / "work" / "my-repo"
-    (repo / ".git").mkdir(parents=True)
-    sb.append_turn(session_id="old", turn_text="用户: a\n助手: b", cwd=str(repo / "src"))
-    res = fin.finalize_idle_and_others(current_sid="new")
-    assert [r.get("pushed") for r in res] == [True]
-    assert [p for p, _ in sent] == ["/api/memory/finalize"]  # no client-side Jev, no separate report
-    body = sent[0][1]
-    assert body["session_id"] == "old" and body["finalize_reason"] == "session-start"
-    assert body["cwd"] == "src" and body["repo"] == "my-repo" and str(tmp_path) not in json.dumps(body)
-    assert body["turns"] == [{"text": "用户: a\n助手: b"}] and body["client_id"]
-    assert fin.finalize_idle_and_others(current_sid="new") == []
-    assert not hasattr(fin, "jev")
+@pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
+@pytest.mark.parametrize("failure", ["lock", "directory", "config", "mode", "url", "number", "fifo", "slow-config"])
+def test_plugin_entry_failures_are_silent(manifest, failure, hooks, monkeypatch, tmp_path):
+    if failure == "directory":
+        (tmp_path / "drafts").write_text("not a directory")
+    if failure == "config":
+        hooks.paths.config_path().write_text("{")
+    if failure == "fifo":
+        os.mkfifo(hooks.paths.config_path())
+    if failure == "slow-config":
+        config = hooks.paths.config_path()
+        config.write_text("{}")
+        (tmp_path / "sitecustomize.py").write_text(
+            "import os, time\n"
+            "open_file = os.open\n"
+            "def slow_open(path, *args, **kwargs):\n"
+            "    if os.fspath(path) == os.environ['HINDDIAN_CONFIG']:\n"
+            "        time.sleep(30)\n"
+            "    return open_file(path, *args, **kwargs)\n"
+            "os.open = slow_open\n"
+        )
+        monkeypatch.setenv("PYTHONPATH", str(tmp_path))
+    if failure == "mode":
+        monkeypatch.setenv("HINDDIAN_CAPTURE_MODE", "invalid")
+    if failure == "url":
+        monkeypatch.setenv("HINDDIAN_MEMORY_URL", "https://[invalid")
+    if failure == "number":
+        monkeypatch.setenv("HINDDIAN_SUMMARY_CHARS", "invalid")
+    events = commands(manifest)
+    lock = nf.vault_lock(timeout=0) if failure == "lock" else nf.contextlib.nullcontext()
+    with lock:
+        run(events["Stop"], session_id="test", last_assistant_message=REPLY)
+        if failure not in {"directory", "lock"}:
+            run(events["SessionStart"])
+    logs = list(tmp_path.rglob("capture.log"))
+    assert logs and all("旧流程" not in log.read_text() for log in logs)
+    assert not list(tmp_path.rglob("drafts/**/*.md"))
+    if failure == "slow-config":
+        assert "TimeoutError" in logs[0].read_text()
 
 
-def test_claim_is_exclusive(hooks):
-    sb = hooks["session_buf"]
-    with sb.claim("s") as a:
-        with sb.claim("s") as b:
-            assert a is True and b is False
+def test_enospc_is_silent_and_log_is_bounded(hooks, monkeypatch, capsys, tmp_path):
+    import hook_runtime
+    from turn_end import main
+
+    def full(*args, **kwargs):
+        raise OSError(errno.ENOSPC, "exception detail")
+
+    monkeypatch.setattr(hooks.draft_store.nf, "write_atomic", full)
+    monkeypatch.setattr(sys, "stdin", StringIO(json.dumps({"session_id": "s", "last_assistant_message": REPLY})))
+    main()
+    assert capsys.readouterr() == ("", "")
+    log = tmp_path / "hooks/capture.log"
+    assert "OSError" in log.read_text() and "exception detail" not in log.read_text()
+    monkeypatch.setattr(hooks.draft_store.nf, "write_atomic", nf.write_atomic)
+    monkeypatch.setattr(hook_runtime, "LOG_LIMIT", 300)
+    for _ in range(10):
+        hook_runtime.record("test")
+        assert log.stat().st_size <= 300
 
 
-def test_prune_deletes_old_finalized(hooks):
-    sb = hooks["session_buf"]
-    sb.append_turn(session_id="s", turn_text="x")
-    sb.mark_finalized("s")
-    assert sb.prune(now=time.time() + sb.RETAIN_SEC + 1) == 1
-    assert sb.load("s") is None
+@pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
+@pytest.mark.parametrize("kind", ["symlink", "hardlink", "fifo", "directory"])
+def test_stop_bypasses_unsafe_capture_log(manifest, kind, hooks, vault, tmp_path):
+    protected = vault / "00-系统/手写.md"
+    protected.parent.mkdir()
+    protected.write_text("保留手写正文\n")
+    log = tmp_path / "hooks/capture.log"
+    log.parent.mkdir()
+    if kind == "symlink":
+        log.symlink_to(protected)
+    elif kind == "hardlink":
+        log.hardlink_to(protected)
+    elif kind == "fifo":
+        os.mkfifo(log)
+    else:
+        log.mkdir()
+
+    run(commands(manifest)["Stop"], timeout=1.5, session_id="test", last_assistant_message="短答")
+
+    assert protected.read_text() == "保留手写正文\n"
+    fallback = tmp_path / "cfg/hinddian/hooks/capture.log"
+    assert json.loads(fallback.read_text())["event"] == "skip"
+    assert not (tmp_path / "drafts").exists()
 
 
-def test_legacy_buffers_are_migrated(hooks, tmp_path, monkeypatch):
-    monkeypatch.delenv("HINDDIAN_HOOK_DIR")
-    legacy = tmp_path / "cfg/magpie/hinddian-hooks/sessions"
-    legacy.mkdir(parents=True)
-    (legacy / "old.json").write_text('{"session_id": "old", "turns": [{"text": "t"}]}', encoding="utf-8")
-    assert [b["session_id"] for b in hooks["session_buf"].list_open()] == ["old"]
-    assert (tmp_path / "cfg/hinddian/hooks/sessions/old.json").is_file()
+@pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
+@pytest.mark.parametrize("kind", ["dangling-symlink", "fifo"])
+def test_stop_bypasses_unsafe_capture_log_lock(manifest, kind, hooks, vault, tmp_path):
+    protected = vault / "00-系统/未存在.md"
+    protected.parent.mkdir()
+    lock = tmp_path / "hooks/hook-log.lock"
+    lock.parent.mkdir()
+    if kind == "dangling-symlink":
+        lock.symlink_to(protected)
+    else:
+        os.mkfifo(lock)
+
+    run(commands(manifest)["Stop"], timeout=1.5, session_id="test", last_assistant_message="短答")
+
+    assert not protected.exists()
+    assert not (lock.parent / "capture.log").exists()
+    fallback = tmp_path / "cfg/hinddian/hooks/capture.log"
+    assert json.loads(fallback.read_text())["event"] == "skip"
 
 
-def test_turn_end_refuses_without_server(hooks, monkeypatch, capsys):
-    monkeypatch.setenv("HINDDIAN_MEMORY_URL", "http://203.0.113.5/hinddian")
-    sys.modules.pop("turn_end", None)
-    te = importlib.import_module("turn_end")
-    te.main()
-    assert '"buffered": false' in capsys.readouterr().out
-    assert hooks["session_buf"].list_open() == []
+def test_closing_headings_ignore_fenced_examples_and_unrelated_headings(hooks):
+    result = hooks.extract.closing("```md\n**改进** fence\n```\n" + REPLY + "## 其他\n不能采集\n")
+    assert result == "## 原行为\n旧流程\n\n## 改进\n先备份\n\n## 取舍\n推断，放弃覆盖，因为无法回滚。\n\n## 验证\n通过"
+    assert hooks.extract.closing(REPLY.replace("**取舍：**", "**其他**")) == ""
+    assert hooks.extract.closing("**原行为** x\n**改进** y\n**取舍** z\n**验证**") == ""
+    assert hooks.extract.closing(REPLY.replace("**原行为**", "原行为：").replace("### 改进：", "### 改进 ###\n"))
 
 
-def test_config_file_and_precedence(hooks, monkeypatch):
-    cfg = hooks["hookcfg"]
-    monkeypatch.delenv("HINDDIAN_MEMORY_URL")
-    assert cfg.memory_url() == ""
-    p = cfg.save_config({"url": "https://from-file/hinddian/", "token": "file-tok"})
-    assert p.stat().st_mode & 0o777 == 0o600
-    assert cfg.memory_url() == "https://from-file/hinddian" and cfg.token() == "file-tok"
-    monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_HINDDIAN_MCP_TOKEN", "opt-tok")
-    assert cfg.token() == "opt-tok"
-    monkeypatch.setenv("HINDDIAN_MCP_TOKEN", "env-tok")
-    assert cfg.token() == "env-tok"
+@pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
+@pytest.mark.parametrize("shape", ["transcript", "text_and_transcript", "object_and_transcript",
+                                   "text_and_messages", "object_with_id", "crlf_and_messages",
+                                   "crlf_and_transcript"])
+def test_stop_keeps_distinct_message_ids(manifest, shape, hooks, tmp_path):
+    transcript = tmp_path / "transcript.jsonl"
+    stop = commands(manifest)["Stop"]
+    for message_id in ("one", "one", "two"):
+        msg = {"type": "message", "role": "assistant", "id": message_id, "content": REPLY}
+        transcript_msg = {**msg, "id": "other"} if shape == "object_with_id" else msg
+        if manifest == "hooks/hooks.json":
+            event = {"type": "assistant", "message": transcript_msg}
+        else:
+            event = {"type": "response_item", "payload": {**transcript_msg, "phase": "final_answer"}}
+        transcript.write_text(json.dumps(event) + "\n")
+        payload = {"session_id": "s", "project": "P"}
+        if shape in ("text_and_messages", "crlf_and_messages"):
+            payload["messages"] = [msg]
+        else:
+            payload["transcript_path"] = str(transcript)
+        if shape != "transcript":
+            payload["last_assistant_message"] = {
+                "object_and_transcript": {"content": REPLY},
+                "object_with_id": {"content": REPLY, "id": message_id},
+                "crlf_and_messages": REPLY.replace("\n", "\r\n"),
+                "crlf_and_transcript": REPLY.replace("\n", "\r\n"),
+            }.get(shape, REPLY)
+        run(stop, **payload)
+    draft, = (tmp_path / "drafts/P").glob("*.md")
+    assert draft.read_text().count("<!-- hinddian:turn ") == 2
 
 
-def test_setup_writes_config_and_strips_mcp_suffix(hooks, monkeypatch, capsys):
+@pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
+@pytest.mark.parametrize("heading", [
+    "**其他**\n", "**其他**　", "## 实测附录\n",
+    "**实测附录**\n", "**推断过程附录**\n", "**【实测附录】**\n", "**实测附录：环境清单**\n",
+    "**实测附录 A：环境清单**\n", "**实测附录A：环境清单**\n", "**【推断过程附录２】**\n",
+    "**实测 附录**\n",
+    "**实测日志附录**\n", "**实测数据附录：原始记录**\n",
+    "**【推断配置差异附录Ｂ：回退记录】**\n",
+    "**实测日志附录A**　\n", "**实测文件来源统计附录A** \n",
+    "__实验数据附录__\n",
+])
+def test_stop_excludes_appendix(manifest, hooks, tmp_path, heading):
+    stop = commands(manifest)["Stop"]
+    run(stop, session_id="s", project="P", last_assistant_message=REPLY + "\n" + heading + "无关附录\n附录第二行\n")
+    draft, = (tmp_path / "drafts/P").glob("*.md")
+    assert draft.read_text().endswith("## 验证\n通过\n")
+
+
+@pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
+@pytest.mark.parametrize("heading", [
+    pytest.param("**实测日志附录A**\n", id="standalone"),
+    pytest.param("**实测日志附录A：环境清单**\n", id="in-bold-colon"),
+    pytest.param("**实测数据源自动校验报告的附录 A**\n", id="data-source-topic"),
+    pytest.param("**实测日志来自项目验收报告的附录 A**\n", id="source-like-title"),
+    pytest.param("### 附录 A\n", id="atx"),
+    pytest.param("### **实测日志附录 A** ###\n", id="atx-bold"),
+    pytest.param("***实测日志附录 A***\n", id="bold-italic"),
+    pytest.param("___实测日志附录 A___\n", id="underscore-bold-italic"),
+    pytest.param("*实测日志附录 A*\n", id="italic"),
+    pytest.param("**实测日志*校验结果*附录 A**\n", id="nested-italic"),
+    pytest.param("**[实测附录 A](./记录.md)**\n", id="appendix-in-link-label"),
+    pytest.param("### 附*录* A\n", id="atx-split-emphasis"),
+    pytest.param("**附*录* A**\n", id="strong-split-emphasis"),
+    pytest.param("### `[实测记录](./附录.md)`\n", id="literal-link-syntax-in-code"),
+    pytest.param("附录 A\n------\n", id="setext"),
+    pytest.param("**附录 A** <!-- 供维护者审阅 -->\n", id="strong-with-hidden-comment"),
+    pytest.param("**附录 A** <!-- 供维护者\n审阅 -->\n", id="strong-with-multiline-comment"),
+])
+def test_stop_skips_empty_verification_before_appendix(manifest, hooks, tmp_path, heading):
+    reply = REPLY.replace("通过", f"\n{heading}环境清单，供追溯。")
+    run(commands(manifest)["Stop"], session_id="s", project="P", last_assistant_message=reply)
+    assert not list((tmp_path / "drafts").glob("**/*.md"))
+    entry = json.loads((tmp_path / "hooks/capture.log").read_text())
+    assert (entry["event"], entry["reason"]) == ("skip", "no_closing")
+
+
+@pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
+@pytest.mark.parametrize("verification", [
+    "通过\n开关由环境控制\n**推断** 仍需验证失败回退\n这行补充依据",
+    "**实测** 构建通过",
+    "**【实测】** 构建通过",
+    "**实测结果** 构建通过",
+    "**实测结果：已核对附录** 构建通过",
+    "**实测结果（详见附录）** 构建通过",
+    "**【实测结果，日志见附录 A】** 构建通过",
+    "**实测结果详见附录A** 构建通过",
+    "**实测日志请参阅附录 A** 构建通过",
+    "**实测数据见附录B** 构建通过",
+    "**实测日志在附录 A** 构建通过",
+    "**实测数据见下方附录A** 构建通过",
+    "**实测日志可从附录B** 构建通过",
+    "**实测日志来自附录 A** 构建通过",
+    "**实测数据取自附录A** 构建通过",
+    "**实测结果源自下方附录Ａ** 构建通过",
+    "**实测日志来自本报告附录 A** 构建通过，退出码为 0。",
+    "**实测数据取自本次报告的附录 A** 构建通过，退出码为 0。",
+    "**实测结果源自下文的附录 A** 构建通过，退出码为 0。",
+    "**实测结果源自该文档中的附录Ｂ** 构建通过",
+    "**实测日志来自这份报告附录 A** 构建通过，退出码为 0。",
+    "**实测数据取自这篇文档的附录 A** 构建通过，退出码为 0。",
+    "**实测结果源自那份记录的附录 A** 构建通过，退出码为 0。",
+    "**实测日志来自上述报告附录 A** 构建通过，退出码为 0。",
+    "**实测数据取自前述文档的附录 A** 构建通过，退出码为 0。",
+    "**实测日志来自上述的文档附录 A** 构建通过，退出码为 0。",
+    "**实测数据取自前述的报告附录 A** 构建通过，退出码为 0。",
+    "**实测结果源自上述的文档中附录 A** 构建通过，退出码为 0。",
+    "**实测结果源自前述的报告中附录 A** 构建通过，退出码为 0。",
+    "通过\n**实测数据详见下文附录A**：构建通过",
+    "**[推断结果]**\n根据运行日志判断",
+    "**猜测（原会话）** 可能由缓存引起",
+])
+def test_stop_keeps_bold_evidence_in_closing(manifest, verification, hooks, tmp_path):
+    stop = commands(manifest)["Stop"]
+    reply = REPLY.replace("通过", "\n" + verification) + "**其他**　无关附录\n附录第二行\n"
+    run(stop, session_id="s", project="P", last_assistant_message=reply)
+    draft, = (tmp_path / "drafts/P").glob("*.md")
+    assert draft.read_text().endswith(f"## 验证\n{verification}\n")
+
+
+@pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
+@pytest.mark.parametrize("label", [
+    "实测日志来自上述 的文档附录 A",
+    "实测日志来自上述的 文档附录 A",
+    "实测日志来自上述\u3000的文档附录 A",
+    "实测日志来自前述 的 报告附录 A",
+    "实测日志来自上述的文件附录 A",
+    "实测日志来自这本报告附录 A",
+    "实测数据取自那本报告附录 A",
+    "实测日志来自这次的报告附录 A",
+    "实测日志来自该次的报告附录 A",
+    "实测日志来自上述附录 A",
+    "实测数据取自前述附录 A",
+    "实测结果源自上述的附录 A",
+    "实测数据取自于附录 A",
+    "实测结果来源于本报告附录 A",
+    "实测日志见本报告附录 A",
+    "实测日志见上述附录 A",
+    "实测日志来源于　前述 的 文件中 的附录A",
+])
+def test_stop_keeps_appendix_reference_before_appendix(manifest, label, hooks, tmp_path):
+    verification = f"**{label}** 构建通过，退出码为 0。"
+    reply = REPLY.replace("通过", verification) + "\n**实测日志附录A：环境清单**\n原始记录\n"
+    run(commands(manifest)["Stop"], session_id="s", project="P", last_assistant_message=reply)
+    draft, = (tmp_path / "drafts/P").glob("*.md")
+    assert draft.read_text().endswith(f"## 验证\n{verification}\n")
+
+
+@pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
+@pytest.mark.parametrize("verification", [
+    "**实测日志来自项目验收报告的附录 A** 构建通过。",
+    "**实测数据取自上一版报告的附录 B** 构建通过。",
+    "**实测结果源自本次上线记录的附录 2** 构建通过。",
+    "**实测结果来源于　Q4 验收文档中的附录Ｂ** 构建通过。",
+    "**实测日志见项目验收报告的附录 A** 构建通过。",
+    "**实测日志附录A** 环境清单，供追溯。",
+    "**实测日志附录A**：附录正文",
+    "**附录 A** 环境清单，供追溯。",
+    "取自上一版报告的附录 B",
+    "源自本次上线记录的附录 2",
+    "**[实测记录](./附录.md)**",
+    "### **[验证记录](./附录(旧版).md \"附录\")** ###",
+    "**验证结果汇总** 见项目验收报告的附录 A，构建通过。",
+    "### **实测日志附录 A** 构建通过。",
+    "### ***实测日志附录 A*** 构建通过。",
+    "**[实测记录](./附录((旧版)).md)**",
+    "**[实测记录][附录]**\n\n[附录]: ./记录.md",
+    '**[实测记录](./记录.md "旧版 ) 详见附录 A")**',
+    "### 验证记录 <!-- 附录 A -->\n附录原始数据。",
+    "构建通过。\n### 验证记录 <!-- 附录 A -->\n附录原始数据。",
+])
+def test_stop_keeps_inline_appendix_text(manifest, verification, hooks, tmp_path):
+    reply = REPLY.replace("通过", verification) + "\n**实测日志附录A：环境清单**\n原始记录\n"
+    run(commands(manifest)["Stop"], session_id="s", project="P", last_assistant_message=reply)
+    draft, = (tmp_path / "drafts/P").glob("*.md")
+    assert draft.read_text().endswith(f"## 验证\n{verification}\n")
+
+
+@pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
+@pytest.mark.parametrize("title", [
+    "### 附*录* A", "**附*录* A**", "附录 A\n------", "### **附录** A",
+    "### **验证记录** 附录 A", "**验证记录** 附录 A\n------",
+])
+def test_stop_cuts_parsed_appendix_after_evidence(manifest, title, hooks, tmp_path):
+    reply = REPLY + f"\n{title}\n附录原始数据。\n"
+    run(commands(manifest)["Stop"], session_id="s", project="P", last_assistant_message=reply)
+    draft, = (tmp_path / "drafts/P").glob("*.md")
+    assert draft.read_text().endswith("## 验证\n通过\n")
+
+
+@pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
+@pytest.mark.parametrize("following", [
+    pytest.param("`跨\n 行`", id="multiline-code"),
+    pytest.param('[跨行链接](./记录.md\n "标题")', id="multiline-link"),
+    pytest.param("`单行`", id="single-line-code"),
+])
+def test_stop_cuts_appendix_between_inline_structures(manifest, following, hooks, tmp_path):
+    reply = REPLY.replace("通过", f"构建 `通过`。\n**附录 A**\n{following}\n附录原始数据。")
+    run(commands(manifest)["Stop"], session_id="s", project="P", last_assistant_message=reply)
+    draft, = (tmp_path / "drafts/P").glob("*.md")
+    assert draft.read_text().endswith("## 验证\n构建 `通过`。\n")
+
+
+@pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
+@pytest.mark.parametrize("evidence", ["`跨\n 行`", '[跨行链接](./记录.md\n "标题")'])
+def test_stop_finds_verification_between_inline_structures(manifest, evidence, hooks, tmp_path):
+    reply = REPLY.replace("## **验证**\n通过", f"上文 `链接`。\n**验证**\n{evidence}")
+    run(commands(manifest)["Stop"], session_id="s", project="P", last_assistant_message=reply)
+    draft, = (tmp_path / "drafts/P").glob("*.md")
+    assert draft.read_text().endswith(f"## 验证\n{evidence}\n")
+
+
+@pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
+@pytest.mark.parametrize("separator", [" ", "\t", "\u3000"])
+def test_stop_accepts_business_heading_whitespace(manifest, separator, hooks, tmp_path):
+    evidence = "构建通过。\n###　验证记录不应拆段"
+    reply = REPLY.replace("## **验证**\n通过", f"###{separator}验证\n{evidence}")
+    run(commands(manifest)["Stop"], session_id="s", project="P", last_assistant_message=reply)
+    draft, = (tmp_path / "drafts/P").glob("*.md")
+    assert draft.read_text().endswith(f"## 验证\n{evidence}\n")
+
+
+@pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
+@pytest.mark.parametrize("sample", ["**附录 A**", "###　验证"])
+def test_stop_keeps_multiline_inline_code_before_appendix(manifest, sample, hooks, tmp_path):
+    evidence = f"`保留代码示例\n{sample}\n`\\"
+    reply = ("**原行为** 旧流程\n**改进** 新流程\n**取舍** 保留证据\n**验证**\n"
+             f"{evidence}\n**附录 B**\n附录原始数据。\n")
+    run(commands(manifest)["Stop"], session_id="s", project="P", last_assistant_message=reply)
+    draft, = (tmp_path / "drafts/P").glob("*.md")
+    assert draft.read_text().endswith(f"## 验证\n{evidence}\n")
+
+
+@pytest.mark.parametrize("corpus", [
+    pytest.param("[测试](./记录.md) " * 200_000, id="200k-links"),
+    pytest.param("[测试](./记录.md) " * 60_000, id="60k-links"),
+    pytest.param("构建完成。测试记录 " * 100_000, id="long-text"),
+    pytest.param("[" * 24_000, id="unclosed-brackets"),
+    pytest.param("<a " * 8_000, id="unclosed-html"),
+])
+def test_stop_keeps_large_body_without_parsing_irrelevant_inlines(corpus, hooks, tmp_path):
+    evidence = "通过。\n\n" + corpus.rstrip()
+    reply = REPLY.replace("通过", evidence)
+    run(commands(".codex-plugin/hooks.json")["Stop"], session_id="s", project="P",
+        last_assistant_message=reply)
+    draft, = (tmp_path / "drafts/P").glob("*.md")
+    assert draft.read_text().endswith(f"## 验证\n{evidence}\n")
+
+
+def test_stop_logs_watchdog_timeout(hooks, monkeypatch, tmp_path):
+    (tmp_path / "sitecustomize.py").write_text(
+        "import time\n"
+        "from markdown_it import MarkdownIt\n"
+        "MarkdownIt.parse = lambda *args, **kwargs: time.sleep(30)\n"
+    )
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path))
+    run(commands(".codex-plugin/hooks.json")["Stop"], session_id="s", project="P",
+        last_assistant_message=REPLY)
+    assert not (tmp_path / "drafts").exists()
+    entry = json.loads((tmp_path / "hooks/capture.log").read_text())
+    assert (entry["event"], entry["reason"]) == ("skip", "hook_timeout")
+
+
+@pytest.mark.parametrize("entry", [
+    PLUGIN / "hooks/turn_end_entry.py",
+    ROOT / "skills/hinddian-hooks/turn_end.py",
+    ROOT / "adapters/magpie/skills/hinddian-hooks/turn_end.py",
+])
+def test_stop_reports_missing_markdown_dependency_silently(entry, hooks, tmp_path):
+    payload = {"session_id": "s", "project": "P", "last_assistant_message": REPLY}
+    result = subprocess.run([sys.executable, "-S", str(entry)], input=json.dumps(payload),
+                            capture_output=True, text=True, timeout=1.5)
+
+    assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
+    assert not (tmp_path / "drafts").exists()
+    logged, = map(json.loads, (tmp_path / "hooks/capture.log").read_text().splitlines())
+    assert (logged["event"], logged["reason"], logged["dependency"]) == (
+        "skip", "missing_markdown_parser", "markdown-it-py",
+    )
+
+
+@pytest.mark.parametrize("entry", [
+    ROOT / "hooks/setup.py",
+    SCRIPTS / "setup.py",
+    ROOT / "skills/hinddian-hooks/setup.py",
+    ROOT / "adapters/magpie/skills/hinddian-hooks/setup.py",
+])
+def test_setup_check_reports_missing_markdown_dependency(entry, hooks, tmp_path):
+    result = subprocess.run([sys.executable, "-S", str(entry), "--check"], capture_output=True,
+                            text=True, timeout=1.5)
+    assert result.returncode == 1 and "markdown-it-py" in result.stderr
+    assert not (tmp_path / "drafts").exists()
+    assert not hooks.paths.config_path().exists()
+
+
+def test_duplicate_stop_is_detected_across_pending_and_archived_projects(hooks, tmp_path):
+    stop = commands(".codex-plugin/hooks.json")["Stop"]
+    payload = {"session_id": "s", "turn_id": "same", "last_assistant_message": REPLY}
+    run(stop, project="First", **payload)
+    run(stop, project="Second", **payload)
+    draft, = (tmp_path / "drafts").glob("*/*.md")
+    assert draft.parent.name == "First"
+    archived = tmp_path / "processed/First" / draft.name
+    archived.parent.mkdir(parents=True)
+    draft.rename(archived)
+    run(stop, project="Third", **payload)
+    assert not list((tmp_path / "drafts").glob("*/*.md"))
+
+
+def test_skip_and_summary_only_use_visible_final(hooks, monkeypatch, tmp_path):
+    payload = {"session_id": "s", "prompt": REPLY, "last_assistant_message": "简单回复内容"}
+    assert hooks.capture(payload) is None
+    assert "no_closing" in (tmp_path / "hooks/capture.log").read_text()
+    assert not (tmp_path / "drafts").exists()
+    monkeypatch.setenv("HINDDIAN_NO_CLOSING", "summary")
+    monkeypatch.setenv("HINDDIAN_SUMMARY_CHARS", "4")
+    result = hooks.capture(payload)
+    fm, _, body = nf.parse_frontmatter(Path(result["path"]).read_text())
+    assert fm["kind"] == "summary" and body.endswith("简单回复\n")
+    assert all(fm[key] == "" for key in ("repo", "branch", "commit", "cwd"))
+
+
+@pytest.mark.parametrize("ids", [("origin/a", "origin?a"), ("a" * 150 + "/", "a" * 150 + "?")])
+def test_similar_session_ids_keep_separate_drafts(hooks, ids):
+    outputs = [hooks.capture({"session_id": sid, "last_assistant_message": REPLY.replace("旧流程", sid)}) for sid in ids]
+    assert outputs[0]["path"] != outputs[1]["path"]
+    for output, sid in zip(outputs, ids):
+        fm, _, body = nf.parse_frontmatter(Path(output["path"]).read_text())
+        assert fm["session_id"] == sid and f"## 原行为\n{sid}\n" in body
+
+
+@pytest.mark.parametrize("host", ["claude", "codex", "magpie"])
+def test_host_captures_final_turn_silently_and_keeps_sources(host, hooks, vault, monkeypatch, tmp_path):
+    repo = tmp_path / "my-app"
+    commit = make_repo(repo)
+    cwd = repo / "src"
+    cwd.mkdir()
+    (cwd / "untracked").touch()
+    monkeypatch.setenv("HINDDIAN_CLIENT_ID", "test-host")
+    if host == "magpie":
+        skill = ROOT / "adapters/magpie/skills/hinddian-hooks"
+        library = tmp_path / "library.json"
+        library.write_text(json.dumps({"hooks": [{"name": "hinddian-session-start", "command": "old"}],
+                                       "mcp": [{"name": "hinddian-memory"}, {"name": "other"}]}))
+        monkeypatch.setenv("MAGPIE_LIBRARY", str(library))
+        monkeypatch.setenv("HINDDIAN_MAGPIE_HOOK_DIR", str(tmp_path / "magpie-hooks"))
+        monkeypatch.setenv("HINDDIAN_PYTHON", sys.executable)
+        subprocess.run([sys.executable, str(skill / "install.py")], capture_output=True, check=True, timeout=5)
+        installed = json.loads(library.read_text())
+        assert installed["mcp"] == [{"name": "other"}]
+        events = {hook["event"]: hook["command"] for hook in installed["hooks"]}
+        assert all(len(command) < 1000 for command in events.values())
+        start, stop = "session-start", "turn-end"
+    else:
+        events = commands("hooks/hooks.json" if host == "claude" else ".codex-plugin/hooks.json")
+        start, stop = "SessionStart", "Stop"
+    run(events[start], session_id="new")
+    payload = {"session_id": "origin/a", "cwd": str(cwd), "turn_id": "first", "prompt": "不采集用户输入",
+               "last_assistant_message": REPLY}
+    run(events[stop], **payload)
+    run(events[stop], **payload)
+    run(events[stop], **{**payload, "turn_id": "second", "last_assistant_message": REPLY.replace("先备份", "再恢复")})
+    draft, = (tmp_path / "drafts/my-app").glob("*.md")
+    fm, _, body = nf.parse_frontmatter(draft.read_text())
+    assert {key: fm[key] for key in ("session_id", "host", "cwd", "repo", "branch", "commit", "project")} == {
+        "session_id": "origin/a", "host": "test-host", "cwd": "src", "repo": "my-app",
+        "branch": "test-branch", "commit": commit + "-dirty", "project": "my-app",
+    }
+    assert dt.datetime.fromisoformat(fm["time"]).utcoffset() is not None
+    assert len(fm["turn_ids"]) == 2 and body.count("## 取舍") == 2 and "再恢复" in body
+    assert "不采集用户输入" not in body and "导语不采集" not in body and not list(vault.iterdir())
+    archive = tmp_path / "processed/my-app" / draft.name
+    archive.parent.mkdir(parents=True)
+    draft.rename(archive)
+    run(events[stop], **payload)
+    assert not draft.exists()
+
+
+@pytest.mark.parametrize("host", ["claude", "codex"])
+def test_transcript_capture_uses_only_the_latest_final_answer(host, hooks, tmp_path):
+    def event(role, *content, **fields):
+        message = {"role": role, "content": list(content), **fields}
+        if host == "claude":
+            return {"type": role, "message": message}
+        return {"type": "response_item", "payload": {"type": "message", **message}}
+
+    transcript = tmp_path / "transcript.jsonl"
+    records = [
+        event("user", "old question"),
+        event("assistant", "old answer"),
+        event("user", "<hinddian_recent>old memory</hinddian_recent>"),
+        event("assistant", "tool chatter", phase="commentary", stop_reason="tool_use"),
+        event("user", {"type": "tool_result", "content": "tool result"}),
+        event("assistant", {"type": "thinking", "text": "hidden"}, {"type": "text", "text": "final answer"}),
+    ]
+    transcript.write_text("\n".join(json.dumps(record) for record in records), encoding="utf-8")
+    assert hooks.extract.final_reply({"transcript_path": str(transcript)}) == "final answer"
+    assert hooks.extract.final_reply({"transcript_path": str(transcript), "last_assistant_message": "direct"}) == "direct"
+
+
+def test_project_inference_and_setup_without_model(hooks, monkeypatch, capsys):
+    pick = hooks._project
+    assert pick("", "my-app-api", "", ["my-app", "my-app-api"]) == "my-app-api"
+    assert pick("", "new-repo", "", ["hinddian"]) == "new-repo"
+    assert pick("", "", "loose", ["hinddian"]) == "通用-未定"
+    assert pick("P", "", "", []) == "P"
     import setup
 
-    monkeypatch.setattr(setup, "check", lambda: True)
-    monkeypatch.delenv("HINDDIAN_MEMORY_URL")  # the fixture's env URL would override the written config
-    assert setup.main(["--url", "https://h:8444/hinddian/mcp", "--token", "t"]) == 0
-    assert hooks["hookcfg"].load_config() == {"url": "https://h:8444/hinddian", "token": "t"}
+    assert setup.main(["--check"]) == 0
+    assert "skip" in capsys.readouterr().out and not hooks.paths.config_path().exists()
 
 
-def test_setup_fails_when_env_overrides_written_url(hooks, monkeypatch, capsys):
-    import setup
+def test_local_capture_to_processed_obsidian_note(hooks, vault, monkeypatch, tmp_path):
+    repo = tmp_path / "my-app"
+    commit = make_repo(repo)
+    git(vault, "init", "-q")
+    git(vault, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "baseline")
+    sid = "origin/session-123"
+    run(commands(".codex-plugin/hooks.json")["Stop"], session_id=sid, cwd=str(repo), last_assistant_message=REPLY)
+    draft, = (tmp_path / "drafts/my-app").glob("*.md")
+    original = draft.read_bytes()
+    monkeypatch.syspath_prepend(str(ROOT / "classify"))
+    sys.modules.pop("hinddian_batch", None)
+    batch = importlib.import_module("hinddian_batch")
 
-    monkeypatch.setattr(setup, "check", lambda: True)
-    assert setup.main(["--url", "https://h:8444/hinddian", "--token", "t"]) == 1
-    assert "HINDDIAN_MEMORY_URL" in capsys.readouterr().out
+    def chat(prompt):
+        assert "先备份" in prompt and "放弃覆盖，因为无法回滚" in prompt
+        return json.dumps({"ops": [{"op": "create", "title": "部署前先备份", "type": "lesson",
+                                    "scene": "部署", "practice": "先备份", "reason": "推断，放弃覆盖，因为无法回滚。",
+                                    "sources": ["S01"]}]})
 
-
-def test_bridge_answers_when_unconfigured(hooks, monkeypatch):
-    import json
-
-    monkeypatch.delenv("HINDDIAN_MEMORY_URL")
-    b = hooks["mcp_bridge"]
-    init = json.loads(b.handle('{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'))
-    assert "setup.py" in init["result"]["instructions"]
-    assert b.handle('{"jsonrpc":"2.0","method":"notifications/initialized"}') is None
-    assert [t["name"] for t in json.loads(b.handle('{"jsonrpc":"2.0","id":2,"method":"tools/list"}'))["result"]["tools"]] == ["doctor"]
-    call = json.loads(b.handle('{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"recall"}}'))
-    assert call["result"]["isError"] and "setup.py" in call["result"]["content"][0]["text"]
-
-
-def test_bridge_forwards_and_degrades(hooks, monkeypatch):
-    import json
-
-    b = hooks["mcp_bridge"]
-    sent = []
-    monkeypatch.setattr(b, "_forward", lambda raw: sent.append(raw) or b'{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"recall"}]}}')
-    names = [t["name"] for t in json.loads(b.handle('{"jsonrpc":"2.0","id":1,"method":"tools/list"}'))["result"]["tools"]]
-    assert names == ["recall", "doctor"]
-    assert json.loads(sent[0])["method"] == "tools/list"
-
-    def down(raw):
-        raise OSError("refused")
-
-    monkeypatch.setattr(b, "_forward", down)
-    assert [t["name"] for t in json.loads(b.handle('{"jsonrpc":"2.0","id":2,"method":"tools/list"}'))["result"]["tools"]] == ["doctor"]
-
-
-def test_bridge_doctor_runs_locally(hooks, monkeypatch):
-    import json
-
-    b = hooks["mcp_bridge"]
-    monkeypatch.setattr(b, "_forward", lambda raw: (_ for _ in ()).throw(AssertionError("doctor must not be forwarded")))
-    out = json.loads(b.handle('{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"doctor","arguments":{}}}'))
-    assert "hinddian" in out["result"]["content"][0]["text"]
-
-
-# ------------------------------------------------------------------ auto recall
-def test_recall_skips_cheap_prompts(hooks):
-    w = hooks["prompt_recall"].worth_recalling
-    for p in ("好的", "继续", "ok", "Thanks!", "/hinddian:doctor", "<task-notification>x</task-notification>", "短"):
-        assert not w(p), p
-    assert w("部署到 API 主机之前要检查什么")
-
-
-def test_private_blocks_never_buffered_or_queried(hooks, monkeypatch, capsys):
-    import io
-    import json
-
-    sb, pr = hooks["session_buf"], hooks["prompt_recall"]
-    buf = sb.append_turn(session_id="p1", turn_text="部署 <private>token=abc 密码</private> 完成 <PRIVATE>尾巴")
-    assert buf["turns"][0]["text"] == "部署 [private] 完成 [private]"
-    sent = []
-    monkeypatch.setattr(pr.hookcfg, "req", lambda m, path, body=None, **k: sent.append(body) or {"results": []})
-    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"session_id": "p1", "prompt": "上次部署怎么做的 <private>内部地址 10.0.0.1</private>"})))
-    pr.main()
-    assert "10.0.0.1" not in sent[0]["query"]
-
-
-def test_recall_query_drops_pastes(hooks):
-    pr = hooks["prompt_recall"]
-    q = pr.clean_query("部署又失败了，看下\n```\nTraceback (most recent call last):\n  File x\n```\n是不是门禁的问题")
-    assert q == "部署又失败了，看下 是不是门禁的问题"
-    assert pr.clean_query("x" * 400) == ""
-    assert not pr.worth_recalling(pr.clean_query("```\nonly a log\n```"))
-
-
-def test_recall_filters_and_dedupes(hooks):
-    pr = hooks["prompt_recall"]
-    results = [
-        {"document_id": "a", "text": "---\nid: a\n---\n# A\n\n## 做法\n先跑门禁", "metadata": {"title": "A"}, "scores": {"reranker": 0.9}},
-        {"document_id": "b", "text": "无关", "metadata": {"title": "B"}, "scores": {"reranker": 0.1}},
-        {"id": "c", "title": "C", "practice": "p", "score": 0.6},
-        {"id": "d", "title": "D", "practice": "p", "score": 0.1},
-    ]
-    items = pr.normalize(results)
-    assert [i["id"] for i in items] == ["a", "c"]
-    assert "snippet" not in items[0]
-    assert "先跑门禁" not in pr.render(items)
-    assert [i["id"] for i in pr.pick_new("s1", items)] == ["a", "c"]
-    assert pr.pick_new("s1", items) == []          # already injected this session
-    assert [i["id"] for i in pr.pick_new("s2", items)] == ["a", "c"]
-
-
-def test_recall_keeps_fact_rows_but_stops_promising_get_note(hooks):
-    pr = hooks["prompt_recall"]
-    results = [
-        # Hindsight fact row: has a fact id, no document_id → get_note(<fact id>) is not_found
-        {"id": "f1", "text": "WinAMS 桩代码设有内存预算", "scores": {"final": 0.9}},
-        {"document_id": "n2", "id": "f2", "text": "---\nid: n2\n---\n# N2\n\n## 做法\n先跑门禁",
-         "metadata": {"title": "N2"}, "scores": {"final": 0.8}},
-    ]
-    items = pr.normalize(results)
-    assert [(i["key"], i["id"]) for i in items] == [("f1", ""), ("n2", "n2")]
-    text = pr.render(items)
-    assert "[f1]" not in text and "get_note(f1)" not in text
-    assert "[n2]" in text and "需要全文用 get_note(id)。" in text
-    assert "（Hindsight 事实条目，无笔记全文）" in text
-    assert "get_note" not in pr.render(items[:1])  # nothing fetchable → no such line
-
-
-def test_recall_fact_rows_are_deduped_by_fact_id(hooks):
-    pr = hooks["prompt_recall"]
-    items = pr.normalize([{"id": "f1", "text": "只有事实层的条目", "scores": {"final": 0.9}}])
-    assert len(pr.pick_new("s3", items)) == 1
-    assert pr.pick_new("s3", items) == []          # same fact must not be injected twice
-
-
-def test_recall_tolerates_null_score_from_hindsight(hooks):
-    pr = hooks["prompt_recall"]
-    # one Hindsight endpoint answers with an explicit `"score": null` next to `scores`
-    items = pr.normalize([
-        {"document_id": "n1", "id": "f1", "text": "t", "metadata": {"title": "N1"},
-         "score": None, "scores": {"final": 0.9}},
-        {"id": "f2", "text": "t2", "score": None, "scores": {"final": 0.9}},
-    ])
-    assert [(i["key"], i["id"]) for i in items] == [("n1", "n1"), ("f2", "")]
-
-
-def test_recall_scopes_to_session_project_and_dedupes(hooks, monkeypatch, capsys):
-    import io
-    import json
-
-    pr, sb = hooks["prompt_recall"], hooks["session_buf"]
-    sb.side_file("s9", "project").write_text("my-app", encoding="utf-8")
-    sent = []
-
-    def req(method, path, body=None, **kw):
-        sent.append(body)
-        return {"results": [{"document_id": "a", "text": "x", "metadata": {"title": "A"}}] * 3}
-
-    monkeypatch.setattr(pr.hookcfg, "req", req)
-    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"session_id": "s9", "prompt": "上次部署门禁怎么定的"})))
-    pr.main()
-    assert sent[0]["project"] == "my-app"
-    assert capsys.readouterr().out.count("[a]") == 1
-
-
-def test_prune_handles_side_files(hooks):
-    sb = hooks["session_buf"]
-    seen = sb.side_file("old", "recalled.json")
-    seen.write_text('["a"]', encoding="utf-8")
-    sb.side_file("new", "project").write_text("p", encoding="utf-8")
-    import os
-
-    os.utime(seen, (1, 1))
-    assert sb.prune() == 1
-    assert not seen.exists() and sb.side_file("new", "project").exists()
-
-
-def test_recall_emits_structured_context(hooks, monkeypatch, capsys):
-    import io
-    import json
-
-    pr = hooks["prompt_recall"]
-    monkeypatch.setattr(pr.hookcfg, "req", lambda *a, **k: {"results": [{"document_id": "a", "text": "t", "metadata": {"title": "A"}}]})
-    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"hook_event_name": "UserPromptSubmit", "session_id": "s", "prompt": "上次部署门禁怎么定的"})))
-    pr.main()
-    out = json.loads(capsys.readouterr().out)
-    ctx = out["hookSpecificOutput"]
-    assert ctx["hookEventName"] == "UserPromptSubmit" and "<hinddian_recall>" in ctx["additionalContext"]
-
-
-def test_recall_off_switch_and_failure_are_silent(hooks, monkeypatch, capsys):
-    import io
-
-    pr = hooks["prompt_recall"]
-    monkeypatch.setenv("HINDDIAN_AUTO_RECALL", "0")
-    monkeypatch.setattr("sys.stdin", io.StringIO('{"prompt": "上次部署门禁怎么定的"}'))
-    pr.main()
-    monkeypatch.setenv("HINDDIAN_AUTO_RECALL", "1")
-
-    def boom(*a, **k):
-        raise TimeoutError
-
-    monkeypatch.setattr(pr.hookcfg, "req", boom)
-    monkeypatch.setattr("sys.stdin", io.StringIO('{"prompt": "上次部署门禁怎么定的"}'))
-    pr.main()
-    assert capsys.readouterr().out == ""
-
-
-# ------------------------------------------------------------------ session start
-def test_routing_block_is_cache_stable(hooks):
-    import hashlib
-
-    ss = hooks["session_start"]
-    a = ss.routing_block(sorted(["b", "a"]), "a")
-    assert a == ss.routing_block(["a", "b"], "a")
-    assert hashlib.sha256(a.encode()).hexdigest() == "9da295af05a8962112d9cf024586f0049c2d9bb3f137be2ebb49e9c0bf148c76"
-    assert "decision 均用 upsert_note 直写" in a
-    assert "suggest_correction 同样直写" in a and "仪表盘审批可选" in a
-    assert not any(ch.isdigit() for ch in a.replace("hinddian", ""))  # no counts / dates in the prefix
-    assert ss.match_project("/home/me/work/my-app-api", ["my-app", "my-app-api"]) == "my-app-api"
-
-
-def test_recall_title_index_limits_and_score_sources(hooks):
-    pr = hooks["prompt_recall"]
-    rows = [{"id": str(i), "title": f"Title {i}\nextra", "type": "lesson", "date": "2026-01-01",
-             "score": 0.7, "practice": "SHOULD NOT INJECT"} for i in range(10)]
-    fresh = pr.pick_new("index", pr.normalize(rows, "hindsight"))
-    assert 5 <= len(fresh) <= 8
-    text = pr.render(fresh)
-    assert "SHOULD NOT INJECT" not in text and "Title 0 extra" in text
-    assert text.count("get_note") == 1
-    assert pr.pick_new("index", pr.normalize(rows, "hindsight"))[0]["id"] == "6"
-    assert pr.normalize([{**rows[0], "score": 0.4}], "hindsight") == []
-    assert pr.normalize([{**rows[0], "score": 0.4}], "local-fallback")
-    orphan = pr.normalize([{**rows[0], "resolvable": False}], "hindsight")[0]
-    assert not orphan["id"] and orphan["key"] == "0"
-
-
-def test_session_start_appends_recent_after_unchanged_prefix(hooks, monkeypatch, capsys):
-    import io
-
-    ss, sb = hooks["session_start"], hooks["session_buf"]
-    sb.append_turn(session_id="old", cwd="/work/my-app", turn_text="USER:\nask\n\nASSISTANT:\nClosing summary")
-    sb.mark_finalized("old", "pushed")
-    monkeypatch.setattr(ss.hookcfg, "spawn_finalize", lambda *a, **k: True)
-    calls = []
-    def req(method, path, body=None, timeout=0):
-        calls.append((path, timeout))
-        if path == "/api/memory/routing/global":
-            return {"projects": [{"name": "my-app"}]}
-        return [{"title": "Newest", "project": "my-app"}, {"title": "Old", "status": "obsolete"},
-                {"title": "Wrong project", "project": "other"}]
-    monkeypatch.setattr(ss.hookcfg, "req", req)
-    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({
-        "hook_event_name": "SessionStart", "session_id": "new", "cwd": "/work/my-app"})))
-    ss.main()
-    context = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
-    prefix = ss.routing_block(["my-app"], "my-app")
-    assert context.startswith(prefix + "\n<hinddian_recent>")
-    assert "Newest" in context and "Closing summary" in context
-    assert "Wrong project" not in context and "- Old" not in context
-    assert "project=my-app" in calls[1][0]
-    assert calls[0][1] == 5 and 0 < calls[1][1] <= 2
-    assert sb.side_file("new", "project").read_text() == "my-app"
-
-
-def test_session_recent_cap_and_latest_project_closing(hooks, monkeypatch):
-    ss, sb = hooks["session_start"], hooks["session_buf"]
-    for sid, project, text, updated in [
-        ("old", "P", "old summary", 1), ("latest", "P", "Latest <private>secret</private> " + "x" * 3000, 2),
-        ("other", "Q", "other summary", 3), ("current", "P", "current summary", 4),
-    ]:
-        buf = sb.append_turn(session_id=sid, project_hint=project, turn_text="ASSISTANT:\n" + text)
-        buf["updated_at"] = updated
-        sb.save(buf)
-    sb.side_file("bad", "json").write_text("{")
-    sb.side_file("huge", "json").write_text("x" * 512001)
-    assert ss.last_closing_summary("current", "P", ["P", "Q"]).startswith("Latest [private]")
-    monkeypatch.setattr(ss, "RECENT_ITEMS", 20)
-    monkeypatch.setattr(ss.hookcfg, "req", lambda *a, **k: [{"title": "T" * 300}] * 20)
-    text = ss.recent_context("current", "P", ["P", "Q"], time.monotonic() + 5)
-    assert len(text) <= ss.RECENT_CHARS and text.endswith("</hinddian_recent>")
-    assert "secret" not in text and "Latest [private]" in text
-
-
-def test_session_recent_missing_sources_and_deadline(hooks, monkeypatch, capsys):
-    import io
-
-    ss = hooks["session_start"]
-    monkeypatch.setattr(ss.hookcfg, "spawn_finalize", lambda *a, **k: True)
-    def offline(*a, **k):
-        raise TimeoutError
-    monkeypatch.setattr(ss.hookcfg, "req", offline)
-    monkeypatch.setattr("sys.stdin", io.StringIO('{"session_id":"new","cwd":"/work/P"}'))
-    ss.main()
-    assert capsys.readouterr().out == ss.routing_block([], None) + "\n"
-    assert ss.recent_context("new", None, [], time.monotonic() + 5) == ""
-    assert ss.recent_context("new", "P", ["P"], time.monotonic() - 1) == ""
-    assert ss.recent_context("new", "P", ["P"], time.monotonic() + 5) == ""
-
-
-def test_session_closing_without_assistant_is_omitted(hooks):
-    ss, sb = hooks["session_start"], hooks["session_buf"]
-    sb.append_turn(session_id="old", project_hint="P", turn_text="USER:\nonly user text")
-    assert ss.last_closing_summary("new", "P", ["P"]) == ""
-
-
-def test_injected_recent_context_is_not_rebuffered(hooks):
-    import extract
-
-    text = "USER:\nask\n<hinddian_recent>\nold memory\n</hinddian_recent>\nASSISTANT:\nanswer"
-    out = extract.extract_turn_text(text)
-    assert "old memory" not in out and "answer" in out and "ask" in out
+    try:
+        monkeypatch.setattr(batch, "chat", chat)
+        batch.cmd_run()
+        note = vault / "项目/my-app/经验/部署前先备份.md"
+        meta, _, body = nf.parse_frontmatter(note.read_text())
+        assert meta["sources"] == [f"{sid}@{commit}"] and "放弃覆盖" in body
+        assert not draft.exists() and (tmp_path / "processed/my-app" / draft.name).read_bytes() == original
+        events = [json.loads(line) for line in batch.LOG.read_text().splitlines()]
+        assert len([ev for ev in events if ev["event"] == "model_call"]) == 1
+        assert "部署前先备份.md" in next(ev["stat"] for ev in events if ev["event"] == "diff")
+    finally:
+        sys.modules.pop("hinddian_batch", None)

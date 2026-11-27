@@ -1,50 +1,11 @@
-# 一轮会话如何进笔记
+# 会话到笔记
 
-## 自动路径（host hooks）
+1. **采集**。`Stop`（Magpie 为 `turn-end`）从最终可见回复摘取「原行为」「改进」「取舍」「验证」。CommonMark 的独行标题或强调标签在可见文字含「附录」时结束当前段。链接取显示文字，HTML 注释忽略，行内代码取字面内容。同行正文和普通引用句逐字保留。缺段默认记一条跳过日志。设置 `no_closing: "summary"` 时取前 `summary_chars` 字，标记 `kind: summary`。
+2. **草稿**。同一会话、同一来源的轮次可追加到同一份 Markdown。记录原始 `session_id`、主机、工作目录 basename、仓库、分支、短 HEAD、带时区的时间和项目。脏工作区的短 HEAD 附 `-dirty`，缺失的字段为空。项目依次看显式项目、repo/cwd 能匹配的已有项目、repo 名和 `通用-未定`。重复轮次在待处理目录和归档中均可识别。
+3. **本地诊断**。采集直接写入草稿，正文保留原文。脚本静默退出，写锁竞争、跳过或异常只记录元数据。`capture.log` 上限为 128 KiB。
+4. **整理**。batch 以 Git 提交为基线，将草稿和已有笔记摘要交给模型。笔记 `sources` 使用 `session_id@commit`。缺少来源的草稿暂留原地。写入限于项目、技巧及 INDEX，既有笔记和枢纽页的人工内容保留。成功后草稿移入 `processed`。
+5. **阅读**。在 Obsidian 查看和修改笔记，或通过仪表盘查看草稿与处理状态。
 
-1. **开会话（session-start）**
-   - Finalize 上一会话 / 空闲缓冲：Jev `keep` → 一次 `push_draft`（或丢弃）
-   - 注入固定的记忆路由块（不含数量/日期，保证提示词缓存前缀稳定）
-   - 路由块之后附最近 6 条项目 active 笔记标题（按 updated 降序），以及本地上一会话最终助手回复作为结语；总计 ≤2400 字符（约 800 tokens）
-   - `HINDDIAN_SESSION_RECENT_ITEMS` 可调标题数（0 关闭标题，最多 20）；无项目 / 无来源则省略。远程读取与路由共用 5s 预算，最近笔记请求最多 2s；本地扫描最多 200 个文件 / 50ms，缓冲仍按原规则清理
-   - 之后每条用户消息由 UserPromptSubmit hook 自动 recall，命中才附 ≤6 条标题索引，并提示 `get_note(id)` 取详情（`HINDDIAN_RECALL_MAX_ITEMS` 可调；`HINDDIAN_AUTO_RECALL=0` 关闭）
+`SessionStart` 可用于检查本地配置。旧 HTTP hook 配置需迁移为 `capture_mode: "local"`。详见[部署说明](../deploy/api-host/DEPLOY.md)。
 
-2. **每回合结束（turn-end）**
-   - 白名单：用户话 + 最终助手回复
-   - 追加到本机 `session_id` 缓冲
-   - **不**远程写草稿
-
-3. **Finalize 触发**
-   - 新开会话、空闲约 30 分钟、或切换项目
-   - Jev：本机 System One（`JEV_BASE_URL`）→ 云端 TypeSafe → 都失败则**暂不记**，缓冲保留、退避重试
-
-4. **草稿**
-   - API 主机/vault 主机：`/var/lib/hinddian/drafts/<项目>/…`
-   - 脱敏；尚不是笔记
-
-5. **蒸馏 / 批处理（vault 主机）**
-   - 新项目：满阈值（默认 20 会话草稿）+ 仪表盘批准
-   - 已批准：增量自动；技巧可自动。增量运行里的决策、经验、技巧均直接写入 Obsidian。显式选择 `review_decisions=True` 的调用仍可入可选审阅队列；默认不排队
-   - 产出原子笔记（add/update/supersede）；新建遇到同 id 自动加后缀，不会覆盖已有笔记
-
-6. **索引**
-   - `hinddian-hindsight-sync`：active → retain；删除/非 active → 删索引
-   - 送进索引的是「标题 + 人写的引用行 + 场景/做法/理由 + 人写的段落」，不含 frontmatter 和自动生成的
-     所属/相关/取代链接；是否需要重新 retain 只看这部分内容，重建链接或改日期不会触发
-     （升级后第一次同步会把全部笔记重新 retain 一遍，每轮最多 `HS_MAX_RETAIN` 条）
-
-## 显式旁路
-
-- `upsert_note` 或 `suggest_correction` → 直接写 Obsidian（含 decision；仪表盘审阅仅可选/旧队列兼容，**不要**用手调 `push_draft` 代替）
-- `upsert_note` 新增时若已有相近笔记（同类型、同项目，标题/做法 bigram 相似度 ≥ `HINDDIAN_DEDUPE`，默认 0.40），
-  返回 `similar_exists` + `candidates`，由 Agent 改用 `update` 合并，确是新主题再带 `force_new: true`
-- Obsidian 仍为 SoT；Hindsight 跟同步
-
-## 常见进不了笔记
-
-| 原因 | 现象 |
-|------|------|
-| Host hooks 未装 / 未 trust | turn-end 未跑 → 无缓冲 |
-| Jev `keep=false` 或 `source=none` | 会话被丢弃 |
-| 新项目未满阈值且未批准 | 草稿堆积在 drafts |
-| 白名单抽空 | 本轮几乎无用户/助手正文 |
+采集使用宿主实际调用的 Python 环境。该环境需安装项目依赖中的 `markdown-it-py`。用同一个解释器运行 `setup.py --check` 可检查依赖。缺包时采集静默跳过，并在 `capture.log` 记录 `missing_markdown_parser`。

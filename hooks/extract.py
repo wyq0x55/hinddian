@@ -1,293 +1,266 @@
-"""Whitelist extraction for host turn/session text.
-
-Keep only user messages + final assistant replies.
-Strip: system/persona, routing tables, MCP/tool schemas, skills catalog,
-recalled memory dumps, raw tool logs, hook noise.
-"""
+"""Read the host's final visible reply and extract the four closing sections."""
 from __future__ import annotations
 
 import json
 import os
 import re
-from typing import Any
+from functools import lru_cache
+from pathlib import Path
 
-# Role markers common across agents / host dumps
-_ROLE_RE = re.compile(
-    r"(?im)^(?:#{1,3}\s*)?(?:\[)?(system|developer|user|human|assistant|model|tool|function)"
-    r"(?:\s*(?:message|role))?(?:\])?\s*[:：]\s*"
+HEADINGS = ("原行为", "改进", "取舍", "验证")
+_NAMES = "|".join(HEADINGS)
+_HEADING = re.compile(
+    rf"^[ \t\u3000]{{0,3}}"
+    r"(?:#{1,6}[ \t\u3000]*\u3000[ \t\u3000]*)?"
+    rf"(?:\*\*[ \t\u3000]*(?P<bold>{_NAMES})[ \t\u3000]*[:：]?[ \t\u3000]*\*\*|(?P<plain>{_NAMES}))"
+    r"(?:[ \t\u3000]*[:：][ \t\u3000]*|[ \t\u3000]+|(?<=\*\*)|$)(?P<body>.*)$"
 )
-
-_JUNK_BLOCK = re.compile(
-    r"(?is)(?:"
-    r"<system(?:_reminder)?>.*?</system(?:_reminder)?>|"
-    r"<hinddian_(?:memory|recent|recall)>.*?</hinddian_(?:memory|recent|recall)>|"
-    r"```(?:json)?\s*\{[^{}]{0,200}\"?(?:tools?|mcpServers|inputSchema|parameters)\"?.*?\n```|"
-    r"(?:^|\n)(?:MCP|Tools?|Skills?|Routing|Route table|Hinddian-memory|Projects:)\s*:?[^\n]*(?:\n(?:[ \t]+|\-|\*).*)*|"
-    r"(?:^|\n)(?:Gate should_recall|when_to_recall|PROJECT \w).*|"
-    r"(?:^|\n)(?:function_calls|tool_result|toolu_|invoke\s+\w+).*"
-    r")"
-)
-
-_RECALL_DUMP = re.compile(
-    r"(?is)(?:recalled?\s+memor(?:y|ies)|routing_global|routing_project|"
-    r"hinddian-memory MCP|Stable prefix).*?(?=\n(?:user|human|assistant)[:：]|\Z)"
-)
-
-_MAX_ASSIST = int(os.environ.get("HINDDIAN_EXTRACT_ASSIST_CHARS", "4000"))
-_MAX_USER = int(os.environ.get("HINDDIAN_EXTRACT_USER_CHARS", "3000"))
-_MAX_TOTAL = int(os.environ.get("HINDDIAN_EXTRACT_TOTAL_CHARS", "12000"))
+_BREAKS = ("softbreak", "hardbreak")
 
 
-def _clean_piece(text: str, *, role: str) -> str:
-    t = (text or "").strip()
-    if not t:
-        return ""
-    t = _JUNK_BLOCK.sub("\n", t)
-    t = _RECALL_DUMP.sub("\n", t)
-    # drop long json blobs / stack traces
-    t = re.sub(r"(?s)```(?:json|javascript|typescript|python|bash|shell)?\n.{800,}?\n```", "[code omitted]", t)
-    t = re.sub(r"(?m)^(Traceback \(most recent call last\):).*(?=\n\S|\Z)", r"\1 …", t)
-    lim = _MAX_USER if role == "user" else _MAX_ASSIST
-    if len(t) > lim:
-        t = t[: lim - 20] + "\n…[truncated]"
-    return t.strip()
+class MarkdownParserUnavailable(ImportError):
+    pass
 
 
-def _from_messages(messages: list[Any]) -> list[tuple[str, str]]:
-    out: list[tuple[str, str]] = []
-    for m in messages:
-        if not isinstance(m, dict):
+def _located_break(rule, newline_offset):
+    """Keep the source offset of parser-emitted breaks without changing Markdown semantics."""
+    def locate(state, silent):
+        start = state.pos
+        matched = rule(state, silent)
+        if matched and not silent and state.tokens[-1].type in _BREAKS:
+            state.tokens[-1].meta["after_newline"] = start + newline_offset + 1
+        return matched
+
+    return locate
+
+
+@lru_cache(maxsize=1)
+def markdown_parser():
+    try:
+        from markdown_it import MarkdownIt
+        from markdown_it.rules_inline import escape, newline
+    except ImportError as exc:
+        raise MarkdownParserUnavailable("markdown-it-py is unavailable") from exc
+    parser = MarkdownIt("commonmark").disable("inline")
+    parser.inline.ruler.at("newline", _located_break(newline, 0))
+    parser.inline.ruler.at("escape", _located_break(escape, 1))
+    return parser
+
+
+def _visible_text(tokens):
+    parts = []
+    for token in tokens:
+        if token.type in ("text", "text_special", "code_inline"):
+            parts.append(token.content)
+        elif token.type == "image":
+            parts.append(_visible_text(token.children or ()))
+    return "".join(parts)
+
+
+def _leading_emphasis(tokens):
+    for start, token in enumerate(tokens):
+        if token.type not in ("em_open", "strong_open"):
             continue
-        role = str(m.get("role") or m.get("type") or "").lower()
-        if role in ("human",):
-            role = "user"
-        if role in ("model", "ai", "bot"):
-            role = "assistant"
-        if role not in ("user", "assistant"):
-            continue
-        content = m.get("content") or m.get("text") or m.get("message") or ""
-        if isinstance(content, list):
-            parts = []
-            for p in content:
-                if isinstance(p, str):
-                    parts.append(p)
-                elif isinstance(p, dict):
-                    if p.get("type") in ("tool_use", "tool_result", "function_call"):
-                        continue
-                    parts.append(str(p.get("text") or p.get("content") or ""))
-            content = "\n".join(parts)
-        elif not isinstance(content, str):
-            content = str(content)
-        cleaned = _clean_piece(content, role=role)
-        if cleaned:
-            out.append((role, cleaned))
-    return out
-
-
-def _from_plaintext(text: str) -> list[tuple[str, str]]:
-    raw = (text or "").strip()
-    if not raw:
-        return []
-    # Try JSON envelope first
-    if raw.startswith("{") or raw.startswith("["):
-        try:
-            data = json.loads(raw)
-            if isinstance(data, list):
-                return _from_messages(data)
-            if isinstance(data, dict):
-                for key in ("messages", "conversation", "turns", "history"):
-                    if isinstance(data.get(key), list):
-                        return _from_messages(data[key])
-                # single message
-                if data.get("role") or data.get("content"):
-                    return _from_messages([data])
-                # common agent hook fields
-                user = data.get("prompt") or data.get("user_message") or data.get("last_user_message")
-                asst = (
-                    data.get("last_assistant_message")
-                    or data.get("assistant_message")
-                    or data.get("response")
-                    or data.get("output")
-                )
-                pairs = []
-                if user:
-                    pairs.append(("user", _clean_piece(str(user), role="user")))
-                if asst:
-                    pairs.append(("assistant", _clean_piece(str(asst), role="assistant")))
-                pairs = [(r, t) for r, t in pairs if t]
-                if pairs:
-                    return pairs
-        except Exception:
-            pass
-
-    # Role-labeled plaintext
-    parts: list[tuple[str, str]] = []
-    matches = list(_ROLE_RE.finditer(raw))
-    if matches:
-        for i, m in enumerate(matches):
-            role = m.group(1).lower()
-            if role in ("human",):
-                role = "user"
-            if role in ("model",):
-                role = "assistant"
-            if role not in ("user", "assistant"):
-                continue
-            start = m.end()
-            end = matches[i + 1].start() if i + 1 < len(matches) else len(raw)
-            cleaned = _clean_piece(raw[start:end], role=role)
-            if cleaned:
-                parts.append((role, cleaned))
-        if parts:
-            return parts
-
-    # Fallback: treat whole blob as mixed; strip junk then keep as user-ish note
-    cleaned = _clean_piece(raw, role="user")
-    return [("user", cleaned)] if cleaned else []
-
-
-def whitelist_pairs(turn_text: str | None = None, messages: list | None = None) -> list[tuple[str, str]]:
-    if messages:
-        return _from_messages(messages)
-    return _from_plaintext(turn_text or "")
-
-
-def format_whitelist(pairs: list[tuple[str, str]]) -> str:
-    chunks = []
-    total = 0
-    for role, text in pairs:
-        block = f"{role.upper()}:\n{text}"
-        if total + len(block) > _MAX_TOTAL:
-            remain = _MAX_TOTAL - total
-            if remain > 80:
-                chunks.append(block[: remain - 20] + "\n…[truncated]")
+        if _visible_text(tokens[:start]).strip():
             break
-        chunks.append(block)
-        total += len(block) + 2
-    return "\n\n".join(chunks).strip()
+        closing_type = token.type.replace("_open", "_close")
+        for end in range(start + 1, len(tokens)):
+            if tokens[end].type == closing_type and tokens[end].level == token.level:
+                lead = _visible_text(tokens[start + 1:end]).strip().rstrip("：:")
+                return lead, _visible_text(tokens[end + 1:]).strip()
+        break
+    return "", ""
 
 
-def extract_turn_text(raw: str | None = None) -> str:
-    """Public: whitelist-only text for one turn (or stdin blob)."""
-    return format_whitelist(whitelist_pairs(raw or ""))
+def _other_heading(tokens, markup):
+    """Recognize appendix titles and preserve prose after an emphasized ATX lead."""
+    lead, suffix = _leading_emphasis(tokens)
+    if lead == "其他":
+        return True
+    if markup:
+        label = _visible_text(tokens).strip().rstrip("：:")
+        if markup.startswith("#") and lead and suffix.endswith(("。", "！", "？", "!", "?")):
+            return False
+        return label == "其他" or "附录" in label
+    return "附录" in lead and not suffix and not any(token.type in _BREAKS for token in tokens)
 
 
-def structured_body(*, decisions: list[str], lessons: list[str], preferences: list[str], title: str = "") -> str:
-    nl = "\n"
-    lines = []
-    if title:
-        lines.append(f"# {title}")
-        lines.append("")
-    lines.append("## DECISIONS")
-    for d in decisions or []:
-        if d and str(d).strip():
-            lines.append(f"- {str(d).strip()}")
-    lines.append("")
-    lines.append("## LESSONS")
-    for d in lessons or []:
-        if d and str(d).strip():
-            lines.append(f"- {str(d).strip()}")
-    lines.append("")
-    lines.append("## PREFERENCES")
-    for d in preferences or []:
-        if d and str(d).strip():
-            lines.append(f"- {str(d).strip()}")
-    return nl.join(lines).strip() + "\n"
+def _paragraph_lines(inline, lines):
+    """Use exposed breaks to locate source lines within a fully parsed paragraph."""
+    row, end = inline.map
+    while row < end and not lines[row].strip():
+        row += 1
+    offset = group_start = 0
+    children = inline.children
+    for index, token in enumerate(children):
+        if token.type not in _BREAKS or token.level:
+            continue
+        after_offset = token.meta["after_newline"]
+        after_row = row + inline.content.count("\n", offset, after_offset)
+        yield row, after_row, lines[row] if after_row == row + 1 else "", children[group_start:index], ""
+        row, offset, group_start = after_row, after_offset, index + 1
+    after_row = row + inline.content.count("\n", offset) + 1
+    yield row, after_row, lines[row] if after_row == row + 1 else "", children[group_start:], ""
 
 
-def parse_hook_payload(stdin_text: str = "", env: dict | None = None) -> dict[str, Any]:
-    """Best-effort host / agent hook payload → session_id, cwd, turn text, project hint."""
-    env = env or dict(os.environ)
-    raw = (stdin_text or "").strip()
-    data: dict[str, Any] = {}
-    if raw.startswith("{"):
+def _candidate_blocks(parser, text, lines):
+    env = {}
+    blocks = parser.parse(text, env)
+    for index, block in enumerate(blocks):
+        if block.level or block.type not in ("heading_open", "paragraph_open"):
+            continue
+        inline = blocks[index + 1]
+        start, end = inline.map
+        if block.type == "heading_open":
+            if end == start + 1:
+                parser.inline.parse(inline.content, parser, env, inline.children)
+                yield start, block.map[1], inline.content, inline.children, block.markup
+        elif (any(_HEADING.match(line) for line in lines[start:end])
+              or (("*" in inline.content or "_" in inline.content)
+                  and any(hint in inline.content for hint in ("附", "其", "&", "%")))):
+            parser.inline.parse(inline.content, parser, env, inline.children)
+            yield from _paragraph_lines(inline, lines)
+
+
+def closing(text: str) -> str:
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    lines = text.split("\n")
+    sections = {}
+    active = None
+    content_start = 0
+    for start, end, source, inline, markup in _candidate_blocks(markdown_parser(), text, lines):
+        heading = _HEADING.match(source)
+        if not heading and (active is None or not _other_heading(inline, markup)):
+            continue
+        if active:
+            sections[active].extend(lines[content_start:start])
+        if heading:
+            active = heading["bold"] or heading["plain"]
+            if active in sections:
+                sections = {}
+            value = heading["body"].strip()
+            sections[active] = [value] if value else []
+        else:
+            active = None
+        content_start = end
+    if active:
+        sections[active].extend(lines[content_start:])
+    if set(sections) != set(HEADINGS) or any(not any(line.strip() for line in lines) for lines in sections.values()):
+        return ""
+    return "\n\n".join("## " + heading + "\n" + "\n".join(sections[heading]).strip() for heading in HEADINGS)
+
+
+def _text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(part if isinstance(part, str) else part["text"] for part in content
+                         if isinstance(part, str) or (isinstance(part, dict)
+                            and part.get("type") in (None, "text", "output_text")
+                            and isinstance(part.get("text"), str)))
+    return ""
+
+
+def _last_assistant(messages) -> tuple[str, str]:
+    if not isinstance(messages, list):
+        return "", ""
+    for message in reversed(messages):
+        if not isinstance(message, dict) or message.get("isMeta"):
+            continue
+        role = message.get("role") or message.get("type")
+        if role in ("user", "human"):
+            break
+        if role not in ("assistant", "model", "ai", "bot"):
+            continue
+        if message.get("phase") not in ("analysis", "commentary") and message.get("stop_reason") != "tool_use":
+            content = message.get("content") or message.get("text")
+            if text := _text(content):
+                message_id = next((message[key] for key in ("id", "message_id", "uuid")
+                                   if isinstance(message.get(key), str) and message[key].strip()), "")
+                return text, message_id
+    return "", ""
+
+
+def _transcript(path: Path) -> tuple[str, str]:
+    if not path.is_file():
+        raise ValueError("transcript must be a regular file")
+    with path.open("rb") as stream:
+        size = stream.seek(0, os.SEEK_END)
+        start = max(0, size - 2_000_000)
+        stream.seek(start)
+        if start:
+            stream.readline()
+        raw = stream.read(2_000_000).decode("utf-8")
+    messages = []
+    for line in raw.splitlines():
         try:
-            parsed = json.loads(raw)
-            if isinstance(parsed, dict):
-                data = parsed
-        except Exception:
-            data = {}
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict) or event.get("isMeta"):
+            continue
+        if event.get("type") in ("user", "assistant"):
+            message = event.get("message")
+        elif event.get("type") == "response_item":
+            message = event.get("payload")
+            if not isinstance(message, dict) or message.get("type") != "message":
+                continue
+        else:
+            continue
+        if isinstance(message, dict):
+            if event.get("uuid") and not message.get("uuid"):
+                message = {**message, "uuid": event["uuid"]}
+            messages.append(message)
+    return _last_assistant(messages)
 
-    session_id = (
-        data.get("session_id")
-        or data.get("sessionId")
-        or data.get("conversation_id")
-        or data.get("conversationId")
-        or data.get("thread_id")
-        or env.get("MAGPIE_SESSION_ID")
-        or env.get("CLAUDE_SESSION_ID")
-        or env.get("CODEX_SESSION_ID")
-        or env.get("CURSOR_SESSION_ID")
-        or ""
-    )
-    cwd = (
-        data.get("cwd")
-        or data.get("cwd_path")
-        or env.get("MAGPIE_CWD")
-        or env.get("PWD")
-        or ""
-    )
-    turn = (
-        env.get("MAGPIE_TURN_TEXT")
-        or data.get("turn_text")
-        or data.get("transcript")
-        or ""
-    )
-    # Claude Code / Codex Stop & SessionStart common fields
-    if not turn and data:
-        user = (
-            data.get("prompt")
-            or data.get("user_prompt")
-            or data.get("last_user_message")
-            or data.get("user_message")
-        )
-        asst = (
-            data.get("last_assistant_message")
-            or data.get("assistant_message")
-            or data.get("response")
-            or data.get("completion")
-            or data.get("output")
-        )
-        if user or asst:
-            pairs = []
-            if user:
-                pairs.append(("user", _clean_piece(str(user), role="user")))
-            if asst:
-                pairs.append(("assistant", _clean_piece(str(asst), role="assistant")))
-            turn = format_whitelist([(r, x) for r, x in pairs if x])
-        # Optional transcript file (Claude Stop often provides transcript_path)
-        tpath = data.get("transcript_path") or data.get("transcriptPath")
-        if not turn and tpath:
+
+def final_reply(payload: dict) -> str:
+    return final_message(payload)[0]
+
+
+def final_message(payload: dict) -> tuple[str, str]:
+    path = payload.get("transcript_path") or payload.get("transcriptPath")
+    for key in ("last_assistant_message", "assistant_message", "response", "completion", "output"):
+        message = payload.get(key)
+        if isinstance(message, dict):
+            text, message_id = _last_assistant([{**message, "role": "assistant"}])
+        else:
+            text, message_id = _text(message), ""
+        if not text:
+            continue
+        if message_id or any(isinstance(payload.get(field), str) and payload[field].strip()
+                             for field in ("turn_id", "turnId", "message_id")):
+            return text, message_id
+        lines = text.strip().splitlines()
+        message_text, message_id = _last_assistant(payload.get("messages"))
+        if message_id and message_text.strip().splitlines() == lines:
+            return text, message_id
+        if path:
             try:
-                from pathlib import Path as _P
-                tp = _P(str(tpath))
-                if tp.is_file() and tp.stat().st_size < 2_000_000:
-                    turn = extract_turn_text(tp.read_text(encoding="utf-8", errors="replace")[-80000:])
-            except Exception:
+                transcript_text, message_id = _transcript(Path(path))
+            except (OSError, TypeError, ValueError):
                 pass
-    if not turn and data:
-        # Build from last user+assistant in payload
-        pairs = whitelist_pairs(messages=data.get("messages") if isinstance(data.get("messages"), list) else None)
-        if not pairs:
-            pairs = whitelist_pairs(json.dumps(data, ensure_ascii=False)[:20000])
-        turn = format_whitelist(pairs)
-    elif not turn and raw and not data:
-        turn = extract_turn_text(raw)
-    else:
-        turn = extract_turn_text(turn) if turn else extract_turn_text(raw)
-
-    # Claude / Codex cwd aliases
-    if not cwd:
-        cwd = str(data.get("working_directory") or data.get("workdir") or "").strip()
-
-    return {
-        "session_id": str(session_id or "").strip() or None,
-        "cwd": str(cwd or "").strip(),
-        "turn_text": turn,
-        "raw_data": data,
-        "first_message": (
-            env.get("MAGPIE_FIRST_MESSAGE")
-            or env.get("MAGPIE_PROMPT")
-            or data.get("prompt")
-            or ""
-        ),
-    }
+            else:
+                if transcript_text.strip().splitlines() == lines:
+                    return text, message_id
+        return text, ""
+    if path:
+        return _transcript(Path(path))
+    result = _last_assistant(payload.get("messages"))
+    if result[0]:
+        return result
+    turn = os.environ.get("MAGPIE_TURN_TEXT") or payload.get("turn_text") or payload.get("transcript")
+    if isinstance(turn, list):
+        return _last_assistant(turn)
+    if isinstance(turn, str):
+        if turn.lstrip().startswith(("{", "[")):
+            try:
+                envelope = json.loads(turn)
+            except ValueError:
+                return "", ""
+            return final_message(envelope) if isinstance(envelope, dict) else _last_assistant(envelope)
+        role = re.compile(r"(?im)^(user|human|assistant|model|tool|system|developer)\s*[:：][ \t]*")
+        matches = list(role.finditer(turn))
+        if matches and matches[-1][1].lower() in ("assistant", "model"):
+            return turn[matches[-1].end():], ""
+    return "", ""

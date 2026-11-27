@@ -1,7 +1,7 @@
 {
   "name": "hinddian-magpie-adapter",
   "version": "0.3.0",
-  "description": "Optional Magpie host adapter for hinddian (Library Hooks + MCP). Not part of core product.",
+  "description": "Optional Magpie Library Hooks adapter for hinddian session capture.",
   "type": "module",
   "main": "./plugin/index.mjs",
   "files": [
@@ -15,8 +15,7 @@
     "magpie",
     "magpie-plugin",
     "hinddian",
-    "memory",
-    "mcp"
+    "notes"
   ],
   "license": "MIT",
   "repository": {
@@ -31,8 +30,8 @@
     "page": {
       "title": "Hindian",
       "titles": {
-        "zh": "Hindian \u8bb0\u5fc6",
-        "zh-TW": "Hindian \u8a18\u61b6"
+        "zh": "Hindian 笔记",
+        "zh-TW": "Hindian 筆記"
       },
       "file": "plugin/page/index.html",
       "icon": "plugin/page/icon.svg"

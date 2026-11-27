@@ -1,50 +1,52 @@
-"""Atomic-note file format shared by the MCP vault ops (notes.py) and the vault host batch engine.
+"""Atomic-note format shared by the collector, batch engine and dashboard.
 
 One implementation of: frontmatter parse/dump (unknown keys and unchanged values round-trip
 verbatim), body sections (sections we don't manage survive a re-render), link resolution,
-path safety, the vault write lock and an mtime-keyed parse cache.
+path safety, the vault write lock and a content-keyed parse cache.
 
-Stdlib only — the batch engine runs under the system python on the vault host.
+Stdlib only, shared by hooks and the local batch engine.
 """
 from __future__ import annotations
 
 import contextlib
 import copy
+import errno
 import hashlib
 import json
 import os
 import pathlib
 import re
 import shutil
+import stat
+import tempfile
 import threading
 import time
 from typing import Any, Iterator
 
-try:
+if __package__:
+    from . import paths
+else:
+    import paths
+
+if os.name == "nt":
+    import msvcrt
+else:
     import fcntl
-except ImportError:  # pragma: no cover — Windows dev boxes; vault writes only run on the vault host
-    fcntl = None  # type: ignore[assignment]
 
 SKIP_DIRS = (".obsidian", "_归档", ".git", ".trash", "_模板")
 FOLDER = {"decision": "决策", "lesson": "经验"}
 NOTE_TYPES = ("tip", "decision", "lesson")
 
-SECRET_RE = [
-    re.compile(r"(?i)(password|passwd|secret|token|api[_-]?key|bearer)\s*[:=]\s*['\"]?[A-Za-z0-9_\-\.]{12,}"),
-    re.compile(r"sk-[A-Za-z0-9]{16,}"),
-    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
-    re.compile(r"\b(ghp|gho|github_pat)_[A-Za-z0-9_]{20,}"),
-]
 WIKI = re.compile(r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]")
 
 # Frontmatter keys render() owns; everything else in a note's frontmatter is carried through.
 MANAGED_KEYS = (
-    "id", "type", "project", "tags", "status", "supersedes", "related", "sources",
-    "updated", "superseded_by", "legacy_code", "origin",
+    "id", "type", "project", "tags", "status", "related", "sources", "updated", "legacy_code", "origin",
 )
 FIELD_SECTIONS = {"场景": "scene", "做法": "practice", "理由": "reason", "影响 / 推广": "extra"}
-LINK_SECTIONS = ("取代", "相关")
-GENERATED_PREAMBLE = ("> 所属：", "> ⚠️ 已被")
+GENERATED_PREAMBLE = "> 所属："
+_H2 = re.compile(r"^## ([^\n]+)(?:\n|\Z)", re.M)
+_CODE_FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$")
 
 
 class VaultBusy(RuntimeError):
@@ -55,74 +57,7 @@ class UnsafePath(ValueError):
     pass
 
 
-class SupersessionError(ValueError):
-    def __init__(self, error: str, **details: Any):
-        super().__init__(error)
-        self.result = {"ok": False, "error": error, **details}
-
-
-def validate_supersedes(successor_id: str, predecessors: Any, notes: dict[str, dict]) -> list[str]:
-    if not isinstance(predecessors, list) or any(
-        not isinstance(note_id, str) or not note_id.strip() or note_id != note_id.strip()
-        for note_id in predecessors
-    ):
-        raise SupersessionError("invalid_supersedes", hint="Pass an array of non-empty note ids")
-    predecessors = list(dict.fromkeys(predecessors))
-    missing = [note_id for note_id in predecessors if note_id not in notes]
-    if missing:
-        raise SupersessionError("supersedes_not_found", ids=missing)
-    if successor_id in predecessors:
-        raise SupersessionError("self_supersession", id=successor_id)
-    if predecessors and successor_id in notes and notes[successor_id]["status"] != "active":
-        raise SupersessionError("successor_not_active", id=successor_id)
-    children = {note_id: set(note.get("supersedes") or []) for note_id, note in notes.items()}
-    for note_id, note in notes.items():
-        parent = note.get("superseded_by")
-        if parent in children:
-            children[parent].add(note_id)
-    pending = list(predecessors)
-    visited = set()
-    while pending:
-        note_id = pending.pop()
-        if note_id == successor_id:
-            raise SupersessionError("supersession_cycle", id=successor_id)
-        if note_id not in visited:
-            visited.add(note_id)
-            pending.extend(children.get(note_id, set()))
-    return predecessors
-
-
-def apply_supersedes(successor: dict, predecessors: list[str], notes: dict[str, dict], *, updated: str) -> list[dict]:
-    changed = {successor["id"]: successor}
-    successor["supersedes"] = list(dict.fromkeys([*successor.get("supersedes", []), *predecessors]))
-    for note_id in predecessors:
-        predecessor = notes[note_id]
-        previous = notes.get(predecessor.get("superseded_by"))
-        if previous and previous["id"] != successor["id"]:
-            previous["supersedes"] = [old_id for old_id in previous.get("supersedes", []) if old_id != note_id]
-            previous["updated"] = updated
-            changed[previous["id"]] = previous
-        predecessor["status"] = "superseded"
-        predecessor["superseded_by"] = successor["id"]
-        predecessor["updated"] = updated
-        changed[note_id] = predecessor
-    successor["updated"] = updated
-    return list(changed.values())
-
-
 # ------------------------------------------------------------------ text helpers
-# <private>…</private> in a conversation never leaves the user's machine (the hooks strip it);
-# stripped again here in case an older hook copy sent it. Unclosed → to the end.
-PRIVATE_RE = re.compile(r"<private>.*?(?:</private>|\Z)", re.S | re.I)
-
-
-def redact(t: str) -> str:
-    t = PRIVATE_RE.sub("[private]", t)
-    for r in SECRET_RE:
-        t = r.sub("[REDACTED]", t)
-    return t
-
-
 _BAD_SEG = re.compile(r'[\\/:*?"<>|#\[\]^\x00-\x1f\x7f]')
 
 
@@ -194,7 +129,7 @@ def _split_inline(s: str) -> list[str]:
                 esc = True
             elif ch == quote:
                 quote = None
-        elif ch in "\"'":
+        elif ch in "\"'" and not cur.strip():
             quote = ch
             cur += ch
         elif ch == "[":
@@ -212,7 +147,26 @@ def _split_inline(s: str) -> list[str]:
     return [_unquote(x) for x in items if x.strip()]
 
 
-_KEY = re.compile(r"^([A-Za-z0-9_][A-Za-z0-9_\-]*):(?:\s+(.*))?$")
+_KEY = re.compile(r"""^("(?:\\.|[^"\\])*"|'(?:''|[^'])*'|[^\s#?:][^:]*?):(?:[ \t]+(.*))?$""")
+_BLOCK_ITEM = re.compile(r"^-(?:[ \t]|$)")
+
+
+def yaml_comment(line: str) -> tuple[str, str]:
+    quote = ""
+    escaped = False
+    for index, char in enumerate(line):
+        if escaped:
+            escaped = False
+        elif quote == '"' and char == "\\":
+            escaped = True
+        elif char == quote:
+            quote = ""
+        elif not quote and char in "\"'" and (not index or line[index - 1] in " \t[:,"):
+            quote = char
+        elif not quote and char == "#" and (not index or line[index - 1].isspace()):
+            value = line[:index].rstrip()
+            return value, line[len(value):]
+    return line, ""
 
 
 def parse_frontmatter(text: str) -> tuple[dict[str, Any], dict[str, str], str] | None:
@@ -236,17 +190,19 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], dict[str, str], str] |
         if not m:
             i += 1
             continue
-        key, val = m.group(1), (m.group(2) or "").strip()
+        key = _unquote(m.group(1).rstrip())
+        val = yaml_comment(m.group(2) or "")[0].strip()
         j = i + 1
-        while j < len(lines) and (lines[j].startswith((" ", "\t", "-")) or not lines[j].strip()) and not _KEY.match(lines[j]):
+        while j < len(lines) and (lines[j].startswith((" ", "\t", "#"))
+                                 or _BLOCK_ITEM.match(lines[j]) or not lines[j].strip()):
             j += 1
         while j > i + 1 and not lines[j - 1].strip():
             j -= 1
         block = lines[i:j]
         raw[key] = "\n".join(block)
-        cont = [x for x in block[1:] if x.strip()]
+        cont = [x for x in block[1:] if yaml_comment(x)[0].strip()]
         if not val and cont and all(x.lstrip().startswith("- ") or x.strip() == "-" for x in cont):
-            fm[key] = [_unquote(x.lstrip()[1:]) for x in cont if x.lstrip()[1:].strip()]
+            fm[key] = [_unquote(yaml_comment(x.lstrip()[1:])[0]) for x in cont if x.lstrip()[1:].strip()]
         elif cont:
             fm[key] = None  # opaque; raw[key] carries it
         elif val.startswith("[") and val.endswith("]"):
@@ -257,7 +213,7 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], dict[str, str], str] |
     return fm, raw, body
 
 
-_PLAIN = re.compile(r"^[^\s\-?:,\[\]{}#&*!|>'\"%@`][^:#\n]*$")
+_PLAIN = re.compile(r"^[^\s\-?:,\[\]{}#&*!|>'\"%@`][^:#,\[\]{}\x00-\x1f\x7f]*$")
 _RESERVED = {"true", "false", "null", "yes", "no", "on", "off", "~"}
 
 
@@ -287,20 +243,43 @@ def dump_frontmatter(items: list[tuple[str, Any]], *, orig: dict | None = None, 
 
 
 # ------------------------------------------------------------------ body
-def split_body(body: str) -> tuple[str | None, list[str], list[tuple[str, str]]]:
-    """→ (title, preamble lines after title, [(section heading, content)])."""
-    first = re.search(r"^## ", body, re.M)
-    head = body[: first.start()] if first else body
-    rest = body[first.start() :] if first else ""
+def unfenced_lines(body: str) -> Iterator[tuple[int, str]]:
+    """Yield the source offset and text of each line outside fenced code."""
+    start = 0
+    fence = ""
+    for line in body.splitlines(keepends=True):
+        if mark := _CODE_FENCE.match(line):
+            run, tail = mark.groups()
+            if not fence:
+                fence = run
+            elif run.startswith(fence) and not tail.strip():
+                fence = ""
+        elif not fence:
+            yield start, line
+        start += len(line)
+
+
+def section_parts(body: str) -> list[str]:
+    """Split at level-two headings outside fenced code, retaining the complete input."""
+    offsets = [0, *(start for start, line in unfenced_lines(body) if _H2.match(line))]
+    return [body[left:right] for left, right in zip(offsets, [*offsets[1:], len(body)])]
+
+
+def split_body(body: str) -> tuple[str | None, list[str], list[tuple[str, str, str]]]:
+    """Return the title, preamble and sections with their original Markdown."""
+    head, *parts = section_parts(body)
     title = None
     pre: list[str] = []
-    for line in head.split("\n"):
+    for line in head.splitlines():
         if title is None and line.startswith("# "):
             title = line[2:].strip()
             continue
-        if title is not None:
+        if not line.startswith(GENERATED_PREAMBLE):
             pre.append(line)
-    sections = [(h.strip(), c) for h, c in re.findall(r"^## (.+?)\n(.*?)(?=^## |\Z)", rest, re.M | re.S)]
+    sections = []
+    for markdown in parts:
+        heading = _H2.match(markdown)
+        sections.append((heading[1].strip(), markdown[heading.end():], markdown))
     return title, pre, sections
 
 
@@ -333,7 +312,7 @@ def parse_note(p: pathlib.Path, vault: pathlib.Path, *, text: str | None = None)
         rel = p.relative_to(vault).as_posix()[:-3]
     except ValueError:
         rel = str(p)[:-3]
-    secd = {h: c.strip() for h, c in sections}
+    secd = {h: c.strip() for h, c, _ in sections}
     n = {
         "path": rel,
         "id": fm["id"],
@@ -343,8 +322,6 @@ def parse_note(p: pathlib.Path, vault: pathlib.Path, *, text: str | None = None)
         "status": s("status") or "active",
         "sources": lst(fm.get("sources")),
         "related_raw": lst(fm.get("related")),
-        "supersedes_raw": lst(fm.get("supersedes")),
-        "superseded_by_raw": s("superseded_by"),
         "legacy_code": s("legacy_code"),
         "origin": s("origin"),
         "updated": s("updated"),
@@ -352,32 +329,15 @@ def parse_note(p: pathlib.Path, vault: pathlib.Path, *, text: str | None = None)
         "text": t,
         "_fm": fm,
         "_raw": raw,
-        "_preamble": [x for x in pre if x.strip() and not x.startswith(GENERATED_PREAMBLE)],
-        "_sections": [(h, c.strip()) for h, c in sections if h not in FIELD_SECTIONS and h not in LINK_SECTIONS],
+        "_preamble": "\n".join(pre).strip("\n").split("\n") if any(line.strip() for line in pre) else [],
+        "_sections": [markdown for h, _, markdown in sections if h not in FIELD_SECTIONS and h != "相关"],
+        "_related_body": "".join(markdown for h, _, markdown in sections if h == "相关"),
     }
     for h, k in FIELD_SECTIONS.items():
         n[k] = secd.get(h, "")
         if n[k] == "（待补）":
             n[k] = ""
-    if not n["superseded_by_raw"]:
-        m = re.search(r"^> ⚠️ 已被 (\[\[[^\]]+\]\])", "\n".join(pre), re.M)
-        if m:
-            n["superseded_by_raw"] = m.group(1)
     return n
-
-
-def index_text(n: dict) -> str:
-    """What a search index should see: title, human preamble lines and the content sections.
-    No frontmatter, no generated hub / related / supersedes lines — so relinking or a new
-    `updated:` date doesn't make the note look changed."""
-    parts = [f"# {n['title']}", *(n.get("_preamble") or [])]
-    for h, k in FIELD_SECTIONS.items():
-        if n.get(k):
-            parts += ["", f"## {h}", n[k].strip()]
-    for h, c in n.get("_sections") or []:
-        if c.strip():
-            parts += ["", f"## {h}", c.strip()]
-    return "\n".join(parts).strip() + "\n"
 
 
 def link_target(link: str) -> str:
@@ -390,7 +350,7 @@ def link_of(n: dict) -> str:
 
 
 def resolve_links(notes: dict[str, dict]) -> None:
-    """Fill related / supersedes / superseded_by (note ids) from the raw links in each note.
+    """Fill related note IDs from the raw links in each note.
     Links we can't resolve are kept verbatim so a re-render never silently drops them."""
     bypath = {n["path"]: n["id"] for n in notes.values()}
 
@@ -401,9 +361,6 @@ def resolve_links(notes: dict[str, dict]) -> None:
 
     for n in notes.values():
         n["related"] = list(dict.fromkeys(one(r) for r in n.get("related_raw") or []))
-        n["supersedes"] = list(dict.fromkeys(one(r) for r in n.get("supersedes_raw") or []))
-        sb = n.get("superseded_by_raw") or ""
-        n["superseded_by"] = one(sb) if sb else ""
 
 
 def _links(ids: list[str], notes: dict[str, dict]) -> list[str]:
@@ -423,14 +380,10 @@ def render(n: dict, notes: dict[str, dict], *, today: str) -> str:
         ("project", n.get("project") or "global"),
         ("tags", list(n.get("tags") or [])),
         ("status", n.get("status") or "active"),
-        ("supersedes", _links(n.get("supersedes") or [], notes)),
         ("related", _links(n.get("related") or [], notes)),
         ("sources", list(n.get("sources") or [])),
         ("updated", n.get("updated") or today),
     ]
-    sb = n.get("superseded_by") or ""
-    if n.get("status") == "superseded" and sb:
-        fm_items.append(("superseded_by", link_of(notes[sb]) if sb in notes else sb))
     for k in ("legacy_code", "origin"):
         if n.get(k):
             fm_items.append((k, n[k]))
@@ -446,29 +399,31 @@ def render(n: dict, notes: dict[str, dict], *, today: str) -> str:
     hub = f"[[项目/{n['project']}/README|{n['project']}]]" if typ != "tip" else "[[技巧/技巧|agent使用技巧]]"
     srcs = n.get("sources") or []
     b = [f"# {n['title']}", "", f"> 所属：{hub}" + (f" · 归纳自 {len(srcs)} 个会话" if srcs else "")]
-    if n.get("status") == "superseded" and sb in notes:
-        b.append(f"> ⚠️ 已被 {link_of(notes[sb])} 取代")
     b += list(n.get("_preamble") or [])
     for h, k in FIELD_SECTIONS.items():
         val = (n.get(k) or "").strip()
         if k == "extra" and not val:
             continue
         b += ["", f"## {h}", val or "（待补）"]
-    for h, c in n.get("_sections") or []:
-        b += ["", f"## {h}", c]
-    sup = _links(n.get("supersedes") or [], notes)
-    if sup:
-        b += ["", "## 取代", *[f"- {x}" for x in sup]]
+    text = fm_text + "\n" + "\n".join(b) + "\n"
+    if sections := n.get("_sections"):
+        text += "\n" + "".join(sections)
     rel = _links(n.get("related") or [], notes)
-    if rel:
-        b += ["", "## 相关", *[f"- {x}" for x in rel]]
-    return redact(fm_text + "\n" + "\n".join(b) + "\n")
+    related_body = n.get("_related_body", "")
+    if related_body or rel:
+        separator = "" if text.endswith("\n\n") else "\n" if text.endswith("\n") else "\n\n"
+        text += separator + (related_body or "## 相关\n")
+        existing = {link_target(link[0]) for link in WIKI.finditer(related_body)}
+        additions = [link for link in rel if link_target(link) not in existing]
+        if additions:
+            text += ("" if text.endswith("\n") else "\n") + "".join(f"- {link}\n" for link in additions)
+    return text
 
 
 def new_note(**kw: Any) -> dict:
     n = {
         "type": "lesson", "project": "", "tags": [], "status": "active", "sources": [], "related": [],
-        "supersedes": [], "superseded_by": "", "legacy_code": "", "origin": "", "updated": "",
+        "legacy_code": "", "origin": "", "updated": "",
         "scene": "", "practice": "", "reason": "", "extra": "", "_fm": {}, "_raw": {},
         "_preamble": [], "_sections": [],
     }
@@ -477,12 +432,28 @@ def new_note(**kw: Any) -> dict:
 
 
 # ------------------------------------------------------------------ files
-def write_note_file(vault: pathlib.Path, rel: str, text: str, *, owner: str | None = None) -> pathlib.Path:
+def write_atomic(path: pathlib.Path, text: str | bytes, *, create: bool = False) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(mode="wb", dir=path.parent, delete=False) as fh:
+        temporary = pathlib.Path(fh.name)
+        try:
+            fh.write(text.encode("utf-8") if isinstance(text, str) else text)
+            fh.close()
+            if create:
+                os.link(temporary, path)
+            else:
+                os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def write_note_file(vault: pathlib.Path, rel: str, text: str, *, owner: str | None = None,
+                    create: bool = False) -> pathlib.Path:
     p = within(vault, rel)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(p.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, p)
+    previous_mode = stat.S_IMODE(p.stat().st_mode) if p.is_file() and not create else None
+    write_atomic(p, text, create=create)
+    if previous_mode is not None:
+        os.chmod(p, previous_mode)
     if owner:
         with contextlib.suppress(Exception):
             shutil.chown(p, owner, owner)
@@ -514,10 +485,10 @@ class NoteCache:
         seen = set()
         with self._lock:
             for p in vault.rglob("*.md"):
-                if any(x in p.parts for x in SKIP_DIRS):
+                if p.is_symlink() or any(x in p.relative_to(vault).parts for x in SKIP_DIRS):
                     continue
                 try:
-                    text = p.read_text(encoding="utf-8", errors="ignore")
+                    text = p.read_text(encoding="utf-8", errors="replace")
                 except OSError:
                     continue
                 key = hashlib.sha256(text.encode("utf-8")).digest()
@@ -544,50 +515,77 @@ _proc_lock = threading.RLock()
 def default_lock_path() -> pathlib.Path:
     env = os.environ.get("HINDDIAN_VAULT_LOCK")
     if env:
-        return pathlib.Path(env)
-    return pathlib.Path(os.environ.get("HB_BASE") or "/var/lib/hinddian") / "vault.lock"
+        return pathlib.Path(env).expanduser()
+    return paths.state_dir() / "vault.lock"
 
 
 @contextlib.contextmanager
-def vault_lock(path: pathlib.Path | None = None, timeout: float = 60.0) -> Iterator[None]:
-    """Exclusive, re-entrant (per thread) lock around every read-modify-write of the vault.
-    Shared by MCP upserts and the batch engine so neither overwrites the other."""
-    depth = getattr(_tls, "depth", 0)
-    if depth:
-        _tls.depth = depth + 1
-        try:
-            yield
-        finally:
-            _tls.depth -= 1
-        return
+def private_append(path: pathlib.Path, mode: str):
+    """Open an append file without following links or waiting on special files."""
+    with contextlib.suppress(FileNotFoundError):
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise UnsafePath(f"unsafe append file: {path}")
+    flags = (os.O_RDWR if "+" in mode else os.O_WRONLY) | os.O_APPEND | os.O_CREAT
+    flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+    with os.fdopen(os.open(path, flags, 0o600), mode) as stream:
+        info = os.fstat(stream.fileno())
+        named = path.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or not stat.S_ISREG(named.st_mode) or not os.path.samestat(info, named)):
+            raise UnsafePath(f"unsafe append file: {path}")
+        yield stream, info
+
+
+@contextlib.contextmanager
+def vault_lock(path: pathlib.Path | None = None, timeout: float = 60.0, *, private: bool = False) -> Iterator[None]:
+    """Exclusive, re-entrant (per thread) lock around a vault read-modify-write."""
     path = path or default_lock_path()
+    path = path.absolute() if private else path.resolve()
+    held = getattr(_tls, "held", set())
+    if path in held:
+        yield
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     deadline = time.monotonic() + timeout
     if not _proc_lock.acquire(timeout=timeout):
         raise VaultBusy("vault busy (in-process)")
     try:
-        with open(path, "a") as fh:
-            if fcntl is not None:
-                while True:
-                    try:
+        with contextlib.ExitStack() as stack:
+            if private:
+                fh, _ = stack.enter_context(private_append(path, "a+b"))
+            else:
+                fh = stack.enter_context(path.open("a+b"))
+            fh.seek(0)
+            while True:
+                try:
+                    if os.name == "nt":
+                        msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                    else:
                         fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                        break
-                    except BlockingIOError:
-                        if time.monotonic() > deadline:
-                            raise VaultBusy(f"vault busy: {path}") from None
-                        time.sleep(0.1)
-            _tls.depth = 1
+                    break
+                except OSError as exc:
+                    if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                        raise
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise VaultBusy(f"vault busy: {path}") from None
+                    time.sleep(min(0.1, remaining))
+            _tls.held = held
+            held.add(path)
             try:
                 yield
             finally:
-                _tls.depth = 0
-                if fcntl is not None:
+                held.remove(path)
+                if os.name == "nt":
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
                     fcntl.flock(fh, fcntl.LOCK_UN)
     finally:
         _proc_lock.release()
 
 
-# ------------------------------------------------------------------ search
+# ------------------------------------------------------------------ similarity
 def grams(t: str) -> set[str]:
     t = re.sub(r"\s+", "", (t or "").lower())
     return {t[i : i + 2] for i in range(len(t) - 1)} or ({t} if t else set())
@@ -599,16 +597,6 @@ def jaccard(a: set, b: set) -> float:
 
 def similarity(title: str, practice: str, n: dict) -> float:
     """How likely a new (title, practice) is the same topic as note n: title Jaccard + title/practice
-    Jaccard, 0..2. Shared by the batch engine's dedupe and the agent upsert check."""
+    Jaccard, 0..2."""
     return jaccard(grams(title), grams(n.get("title") or "")) + jaccard(
         grams((title or "") + (practice or "")), grams((n.get("title") or "") + (n.get("practice") or "")))
-
-
-def score(query: str, n: dict) -> float:
-    """Bigram overlap — works for Chinese (no spaces) as well as English."""
-    q = grams(query)
-    if not q:
-        return 0.0
-    title = grams(n.get("title") or "")
-    body = grams((n.get("scene") or "") + (n.get("practice") or "") + (n.get("reason") or ""))
-    return (2 * len(q & title) + len(q & body)) / len(q)
