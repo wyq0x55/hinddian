@@ -16,49 +16,16 @@ _HEADING = re.compile(
 _OTHER_HEADING = re.compile(
     r"^[ \t\u3000]{0,3}(?:#{1,6}[ \t\u3000]+|\*\*(?P<bold>[^*\n]+)\*\*(?:[ \t\u3000:：]|$))"
 )
+_BOLD_LABEL = re.compile(r"^[ \t\u3000]{0,3}(?P<mark>\*\*|__)(?P<label>.+?)(?P=mark)")
 _EVIDENCE_LABEL = re.compile(r"[ \t\u3000【\[（(「『]*(?:实测|推断|猜测)")
-_APPENDIX_SUFFIX = re.compile(
-    r"(?P<topic>[\w \t\u3000-]*?)附录"
-    r"(?:[ \t\u3000]*(?:[A-Za-zＡ-Ｚａ-ｚ]|\d+))?"
-    r"(?:[ \t\u3000:：—–(（【\[\-]|[】\]）)」』]*$)"
-)
-_REFERENCE_SPACE = r"[ \t\u3000]*"
-_REFERENCE_POSSESSIVE = rf"(?:{_REFERENCE_SPACE}的)?{_REFERENCE_SPACE}"
-_PRIOR_REFERENCE = r"(?:上述|前述)"
-_DOCUMENT_NOUN = r"(?:报告|文档|文件|记录|说明|文)"
-_DOCUMENT_LOCATION = rf"(?:{_REFERENCE_SPACE}[中内里])?"
-_DOCUMENT_REFERENCE = (
-    rf"(?:{_PRIOR_REFERENCE}|[本该此这那][次份篇本]?){_REFERENCE_POSSESSIVE}"
-    rf"{_DOCUMENT_NOUN}{_DOCUMENT_LOCATION}"
-)
-_SOURCE_VERB = r"(?:[来取源]自(?:于)?|来源于)"
-_APPENDIX_SOURCE = re.compile(_SOURCE_VERB)
-_NAMED_DOCUMENT_TAIL = re.compile(rf"{_DOCUMENT_NOUN}{_DOCUMENT_LOCATION}{_REFERENCE_SPACE}的$")
-_APPENDIX_REFERENCE = re.compile(
-    r"(?:见于?|参阅|参照|参考|查阅|查看|请看|在|从|(?:收录|记录|载|列|附)于"
-    rf"|{_SOURCE_VERB})"
-    rf"(?:{_REFERENCE_SPACE}"
-    rf"(?:[上下][方文面]|{_DOCUMENT_REFERENCE}|{_PRIOR_REFERENCE}){_REFERENCE_POSSESSIVE})?$"
-)
 _FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$")
 
 
 def _other_heading(line: str) -> bool:
+    if (bold := _BOLD_LABEL.match(line)) and "附录" in bold["label"]:
+        return not line[bold.end():].strip()
     heading = _OTHER_HEADING.match(line)
-    if not heading:
-        return False
-    label = heading["bold"] or ""
-    evidence = _EVIDENCE_LABEL.match(label)
-    if evidence is None:
-        return True
-    appendix = _APPENDIX_SUFFIX.match(label, evidence.end())
-    if appendix is None:
-        return False
-    topic = appendix["topic"].rstrip()
-    if _APPENDIX_REFERENCE.search(topic):
-        return False
-    document = _NAMED_DOCUMENT_TAIL.search(topic)
-    return document is None or _APPENDIX_SOURCE.search(topic, 0, document.start()) is None
+    return heading is not None and not _EVIDENCE_LABEL.match(heading["bold"] or "")
 
 
 def closing(text: str) -> str:

@@ -434,7 +434,8 @@ def test_rebuild_hubs_prune_checks_all_blocks_in_section(batch, first_matches):
     hub = batch.VAULT / "项目/P/README.md"
     legacy = "[[项目/P/经验/已移除|已移除]]"
     pending = legacy if first_matches else "[[项目/P/经验/待补|待补]]"
-    original = (f"# P\n\n## 经验\n<!-- hinddian:links -->\n手写待补入口\n- {pending}\n"
+    fenced = "```md\n<!-- /hinddian:links -->\n<!-- hinddian:links -->\n```\n"
+    original = (f"# P\n\n## 经验\n<!-- hinddian:links -->\n手写待补入口\n- {pending}\n{fenced}"
                 f"<!-- /hinddian:links -->\n\n<!-- hinddian:links -->\n旧版生成入口\n- {legacy}\n"
                 "<!-- /hinddian:links -->\n")
     hub.write_text(original)
@@ -453,6 +454,41 @@ def test_rebuild_hubs_prune_checks_all_blocks_in_section(batch, first_matches):
         text = hub.read_text()
         assert f"手写待补入口\n- {pending}\n" in text
         assert "旧版生成入口\n" in text and f"- {legacy}\n" not in text
+        assert fenced in text
+
+
+@pytest.mark.parametrize(("before", "after", "error"), [
+    pytest.param("<!-- hinddian:links -->\n旧版链接\n- {legacy}\n<!-- hinddian:links -->\n"
+                 "<!-- /hinddian:links -->\n<!-- /hinddian:links -->\n", "",
+                 "nested", id="nested"),
+    pytest.param("<!-- /hinddian:links -->\n", "", "unmatched closing", id="orphan-close"),
+    pytest.param("", "<!-- hinddian:links -->", "unclosed", id="unclosed-at-eof"),
+])
+def test_rebuild_hubs_prune_rejects_malformed_markers_without_writes(batch, tmp_path, before, after, error):
+    make_note(batch, "在用", "current")
+    hub = batch.VAULT / "项目/P/README.md"
+    legacy = "[[项目/P/经验/已移除|已移除]]"
+    hub.write_text(f"# P\n\n## 经验\n{before.format(legacy=legacy)}\n"
+                   f"<!-- hinddian:links -->\n手写待补入口\n- {legacy}\n<!-- /hinddian:links -->\n{after}")
+    git(batch.VAULT, "add", "-A")
+    git(batch.VAULT, "commit", "-qm", "hub fixture")
+    (batch.VAULT / "手写变更.md").write_text("保留手写文字\n")
+    batch.LOG.parent.mkdir(parents=True, exist_ok=True)
+    batch.LOG.write_bytes(b'{"event":"existing"}\n')
+    head = git(batch.VAULT, "rev-parse", "HEAD")
+
+    def snapshot():
+        return {path: (path.stat().st_mtime_ns, path.read_bytes() if path.is_file() else None)
+                for path in tmp_path.rglob("*")}
+
+    original = snapshot()
+    result = subprocess.run([sys.executable, str(ROOT / "classify/hinddian_batch.py"), "rebuild-hubs",
+                             "--prune-legacy-link", "项目/P/README.md", "经验", legacy],
+                            capture_output=True, text=True, timeout=4)
+
+    assert result.returncode != 0 and error in result.stderr
+    assert snapshot() == original
+    assert git(batch.VAULT, "rev-parse", "HEAD") == head
 
 
 @pytest.mark.parametrize("dirty", [False, True], ids=["clean", "dirty"])
@@ -683,6 +719,52 @@ def test_batch_warns_on_recursive_yaml_and_keeps_notes_and_draft(batch, monkeypa
                for event in map(json.loads, batch.LOG.read_text().splitlines()))
     assert note.read_bytes() == original and other_note.read_bytes() == other_bytes
     assert draft.read_bytes() == draft_bytes and not batch.PROCESSED.exists()
+
+
+def test_run_skips_recursive_batches_and_reaches_drafts_past_the_batch_limit(batch, monkeypatch, capsys):
+    safe = make_note(batch, "在用", "current")
+    recursive = make_note(batch, "手写", "recursive")
+    note = batch.VAULT / (recursive["path"] + ".md")
+    note.write_text(note.read_text().replace("tags: []\n", "tags: []\nmanual: &local !Local [*local]\n"))
+    original_note = note.read_bytes()
+    assert b"manual: &local !Local [*local]" in original_note
+    draft = put_draft()
+    template = draft.read_text()
+    draft.unlink()
+    pending = {
+        draft.with_name(f"{index:03}.md"): (template + f"\nmanual-review-marker-{index:03}\n").encode()
+        for index in range(1, 62)
+    }
+    for path, original in pending.items():
+        path.write_bytes(original)
+    monkeypatch.setattr(batch, "BATCH", 20)
+    monkeypatch.setattr(batch, "RUN_MAX_BATCHES", 3)
+    calls = []
+
+    def chat(prompt):
+        markers = [index for index in range(1, 62) if f"manual-review-marker-{index:03}" in prompt]
+        calls.append(markers)
+        target = safe if markers == [61] else recursive
+        return json.dumps({"ops": [
+            {"op": "update", "id": target["id"], "reason": "新增说明", "sources": ["S01"]},
+        ]})
+
+    monkeypatch.setattr(batch, "chat", chat)
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match=r"P: 3 batch\(es\) skipped"):
+            batch.cmd_run()
+        assert capsys.readouterr().err.count("batch skipped, drafts retained") == 3
+
+    first_batches = [list(range(start, start + 20)) for start in (1, 21, 41)]
+    assert calls == [*first_batches, [61], *first_batches]
+    tail = draft.with_name("061.md")
+    assert not tail.exists()
+    assert {file.name: file.read_bytes() for file in (batch.PROCESSED / "P").iterdir()} == {
+        tail.name: pending.pop(tail),
+    }
+    assert {path: path.read_bytes() for path in tail.parent.glob("*.md")} == pending
+    assert note.read_bytes() == original_note
+    assert "新增说明" in (batch.VAULT / (safe["path"] + ".md")).read_text()
 
 
 @pytest.mark.parametrize("overlay", [

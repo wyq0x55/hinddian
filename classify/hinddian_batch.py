@@ -189,14 +189,22 @@ _HUB_LINK = r"- \[\[[^\]\n]+\]\](?: — \d+ 条(?:决策/经验)?| — 人→Age
 _HUB_OWNED = re.compile(_HUB_LINK + r" <!-- hinddian:generated -->")
 
 
-def hub_blocks(part):
+def hub_blocks(part, *, strict=False):
     start = None
     for offset, line in nf.unfenced_lines(part):
-        if line == _HUB_OPEN:
+        marker = line.removesuffix("\n")
+        if marker == _HUB_OPEN.removesuffix("\n"):
+            if strict and start is not None:
+                raise ValueError("nested hinddian:links opening marker")
             start = offset
-        elif start is not None and line.rstrip("\n") == _HUB_CLOSE:
-            yield start, offset, offset + len(line)
-            start = None
+        elif marker == _HUB_CLOSE:
+            if start is not None:
+                yield start, offset, offset + len(line)
+                start = None
+            elif strict:
+                raise ValueError("unmatched closing hinddian:links marker")
+    if strict and start is not None:
+        raise ValueError("unclosed hinddian:links block")
 
 
 def hub_block(part):
@@ -218,7 +226,7 @@ def _legacy_link_prune(hub, heading, entry):
     for index, part in enumerate(parts[1:], 1):
         if part.split("\n", 1)[0][3:].strip() != heading:
             continue
-        for start, end, _ in hub_blocks(part):
+        for start, end, _ in hub_blocks(part, strict=True):
             content = start + len(_HUB_OPEN)
             matches.extend((index, content + offset, len(line))
                            for offset, line in nf.unfenced_lines(part[content:end])
@@ -471,7 +479,7 @@ def process(project: str, files: list[pathlib.Path], dry=False):
     for directory in {file.parent for file in files}:
         check_input_directory(directory, PROCESSED / project)
     with organization(dry=dry):
-        return _process(project, files, dry)
+        return _process(project, files, dry) or []
 
 
 def _process(project: str, files: list[pathlib.Path], dry=False):
@@ -551,7 +559,7 @@ def new_path(base, notes):
 
 
 def _apply(project, files, data, idx, dry, *, before=None):
-    """Apply model operations under the vault lock using a fresh read of the notes."""
+    """Apply model operations under the vault lock, returning None for a skipped batch."""
     validate_project(project)
     if not isinstance(data, dict) or not isinstance(data.get("ops"), list):
         raise ValueError("model output must contain an ops list")
@@ -715,7 +723,7 @@ def _apply(project, files, data, idx, dry, *, before=None):
         except _RecursiveFrontmatter as exc:
             log({"event": "write_rejected", "path": note["path"], "reason": "recursive_frontmatter_alias"})
             print(f"Warning: {note['path']}: {exc}; batch skipped, drafts retained", file=sys.stderr)
-            return []
+            return None
         if text != note.get("text"):
             rendered[nid] = text
     for nid, text in rendered.items():
@@ -805,23 +813,35 @@ def run_project(project, max_batches):
             files.append(file)
         else:
             log({"event": "draft_skipped", "project": project, "draft": file.name, "reason": "missing_session_or_commit"})
-    for start in range(0, min(len(files), BATCH * max_batches), BATCH):
+    completed, skipped = 0, 0
+    for start in range(0, len(files), BATCH):
+        if completed >= max_batches:
+            break
         result = _process(project, files[start:start + BATCH])
+        if result is None:
+            skipped += 1
+            continue
+        completed += 1
         print(project, json.dumps(result, ensure_ascii=False))
+    return skipped
 
 
 def cmd_run():
     check_draft_paths()
     projects = draft_store.pending_projects(DRAFTS)
     if any(drafts_of(project) for project in projects):
-        failures = []
+        failures, skipped = [], []
         with organization():
             for project in projects:
                 try:
-                    run_project(project, RUN_MAX_BATCHES)
+                    if count := run_project(project, RUN_MAX_BATCHES):
+                        skipped.append(f"{project}: {count} batch(es) skipped")
                 except Exception as exc:
                     log({"event": "error", "project": project, "error": type(exc).__name__})
                     failures.append(project)
+        if skipped:
+            details = skipped + [f"{project}: failed" for project in failures]
+            raise RuntimeError(f"organization incomplete: {', '.join(details)}")
         if failures:
             raise RuntimeError(f"organization failed for {', '.join(failures)}")
 
@@ -847,5 +867,6 @@ if __name__ == "__main__":
         res = []
         if files:
             with organization(dry=a.dry_run):
-                res = [_process(a.arg, files[index:index + BATCH], dry=a.dry_run) for index in range(0, len(files), BATCH)]
+                res = [_process(a.arg, files[index:index + BATCH], dry=a.dry_run) or []
+                       for index in range(0, len(files), BATCH)]
         print(json.dumps(res, ensure_ascii=False, indent=1))

@@ -172,7 +172,6 @@ def test_closing_headings_ignore_fenced_examples_and_unrelated_headings(hooks):
     assert result == "## 原行为\n旧流程\n\n## 改进\n先备份\n\n## 取舍\n推断，放弃覆盖，因为无法回滚。\n\n## 验证\n通过"
     assert hooks.extract.closing(REPLY.replace("**取舍：**", "**其他**")) == ""
     assert hooks.extract.closing("**原行为** x\n**改进** y\n**取舍** z\n**验证**") == ""
-    assert hooks.extract.closing(REPLY.replace("通过", "**实测日志附录A**：附录正文")) == ""
     assert hooks.extract.closing(REPLY.replace("**原行为**", "原行为：").replace("### 改进：", "### 改进 ###\n"))
 
 
@@ -216,8 +215,8 @@ def test_stop_keeps_distinct_message_ids(manifest, shape, hooks, tmp_path):
     "**实测 附录**\n",
     "**实测日志附录**\n", "**实测数据附录：原始记录**\n",
     "**【推断配置差异附录Ｂ：回退记录】**\n",
-    "**实测日志附录A**　", "**实测日志附录A**：",
-    "**实测文件来源统计附录A** ",
+    "**实测日志附录A**　\n", "**实测文件来源统计附录A** \n",
+    "__实验数据附录__\n",
 ])
 def test_stop_excludes_appendix(manifest, hooks, tmp_path, heading):
     stop = commands(manifest)["Stop"]
@@ -228,12 +227,10 @@ def test_stop_excludes_appendix(manifest, hooks, tmp_path, heading):
 
 @pytest.mark.parametrize("manifest", ["hooks/hooks.json", ".codex-plugin/hooks.json"])
 @pytest.mark.parametrize("heading", [
-    pytest.param("**实测日志附录A** ", id="inline"),
-    pytest.param("**实测日志附录A**：", id="colon"),
     pytest.param("**实测日志附录A**\n", id="standalone"),
-    pytest.param("**实测数据源自定义配置附录A** ", id="source-like-topic"),
-    pytest.param("**实测数据源自定义报告附录A** ", id="source-like-document-topic"),
-    pytest.param("**实测文件来源统计附录A** ", id="document-like-topic"),
+    pytest.param("**实测日志附录A：环境清单**\n", id="in-bold-colon"),
+    pytest.param("**实测数据源自动校验报告的附录 A**\n", id="data-source-topic"),
+    pytest.param("**实测日志来自项目验收报告的附录 A**\n", id="source-like-title"),
 ])
 def test_stop_skips_empty_verification_before_appendix(manifest, hooks, tmp_path, heading):
     reply = REPLY.replace("通过", f"\n{heading}环境清单，供追溯。")
@@ -274,7 +271,6 @@ def test_stop_skips_empty_verification_before_appendix(manifest, hooks, tmp_path
     "**实测数据取自前述的报告附录 A** 构建通过，退出码为 0。",
     "**实测结果源自上述的文档中附录 A** 构建通过，退出码为 0。",
     "**实测结果源自前述的报告中附录 A** 构建通过，退出码为 0。",
-    "通过\n\n**实测日志在附录 A**\n日志路径已核对",
     "通过\n**实测数据详见下文附录A**：构建通过",
     "**[推断结果]**\n根据运行日志判断",
     "**猜测（原会话）** 可能由缓存引起",
@@ -321,8 +317,14 @@ def test_stop_keeps_appendix_reference_before_appendix(manifest, label, hooks, t
     "**实测数据取自上一版报告的附录 B** 构建通过。",
     "**实测结果源自本次上线记录的附录 2** 构建通过。",
     "**实测结果来源于　Q4 验收文档中的附录Ｂ** 构建通过。",
+    "**实测日志见项目验收报告的附录 A** 构建通过。",
+    "**实测日志附录A** 环境清单，供追溯。",
+    "**实测日志附录A**：附录正文",
+    "**附录 A** 环境清单，供追溯。",
+    "取自上一版报告的附录 B",
+    "源自本次上线记录的附录 2",
 ])
-def test_stop_keeps_named_document_appendix_reference(manifest, verification, hooks, tmp_path):
+def test_stop_keeps_inline_appendix_text(manifest, verification, hooks, tmp_path):
     reply = REPLY.replace("通过", verification) + "\n**实测日志附录A：环境清单**\n原始记录\n"
     run(commands(manifest)["Stop"], session_id="s", project="P", last_assistant_message=reply)
     draft, = (tmp_path / "drafts/P").glob("*.md")
